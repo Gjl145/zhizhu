@@ -19,6 +19,40 @@ using UnityEngine;
  * ============================================================ */
 
 public enum SilkState { Intact, Broken, Fading }
+
+/* ===================== 丝线状态机 =====================
+ *
+ * 明天跑酷会有三种线并存：静止的、断裂后自然下坠的、带初速度且末端挂物体的。
+ * 之前用 state / isFreeEnd / noSag 三个独立布尔标记管这件事，
+ * 它们可以互相矛盾（noSag+isFreeEnd 同时 true → 双重积分；
+ * state=Intact 但 chain!=null → 双重渲染），必然混乱。
+ *
+ * 改为**单一状态字段**：一个丝线在任何时刻只处于一种状态，
+ * 行为完全由状态决定，不可能出现矛盾组合。
+ *
+ *   Static    静止 —— 渲染悬链线，不跑物理，不响应施力
+ *   Anchored  末端挂着物体（玩家抓住了）—— 建约束链但根部仍锚在墙上
+ *   Swinging  摆动中 —— 约束链受玩家施力驱动
+ *   FreeFall  脱手 —— 末端无挂载，纯重力 + 阻尼
+ *   Fading    淡出中（终态，不可再转换）
+ *
+ * 允许的转换（其余一律拒绝并警告）：
+ *   Static --划断--> FreeFall
+ *   Static --抓住--> Anchored
+ *   Anchored --施力--> Swinging
+ *   Anchored --松手--> FreeFall
+ *   Swinging --松手--> FreeFall
+ *   任意 --开始淡出--> Fading
+ */
+public enum SilkLifeState
+{
+    Static,    // 静止
+    Anchored,  // 末端挂载物体
+    Swinging,  // 摆动中（玩家施力）
+    FreeFall,  // 脱手下坠
+    Fading,    // 淡出（终态）
+}
+
 public enum SilkColor { White, Yellow, Red }
 public enum AnchorType { Wall, Internal, SilkNode }
 public enum BreakMode { Middle, Quarter, ThreeQuarter, SpiderShot }
@@ -506,16 +540,121 @@ public class SilkLine
     public AnchorPoint rootTo;
     public SilkColor color;
     public BreakMode breakMode = BreakMode.Middle;
-    public bool hasBroken = false;
+
+    /* 单一状态字段。行为完全由它决定 ——
+     * 不再有 state/isFreeEnd/noSag 三个独立标记互相矛盾的问题。
+     * hasBroken 保留为只读派生属性（兼容现有调用点）。 */
+    public SilkLifeState life = SilkLifeState.Static;
+    public bool hasBroken => life != SilkLifeState.Static;
+
     public List<SilkSegment> segments = new();
     public Vector3 breakPoint;
-    public SilkChain chain;        // 断裂后接管上半截运动的约束链
+    public SilkChain chain;        // 非 Static 时接管运动的约束链
     public GameObject chainGO;     // 约束链的根 GameObject
+    public Transform attached;     // Anchored/Swinging 时末端挂载物（明天= 玩家）
 
     public SilkLine(AnchorPoint a, AnchorPoint b, SilkColor c, BreakMode mode = BreakMode.Middle)
     {
         rootFrom = a; rootTo = b; color = c; breakMode = mode;
         ComputeBreakPoint();
+    }
+
+    /// <summary>
+    /// 唯一的状态修改入口。所有非法转换一律拒绝并警告 ——
+    /// 这样「不该动的动了」「该断的不断」在源头就被拦住，
+    /// 而不是等到画面上出现双重积分才发现。
+    /// </summary>
+    public bool TryTransition(SilkLifeState next, string reason = "")
+    {
+        if (life == next) return true;
+        if (!IsTransitionAllowed(life, next))
+        {
+            Debug.LogWarning("[SilkLine] 拒绝非法状态转换 " + life + " → " + next +
+                             (string.IsNullOrEmpty(reason) ? "" : "（" + reason + "）") +
+                             "。这通常意味着逻辑漏了守卫。");
+            return false;
+        }
+        life = next;
+        return true;
+    }
+
+    static bool IsTransitionAllowed(SilkLifeState from, SilkLifeState to)
+    {
+        // Fading 是终态，不可离开
+        if (from == SilkLifeState.Fading) return false;
+        // 任何非 Fading 都可以开始淡出
+        if (to == SilkLifeState.Fading) return true;
+        // 不能「回到静止」—— 丝线一旦动过就不会再变静态
+        if (to == SilkLifeState.Static) return false;
+
+        switch (from)
+        {
+            case SilkLifeState.Static:
+                // 静止的线可以断裂（→ FreeFall），也可以被抓住（→ Anchored）
+                return to == SilkLifeState.FreeFall || to == SilkLifeState.Anchored;
+            case SilkLifeState.Anchored:
+                // 挂着时可施力摆动，也可松手脱手
+                return to == SilkLifeState.Swinging || to == SilkLifeState.FreeFall;
+            case SilkLifeState.Swinging:
+                // 摆动中只能松手，不能被再次划断（避免双重断裂）
+                return to == SilkLifeState.FreeFall;
+            case SilkLifeState.FreeFall:
+                // 脱手后只能淡出，不能再挂回去
+                return false;
+        }
+        return false;
+    }
+
+    /// <summary>是否允许在当前状态下被划断。只有静止/挂着时可以。</summary>
+    public bool CanBeCut => life == SilkLifeState.Static || life == SilkLifeState.Anchored;
+
+    /// <summary>是否需要跑物理。只有非 Static 才有约束链。</summary>
+    public bool NeedsPhysics => life != SilkLifeState.Static && chain != null;
+
+    /* ============ 状态机公共 API（明天跑酷直接调） ============ */
+
+    /// <summary>抓住丝线：末端挂上玩家，链条转为 Anchored。
+    /// 明天「玩家碰到丝线」时调用。返回是否成功。</summary>
+    public bool Grab(Transform player, SilkBuilder builder)
+    {
+        if (player == null) return false;
+        if (!TryTransition(SilkLifeState.Anchored, "抓住丝线")) return false;
+
+        attached = player;
+        EnsureChain(builder);
+        return true;
+    }
+
+    /// <summary>开始施力摆动。明天按 W/S/A/D 时调用。</summary>
+    public bool StartSwing()
+        => TryTransition(SilkLifeState.Swinging, "施力");
+
+    /// <summary>松手：末端脱钩，转入自然下坠。松手事件调用。</summary>
+    public bool Release()
+    {
+        if (!TryTransition(SilkLifeState.FreeFall, "松手")) return false;
+        attached = null;      // 脱钩，末端不再挂物体
+        return true;
+    }
+
+    /// <summary>确保约束链存在。Anchored/Swinging/FreeFall 都需要它来跑物理。</summary>
+    public void EnsureChain(SilkBuilder builder)
+    {
+        if (chain != null || builder == null) return;
+        // 用当前两端点直接建链：抓住时原丝线可能还没断
+        Vector3 a = rootFrom.WorldPosition;
+        Vector3 b = rootTo.WorldPosition;
+        if (Vector3.Distance(a, b) < 0.001f) return;
+
+        chainGO = new GameObject("SilkChain_" + rootFrom.position + "_" + rootTo.position);
+        chainGO.transform.SetParent(builder.transform);
+        chain = chainGO.AddComponent<SilkChain>();
+        chain.damping = 0.995f;
+        chain.gravity = 15f;
+        chain.subdivisions = 8;
+        chain.catenarySag = 0f;      // 抓住时链条按直线起步，不再带悬链线弧度
+        chain.slackScale = 1.0f;
+        chain.Build(rootFrom, rootTo, this, 1f);
     }
 
     void ComputeBreakPoint()
@@ -557,7 +696,8 @@ public class SilkLine
     /// <summary>信号驱动的断裂入口。signal 为 null 时按预设断点、零初速度。</summary>
     public bool Break(SilkBuilder builder, Vector3 point, SilkBreakSignal signal)
     {
-        if (hasBroken) return false;
+        // 统一状态守卫：只有静止/挂着的线可被划断
+        if (!CanBeCut) return false;
 
         SilkSegment target = null;
         float bestD = float.MaxValue;
@@ -579,15 +719,24 @@ public class SilkLine
             inject = signal.injectVelocity;
         }
 
+        // 守卫：只有静止/挂着的线可被划断。
+        // 摆动中或已脱手的再划一次会被拒绝 —— 防止二次断裂造成双重断裂。
+        if (!CanBeCut) return false;
+
         SplitSegment(target, point, builder, vel, boost, inject);
-        hasBroken = true;
+        // 划断后统一转入 FreeFall（脱手下坠）。
+        // 若失败说明状态不允许，此时已被 TryTransition 警告过。
+        if (!TryTransition(SilkLifeState.FreeFall, "被划断"))
+            Debug.LogWarning("[SilkLine] 划断后状态转换失败：" + life);
         return true;
     }
 
     /// <summary>按信号解析出断点世界坐标，然后断裂。</summary>
     public bool BreakBySignal(SilkBuilder builder, SilkBreakSignal signal)
     {
-        if (signal == null || hasBroken) return false;
+        if (signal == null) return false;
+        // 状态守卫：摆动中/已脱手的线不再响应划断
+        if (!CanBeCut) return false;
 
         Vector3 point;
         switch (signal.pointMode)
@@ -1210,7 +1359,7 @@ public class SilkBuilder : MonoBehaviour
         var snapshot = new List<SilkLine>(silkLines);
         foreach (var line in snapshot)
         {
-            if (line == null || line.hasBroken) continue;
+            if (line == null || !line.CanBeCut) continue;   // 状态守卫
             if (line.BreakBySignal(this, signal)) count++;
         }
         if (count > 0)
@@ -1237,7 +1386,7 @@ public class SilkBuilder : MonoBehaviour
 
         foreach (var line in silkLines)
         {
-            if (line.hasBroken) continue;
+            if (!line.CanBeCut) continue;   // 只挑静止/挂着的线
 
             Vector3 mid = (line.rootFrom.WorldPosition + line.rootTo.WorldPosition) * 0.5f;
             Vector3 closestPoint = ray.origin + ray.direction * Vector3.Dot(mid - ray.origin, ray.direction);
@@ -1494,7 +1643,7 @@ public class SilkBuilder : MonoBehaviour
     public void AgeWeb(float breakChance)
     {
         List<SilkLine> candidates = new List<SilkLine>();
-        foreach (var line in silkLines) if (!line.hasBroken) candidates.Add(line);
+        foreach (var line in silkLines) if (line.CanBeCut) candidates.Add(line);
         int count = 0;
         // 老化同样走信号路径，与右键/跑酷保持一致
         var signal = new SilkBreakSignal(SilkBreakCause.Aging);
