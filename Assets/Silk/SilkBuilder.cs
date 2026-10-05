@@ -381,20 +381,30 @@ public class SilkLine
 /* ===================== 断丝摆动约束链 ===================== */
 /* 断裂后保留下来的「上半截」由本组件驱动：
  *   · 根节点固定在墙上（高处）
- *   · 无初速度，仅靠 Z 轴重力自然下坠
- *   · Verlet 积分 + 多轮距离约束，模拟真实蛛丝的甩动
- *   · 下半截在 SilkLine.SplitSegment 中已直接丢弃，不在此处处理      */
+ *   · 无初速度时仅靠 Z 轴重力自然下坠（当前实现）
+ *   · 显式速度积分 + 多轮距离约束，模拟真实蛛丝的甩动
+ *   · 下半截在 SilkLine.SplitSegment 中已直接丢弃，不在此处处理
+ *
+ * 【为明日扩展预留】
+ *   velocities / initialVelocity 已显式化：加初速度时只需在 Build() 中
+ *   调用 ApplyInitialVelocity() 注入冲量，不要去改 prevPositions ——
+ *   Verlet 的隐式速度靠位置差反推，改初始位置会导致首帧瞬移。       */
 public class SilkChain : MonoBehaviour
 {
-    public float gravity = 15f;
-    public float damping = 0.985f;
-    public int subdivisions = 3;      // 每段细分数，越大越柔软
+    [Header("物理参数")]
+    public float gravity = 15f;        // 重力加速度（格/s²）
+    public float damping = 0.985f;     // 每帧速度保留系数，越接近 1 摆得越久
+    public float airDrag = 0.02f;      // 空气阻力（速度线性衰减）
+    public float stiffness = 1f;       // 距离约束刚度，1=完全不可拉伸
+
+    [Header("求解器")]
+    public int subdivisions = 3;      // 段细分数，越大越柔软
     public int solverIterations = 8;  // 距离约束迭代次数
 
     readonly List<AnchorPoint> nodes = new();
     readonly List<SilkSegment> renderSegs = new();
     readonly List<float> restLengths = new();
-    readonly List<Vector3> prevPositions = new();
+    readonly List<Vector3> velocities = new();   // 显式速度（格/秒）
 
     AnchorPoint root;   // 固定端（墙上）
     bool initialized = false;
@@ -436,8 +446,9 @@ public class SilkChain : MonoBehaviour
         for (int i = 0; i < nodes.Count - 1; i++)
             restLengths.Add(segLen);
 
+        // 显式速度初始化为 0 —— 当前是「无初速度」的自然摆动
         for (int i = 0; i < nodes.Count; i++)
-            prevPositions.Add(nodes[i].WorldPosition);
+            velocities.Add(Vector3.zero);
 
         // 建立渲染段（位置每帧由本组件写入，isFreeEnd 保持 false）
         for (int i = 0; i < nodes.Count - 1; i++)
@@ -457,6 +468,20 @@ public class SilkChain : MonoBehaviour
         initialized = true;
     }
 
+    /// 明日扩展：给整条链注入初速度。
+    /// 沿 root → 末端方向线性衰减（末端摆动最大），符合蛛丝甩鞭的受力分布。
+    /// 调用时机必须在 Build() 之后、第一帧 Update 之前。
+    /// </summary>
+    public void ApplyInitialVelocity(Vector3 baseVelocity, float tipBoost = 1.6f)
+    {
+        if (!initialized || nodes.Count < 2) return;
+        for (int i = 1; i < nodes.Count; i++)
+        {
+            float t = i / (float)(nodes.Count - 1);      // 0=根 1=末端
+            velocities[i] = baseVelocity * Mathf.Lerp(1f, tipBoost, t);
+        }
+    }
+
     void Update()
     {
         if (!initialized || nodes.Count < 2) return;
@@ -464,14 +489,14 @@ public class SilkChain : MonoBehaviour
         float dt = Time.deltaTime;
         if (dt <= 0f) return;
 
-        // 1. Verlet 积分：仅根节点固定，其余受重力 + 阻尼
+        // 1. 显式速度积分：重力 + 空气阻力，根节点不参与
+        float dragFactor = Mathf.Clamp01(1f - airDrag * dt * 60f);
         for (int i = 1; i < nodes.Count; i++)
         {
-            Vector3 cur = nodes[i].WorldPosition;
-            Vector3 vel = (cur - prevPositions[i]) * damping;
-            prevPositions[i] = cur;
-            Vector3 next = cur + vel + Vector3.down * (gravity * dt * dt);
-            nodes[i].transform.position = next;
+            velocities[i] += Vector3.down * (gravity * dt);
+            velocities[i] *= damping;
+            velocities[i] *= dragFactor;
+            nodes[i].transform.position += velocities[i] * dt;
         }
 
         // 2. 多轮距离约束：从根到端依次修正，形成自然弧线
@@ -486,23 +511,33 @@ public class SilkChain : MonoBehaviour
                 if (len < 0.0001f) continue;
 
                 float rest = restLengths[i];
-                float diff = (len - rest) / len;
+                float diff = ((len - rest) / len) * stiffness;
+                if (diff > 1f) diff = 1f;
+                else if (diff < -1f) diff = -1f;
 
                 if (i == 0)
                 {
                     // 根固定：只动子节点
-                    nodes[i + 1].transform.position = b - d * diff;
+                    Vector3 nb = b - d * diff;
+                    // 同步修正速度，避免约束把能量"吃掉"后失真
+                    velocities[i + 1] = (nb - b) / dt;
+                    nodes[i + 1].transform.position = nb;
                 }
                 else
                 {
                     // 内部节点：按权重分摊修正量，保持链长
-                    nodes[i].transform.position = a + d * diff * 0.5f;
-                    nodes[i + 1].transform.position = b - d * diff * 0.5f;
+                    Vector3 na = a + d * diff * 0.5f;
+                    Vector3 nb = b - d * diff * 0.5f;
+                    velocities[i] += (na - a) / dt;
+                    velocities[i + 1] += (nb - b) / dt;
+                    nodes[i].transform.position = na;
+                    nodes[i + 1].transform.position = nb;
                 }
             }
 
             // 每轮都把根节点钉回墙上，防止数值漂移
             nodes[0].transform.position = root.WorldPosition;
+            velocities[0] = Vector3.zero;
         }
     }
 
