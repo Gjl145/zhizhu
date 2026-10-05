@@ -129,6 +129,13 @@ public class SilkSegment : MonoBehaviour
     public bool pinnedAtFrom = true;
     public bool noSag = false;   // 约束链上的段：弧度由物理产生，不再叠加中点下垂
 
+    [Header("垂落形态（家里蛛网的下垂感）")]
+    [Tooltip("垂度占跨度的比例。真实蛛网约 0.05~0.10，0.07 是较自然的值")]
+    [Range(0f, 0.25f)] public float sagRatio = 0.07f;
+
+    [Tooltip("渲染采样段数。越大弧线越平滑，3 就够看出弧度，8 接近丝质")]
+    [Range(2, 16)] public int sagSegments = 6;
+
     LineRenderer lr;
     float fadeTimer;
 
@@ -151,13 +158,17 @@ public class SilkSegment : MonoBehaviour
         if (sh == null) sh = Shader.Find("Hidden/InternalErrorShader");
         lr.material = new Material(sh);
 
-        // 真实蛛丝：中间粗两头细
+        // 真实蛛丝：两端细（贴墙处几乎看不见），中段略粗
         lr.widthCurve = new AnimationCurve(
-            new Keyframe(0f, 0.015f),
-            new Keyframe(0.5f, 0.08f),
-            new Keyframe(1f, 0.015f)
+            new Keyframe(0f, 0.012f),
+            new Keyframe(0.15f, 0.038f),
+            new Keyframe(0.5f, 0.055f),
+            new Keyframe(0.85f, 0.038f),
+            new Keyframe(1f, 0.012f)
         );
         lr.widthMultiplier = 1.0f;
+        lr.numCornerVertices = 2;
+        lr.numCapVertices = 2;
         lr.positionCount = 2;
         lr.useWorldSpace = true;
         lr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
@@ -239,21 +250,106 @@ public class SilkSegment : MonoBehaviour
             return;
         }
 
-        Vector3 mid = (from.WorldPosition + to.WorldPosition) * 0.5f;
-        if (state == SilkState.Intact && !isFreeEnd && !noSag)
-            mid += new Vector3(0, 0, -(1f - tension) * 0.7f);   // Z 为高度，向下弯
+        RenderSagCurve();
+    }
 
-        lr.positionCount = 3;
-        lr.SetPosition(0, from.WorldPosition);
-        lr.SetPosition(1, mid);
-        lr.SetPosition(2, to.WorldPosition);
+    /* ============ 悬链线下垂 ============
+     * 之前是 3 点直线 V 悬，中点固定下垂 (1-tension)*0.7 格。
+     * 在跨度 90 的场景里这只有 0.35 格（跨度的 0.4%），肉眼看不出弯，
+     * 且中点折角尖锐 —— 与真实蛛网的平缓弧线差 1~2 个数量级。
+     *
+     * 现改为按跨度比例下垂：sag = span * sagRatio * tensionFactor，
+     * 默认 sagRatio = 0.07（真实蛛网约 0.05~0.10），
+     * 用悬链线 y = catA*(cosh(x/catA) - 1) 采样成多点折线。
+     * y 为负值，叠加时 +Vector3.forward * y 即向下（-Z）垂。
+     *
+     * 参考 Blender 蛛网模拟（BV18spMzmEJW）作者原话：
+     *   "now this isn't really tension because it's just getting the
+     *    average position ... so it's close enough to tension to where
+     *    you can't really notice too much of a difference"
+     * —— 用邻域平均位置近似张力，比硬物理约束更稳定，也更接近观感。
+     *    另提到 "the stiffness will go down over time, as it ages it
+     *    contracts"，说明真实蛛网随时间变松变收缩（暂未实现）。
+     */
+    void RenderSagCurve()
+    {
+        Vector3 a = from.WorldPosition;
+        Vector3 b = to.WorldPosition;
+        int n = Mathf.Max(2, sagSegments);
 
-        if (parentLine != null)
+        if (state != SilkState.Intact || isFreeEnd || noSag)
         {
-            float t = Mathf.Clamp01(tension);
-            lr.material.color = Color.Lerp(new Color(0.7f, 0.7f, 0.72f), BaseColor[(int)parentLine.color], t * 0.3f);
-            // 保持乳白色为主
-            lr.material.color = new Color(0.95f, 0.93f, 0.9f, 0.85f);
+            // 不需要下垂：直连
+            lr.positionCount = 2;
+            lr.SetPosition(0, a);
+            lr.SetPosition(1, b);
+            return;
+        }
+
+        Vector3 span = b - a;
+        float dist = span.magnitude;
+        if (dist < 0.01f)
+        {
+            lr.positionCount = 2;
+            lr.SetPosition(0, a);
+            lr.SetPosition(1, b);
+            return;
+        }
+
+        // 垂度 = 跨度 * sagRatio * tensionFactor
+        // sagRatio 直接代表最终垂度比例（真实蛛网 0.05~0.10），
+        // tensionFactor 只做 ±30% 的松紧调制，避免把垂度整体压到目标区间以下
+        // （之前用 (1-tension) 直接乘，tension=Random(0.5,1) 会把 7% 压到 0.7~3.5%）
+        float tensionFactor = Mathf.Lerp(1.3f, 0.7f, Mathf.Clamp01(tension));
+        float ratio = sagRatio * tensionFactor;
+        // 水平对齐的丝线（如左右面同高度的横丝）不该下垂
+        if (Mathf.Abs(Vector3.Dot(span.normalized, Vector3.forward)) > 0.999f) ratio = 0f;
+
+        float sag = dist * ratio;
+        if (sag < 0.01f)
+        {
+            lr.positionCount = 2;
+            lr.SetPosition(0, a);
+            lr.SetPosition(1, b);
+            return;
+        }
+
+        // 解悬链线参数 catA：sag = catA*(cosh(half/catA) - 1)
+        // half 取半跨度。Newton 迭代，catA 初值 = half（对应 parabola 近似）。
+        // Python 验算：ratio 0.03~0.15 区间误差 0.0000
+        float half = dist * 0.5f;
+        float catA = half;
+        for (int it = 0; it < 12; it++)
+        {
+            float x = half / Mathf.Max(catA, 0.0001f);
+            float ch = Mathf.Cosh(x);
+            float f = catA * (ch - 1f) - sag;
+            float d = (ch - 1f) - x * Mathf.Sinh(x);
+            if (Mathf.Abs(d) < 0.0001f) break;
+            catA -= f / d;
+            catA = Mathf.Clamp(catA, half * 0.05f, half * 20f);
+        }
+        // 数值兜底：迭代不收敛时退回抛物线近似，保证不出现 NaN
+        if (float.IsNaN(catA) || float.IsInfinity(catA)) catA = half;
+
+        lr.positionCount = n + 1;
+        for (int i = 0; i <= n; i++)
+        {
+            float t = i / (float)n;
+            Vector3 p = Vector3.Lerp(a, b, t);
+            if (i > 0 && i < n)
+            {
+                // 悬链线在竖直方向的偏移。cosh 在两端斜率不为 0，保证与端点自然衔接。
+                // x0 最大为 half，half/catA 在 ratio=0.03 时约 0.12（安全）；
+                // 但 catA 被 clamp 到 half*0.05 时 x 可达 20，cosh(20)≈2.4e8 接近 float 上限，
+                // 故对 x 做上限保护，超出则该点贴到端点高度（视觉上仍是平滑弧）。
+                float x0 = (t - 0.5f) * 2f * half;     // -half .. +half
+                float x = Mathf.Clamp(x0 / catA, -12f, 12f);
+                float y = catA * (Mathf.Cosh(x) - 1f) - sag;
+                if (!float.IsNaN(y) && !float.IsInfinity(y))
+                    p += Vector3.forward * y;
+            }
+            lr.SetPosition(i, p);
         }
     }
 }
