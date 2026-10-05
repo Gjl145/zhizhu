@@ -359,9 +359,9 @@ public class SilkSegment : MonoBehaviour
         for (int it = 0; it < 12; it++)
         {
             float x = half / Mathf.Max(catA, 0.0001f);
-            float ch = Mathf.Cosh(x);
+            float ch = SilkChain.Cosh(x);
             float f = catA * (ch - 1f) - sag;
-            float d = (ch - 1f) - x * Mathf.Sinh(x);
+            float d = (ch - 1f) - x * SilkChain.Sinh(x);
             if (Mathf.Abs(d) < 0.0001f) break;
             catA -= f / d;
             catA = Mathf.Clamp(catA, half * 0.05f, half * 20f);
@@ -382,7 +382,7 @@ public class SilkSegment : MonoBehaviour
                 // 故对 x 做上限保护，超出则该点贴到端点高度（视觉上仍是平滑弧）。
                 float x0 = (t - 0.5f) * 2f * half;     // -half .. +half
                 float x = Mathf.Clamp(x0 / catA, -12f, 12f);
-                float y = catA * (Mathf.Cosh(x) - 1f) - sag;
+                float y = catA * (SilkChain.Cosh(x) - 1f) - sag;
                 if (!float.IsNaN(y) && !float.IsInfinity(y))
                     p += Vector3.forward * y;
             }
@@ -484,12 +484,13 @@ public class SilkLine
         chainGO = new GameObject("SilkChain_" + rootFrom.position + "_" + rootTo.position);
         chainGO.transform.SetParent(builder.transform);
         chain = chainGO.AddComponent<SilkChain>();
-        chain.damping = 0.985f;
+        chain.damping = 0.995f;      // 原 0.985 半衰期仅 0.76s，摆荡 3 秒就没劲
         chain.gravity = 15f;
-        chain.subdivisions = 3;
+        chain.subdivisions = 8;      // 原 3 段只有 2 个折点，撑不起绳索的弧线甩动
         // 形态连续性：沿断裂前那条悬链线布点，而不是直线均分。
         // 这样断裂瞬间垂度不会归零，视觉上不会「弹一下」。
         chain.catenarySag = oldSeg.sagRatio;
+        chain.slackScale = 1.15f;    // 略松于弧长，重力能把弧线拉直
         chain.Build(high, node, this, oldSeg.tension);
 
         Object.Destroy(oldSeg.gameObject);
@@ -537,6 +538,22 @@ public class SilkChain : MonoBehaviour
     public int subdivisions = 3;      // 段细分数，越大越柔软
     public int solverIterations = 8;  // 距离约束迭代次数
 
+    /* Unity 的 Mathf 没有 Cosh / Sinh。
+     * 悬链线 y = a*(cosh(x/a) - 1) 需要这两个函数，
+     * 放在这里供 SilkChain 与 SilkSegment 共用。
+     * x 已在调用侧 clamp 到 ±12，此处再兜一层防溢出。 */
+    public static float Sinh(float x)
+    {
+        x = Mathf.Clamp(x, -12f, 12f);
+        return (Mathf.Exp(x) - Mathf.Exp(-x)) * 0.5f;
+    }
+
+    public static float Cosh(float x)
+    {
+        x = Mathf.Clamp(x, -12f, 12f);
+        return (Mathf.Exp(x) + Mathf.Exp(-x)) * 0.5f;
+    }
+
     readonly List<AnchorPoint> nodes = new();
     readonly List<SilkSegment> renderSegs = new();
     readonly List<float> restLengths = new();
@@ -549,6 +566,10 @@ public class SilkChain : MonoBehaviour
     [Tooltip("断裂瞬间沿悬链线布点时使用的垂度比例，需与断裂前 SilkSegment 的 sagRatio 一致，"
            + "否则断裂帧会有形态跳变（视觉上「弹一下」）。0=纯直线")]
     public float catenarySag = 0.07f;
+
+    [Tooltip("松弛系数：段长 = 弧长 × 该值。>1 让绳索略长于弧线，"
+           + "重力才能把弧线拉直（断裂后失去张力而展开）。1=锁死弧形，2=明显展开")]
+    [Range(1f, 1.5f)] public float slackScale = 1.15f;
 
     /// 悬链线布点结果：节点位置 + 各段弧长
     struct CatenaryLayout
@@ -586,9 +607,9 @@ public class SilkChain : MonoBehaviour
             for (int it = 0; it < 12; it++)
             {
                 float x = half / Mathf.Max(catA, 0.0001f);
-                float ch = Mathf.Cosh(x);
+                float ch = Cosh(x);
                 float f = catA * (ch - 1f) - sag;
-                float d = (ch - 1f) - x * Mathf.Sinh(x);
+                float d = (ch - 1f) - x * Sinh(x);
                 if (Mathf.Abs(d) < 0.0001f) break;
                 catA -= f / d;
                 catA = Mathf.Clamp(catA, half * 0.05f, half * 20f);
@@ -604,15 +625,19 @@ public class SilkChain : MonoBehaviour
                     {
                         float x0 = (t - 0.5f) * 2f * half;
                         float x = Mathf.Clamp(x0 / catA, -12f, 12f);
-                        float y = catA * (Mathf.Cosh(x) - 1f) - sag;
+                        float y = catA * (Cosh(x) - 1f) - sag;
                         if (!float.IsNaN(y) && !float.IsInfinity(y))
                             p += Vector3.forward * y;
                     }
                     res.points.Add(p);
                 }
-                // 段长 = 实际弧长（悬链线上下不对称，不能等分）
+                // 段长按弧长分配：悬链线上下不对称，不能等分。
+                // slack 是「松弛系数」：>1 让绳索略长于弧长，
+                // 重力才能把弧线逐渐拉直 —— 这正是断裂后丝线「失去张力而展开」的物理。
+                // 上一版误把 restLengths 锁成弧长，导致弧线被固定、整条刚性摆动。
                 for (int i = 0; i < n; i++)
-                    res.restLengths.Add((res.points[i + 1] - res.points[i]).magnitude);
+                    res.restLengths.Add(
+                        (res.points[i + 1] - res.points[i]).magnitude * slackScale);
                 return res;
             }
         }
@@ -1071,12 +1096,13 @@ public class SilkBuilder : MonoBehaviour
         seg.from = a; seg.to = b; seg.parentLine = line;
         // 结构化分配：谁是主丝、谁是辅丝、松紧粗细各不同。
         // 真实蛛网主丝（辐射丝）绷紧承重，辅丝（螺旋丝）松垂装饰。
+        // 垂度按用户反馈加大：之前 0.02~0.16 视觉上「不够多、不够明显」。
         bool isRadii = Random.value < primaryRatio;
         seg.role = isRadii ? SilkRole.Radii : SilkRole.Spiral;
         // 主丝绷紧（tension 高 -> 垂度小），辅丝松垂
-        seg.tension = isRadii ? Random.Range(0.80f, 1.0f) : Random.Range(0.35f, 0.65f);
-        // 垂度：主丝 0.02~0.045（近绷直），辅丝 0.09~0.16（明显松垂）
-        seg.sagRatio = isRadii ? Random.Range(0.02f, 0.045f) : Random.Range(0.09f, 0.16f);
+        seg.tension = isRadii ? Random.Range(0.75f, 1.0f) : Random.Range(0.25f, 0.60f);
+        // 垂度：主丝 0.10~0.18（仍偏直但可见弯），辅丝 0.22~0.32（明显松垂）
+        seg.sagRatio = isRadii ? Random.Range(0.10f, 0.18f) : Random.Range(0.22f, 0.32f);
         // 老化程度：辅丝更旧更暗（细密结构先积灰）
         seg.ageTint = isRadii ? Random.Range(0f, 0.25f) : Random.Range(0.15f, 0.6f);
         seg.ApplyRoleStyle();
