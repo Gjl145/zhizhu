@@ -1050,7 +1050,7 @@ public class SilkWorldBootstrap
         Debug.Log("[Bootstrap] 100³ 蛛网战场就绪\n" +
                   "左键 连丝 | 右键单击 断丝（1/4~1/2自然掉落）| 右键拖拽 旋转\n" +
                   "WASD 飞行 | QE 升降 | Shift加速 | 滚轮微移\n" +
-                  "R 取消 | C 清空 | G 织网 | X 老化");
+                  "R 取消 | C 清空 | G 织网 | X 老化 | F 切换拖拽方向");
     }
 
     static void CreateWireCube(Transform parent, float h)
@@ -1180,7 +1180,13 @@ public class SimpleOrbitCamera : MonoBehaviour
     public float rotateSpeed = 4f;
     public float scrollZoomSpeed = 20f;
 
-    float yaw, pitch;   // yaw 绕 Z，pitch 绕水平轴
+    [Tooltip("拖拽跟手：鼠标往哪拖，物体就往哪转。Z-up 下需与 Unity 默认 Y-up 的符号相反")]
+    public bool dragFollowsMouse = true;
+
+    [Tooltip("按 F 切换拖拽方向")]
+    public KeyCode flipKey = KeyCode.F;
+
+    float yaw, pitch;   // yaw 绕 Z，pitch 仰角
 
     void Start()
     {
@@ -1192,11 +1198,24 @@ public class SimpleOrbitCamera : MonoBehaviour
 
     void Update()
     {
+        if (Input.GetKeyDown(flipKey))
+        {
+            dragFollowsMouse = !dragFollowsMouse;
+            Debug.Log("[Camera] 拖拽跟手 = " + (dragFollowsMouse ? "开（物体跟手）" : "关（同 Unity 默认 Y-up）"));
+        }
+
         if (Input.GetMouseButton(1))
         {
-            yaw += Input.GetAxis("Mouse X") * rotateSpeed;
-            pitch -= Input.GetAxis("Mouse Y") * rotateSpeed;
-            pitch = Mathf.Clamp(pitch, -89f, 89f);
+            // Z-up 下水平与垂直旋转的屏幕表现不同，需分别取符号（Python 实测）：
+            //   水平：绕 +Z 正向 → 物体反向移动，跟手要取反
+            //   垂直：绕水平轴     → 物体同向移动，跟手要保持
+            float signX = dragFollowsMouse ? -1f : 1f;
+            float signY = dragFollowsMouse ? 1f : -1f;
+            yaw += signX * Input.GetAxis("Mouse X") * rotateSpeed;
+            pitch += signY * Input.GetAxis("Mouse Y") * rotateSpeed;
+            // 夹到 ±85 而非 ±89：LookRotation(dir, +Z) 在 dir 接近垂直于 +Z 时
+            // 参考轴退化，Python 全角度扫描确认 ±89 那一行有 49 组退化
+            pitch = Mathf.Clamp(pitch, -85f, 85f);
             ApplyRotation();
         }
 
