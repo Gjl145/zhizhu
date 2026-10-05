@@ -174,14 +174,16 @@ public class SilkSegment : MonoBehaviour
         if (sh == null) sh = Shader.Find("Hidden/InternalErrorShader");
         lr.material = new Material(sh);
 
-        // 真实蛛丝：两端细（贴墙处几乎看不见），中段略粗
-        // 基准曲线，widthScale 在 ApplyRoleStyle 里乘上去
+        // 真实蛛丝：两端细、中段略粗。
+        // 关键约束：LineRenderer 在亚像素宽度下**不渲染**，会断裂成虚线。
+        // 相机距网格约 190 格、画面 1000px 时 1 格 ≈ 5px，
+        // 故最细处必须 ≥ 0.2 格（≈1px）。上一版调到 0.006 格导致整段消失。
         lr.widthCurve = new AnimationCurve(
-            new Keyframe(0f, 0.012f),
-            new Keyframe(0.15f, 0.038f),
-            new Keyframe(0.5f, 0.055f),
-            new Keyframe(0.85f, 0.038f),
-            new Keyframe(1f, 0.012f)
+            new Keyframe(0f, 0.22f),
+            new Keyframe(0.15f, 0.42f),
+            new Keyframe(0.5f, 0.55f),
+            new Keyframe(0.85f, 0.42f),
+            new Keyframe(1f, 0.22f)
         );
         lr.widthMultiplier = 1.0f;
         lr.numCornerVertices = 2;
@@ -201,9 +203,11 @@ public class SilkSegment : MonoBehaviour
     {
         if (lr == null) return;
 
-        // 主丝粗、辅丝细。真实蛛网这个比例约 2~3 倍。
-        // 数值比上一版调细（原 1.8/0.85 偏粗，截图里像粗线而非蛛丝）
-        float roleWidth = role == SilkRole.Radii ? 1.2f : 0.5f;
+        /* 主丝粗、辅丝细。真实蛛网这个比例约 2~3 倍。
+         * 下限受「亚像素不渲染」约束：辅丝 0.9 × 曲线最细 0.22 = 0.198 格，
+         * 相机距 190 格时 1 格 ≈ 5px，即 0.99px —— 刚好在 1px 临界。
+         * 再细（上一版 0.7 → 0.154 格 ≈ 0.77px）就会断裂成虚线。 */
+        float roleWidth = role == SilkRole.Radii ? 1.8f : 0.9f;
         lr.widthMultiplier = roleWidth * widthScale;
 
         // 主丝偏白（新鲜、承重），辅丝略暗（细密、积灰）
@@ -876,6 +880,10 @@ public class SilkBuilder : MonoBehaviour
            + "垂度调大后主丝也明显下垂会与辅丝混淆。拖到 0.3 可恢复主辅分层")]
     [Range(0f, 1f)] public float primaryRatio = 0f;
 
+    [Tooltip("底面锚点连线数量。144 个底面锚点全连会得到约 170 根总丝线，"
+           + "是真实蛛网（30~60 根）的 3 倍，画面上挤成一片看不出单根形态")]
+    [Range(4, 144)] public int bottomLinkCount = 36;
+
     readonly List<AnchorPoint> anchors = new();
     readonly List<SilkLine> silkLines = new();
 
@@ -1243,12 +1251,18 @@ public class SilkBuilder : MonoBehaviour
         }
 
         // ===== 2. 底面网格 → 左右高区（纵向贯穿，玩家所在真实高度层） =====
+        // 数量受 bottomLinkCount 控制：144 个底面锚点全连会得到 144 根线，
+        // 叠加其他循环后总计约 170 根 —— 是真实蛛网（30~60 根）的 3 倍，
+        // 画面上挤成一片，看不出单根丝的形态。
         if (bottomAnchors.Count > 0 && highAnchors.Count > 0)
-        foreach (var bot in bottomAnchors)
         {
-            // 每个底面锚点连向 1 个高区锚点，靠去重自然收敛
-            var target = highAnchors[Random.Range(0, highAnchors.Count)];
-            if (target != bot) CreateSilkLine(bot, target, SilkColor.White, BreakMode.Middle);
+            int n = Mathf.Min(bottomLinkCount, bottomAnchors.Count);
+            for (int i = 0; i < n; i++)
+            {
+                var bot = bottomAnchors[Random.Range(0, bottomAnchors.Count)];
+                var target = highAnchors[Random.Range(0, highAnchors.Count)];
+                if (target != bot) CreateSilkLine(bot, target, SilkColor.White, BreakMode.Middle);
+            }
         }
 
         // ===== 3. 左面 ↔ 右面（高区横连，跨越城市） =====
