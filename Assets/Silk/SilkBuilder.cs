@@ -989,7 +989,12 @@ public class SilkBuilder : MonoBehaviour
     Vector3 MouseWorldPoint()
     {
         Ray ray = mainCam.ScreenPointToRay(Input.mousePosition);
-        new Plane(Vector3.forward, grid.GetCenter()).Raycast(ray, out float dist);
+        // 用当前相机的正对面，而非硬编码 Vector3.forward：
+        // 相机改为 Z-up 且斜视后，固定法线的平面会让预览线终点偏离光标
+        Vector3 camFwd = mainCam.transform.forward;
+        if (Mathf.Abs(Vector3.Dot(camFwd.normalized, Vector3.forward)) < 0.01f)
+            camFwd = Vector3.right;
+        new Plane(camFwd.normalized, grid.GetCenter()).Raycast(ray, out float dist);
         return ray.GetPoint(dist);
     }
 }
@@ -1033,7 +1038,9 @@ public class SilkWorldBootstrap
         var cam = camGO.AddComponent<Camera>();
         cam.clearFlags = CameraClearFlags.SolidColor;
         cam.backgroundColor = new Color(0.06f, 0.06f, 0.1f);
-        camGO.transform.position = new Vector3(120, 80, 120);
+        // 摄像机摆在 XY 平面内、Z 略高，配合 up = forward 实现「Z 朝屏幕上方」
+        camGO.transform.position = new Vector3(120, -120, 85);
+        camGO.transform.up = Vector3.forward;      // 关键：把 +Z 声明为上方向
         camGO.transform.LookAt(Vector3.zero);
         camGO.AddComponent<SimpleOrbitCamera>();
 
@@ -1068,11 +1075,13 @@ public class SilkWorldBootstrap
 
     static void CreateInnerWalls(Transform parent, float h)
     {
-        Vector3[] n = { Vector3.right, Vector3.left, Vector3.up, Vector3.down, Vector3.forward, Vector3.back };
+        // 命名按项目坐标约定：X=左右 / Y=前后 / Z=高度
+        string[] names = { "Right_X", "Left_X", "Front_Y", "Back_Y", "Top_Z", "Bottom_Z" };
+        Vector3[] n = { Vector3.right, Vector3.left, Vector3.forward, Vector3.back, Vector3.up, Vector3.down };
         for (int i = 0; i < 6; i++)
         {
             var wall = GameObject.CreatePrimitive(PrimitiveType.Quad);
-            wall.name = "InnerWall_" + i;
+            wall.name = "InnerWall_" + names[i];
             wall.transform.SetParent(parent);
             wall.transform.position = parent.position + n[i] * h;
             wall.transform.rotation = Quaternion.LookRotation(-n[i]);
@@ -1156,7 +1165,11 @@ public class SilkWorldBootstrap
     }
 }
 
-/* ===================== 自由飞行摄像机 ===================== */
+/* ===================== 自由飞行摄像机 =====================
+ * Z 为高度轴，因此这里的旋转不能用 Unity 默认的 Euler(x, y, 0)，
+ * 否则右键环绕一次就会把 Z 轴转到屏幕侧面。
+ * 改为绕 Z 偏航(yaw) + 绕水平轴俯仰(pitch)，并强制 up = forward。
+ */
 public class SimpleOrbitCamera : MonoBehaviour
 {
     public float moveSpeed = 40f;
@@ -1164,13 +1177,15 @@ public class SimpleOrbitCamera : MonoBehaviour
     public float rotateSpeed = 4f;
     public float scrollZoomSpeed = 20f;
 
-    float yaw, pitch;
+    float yaw, pitch;   // yaw 绕 Z，pitch 绕水平轴
 
     void Start()
     {
-        Vector3 e = transform.eulerAngles;
-        yaw = e.y;
-        pitch = e.x;
+        transform.up = Vector3.forward;
+        // 从当前朝向反解 yaw/pitch，保证 Start 后画面不跳变
+        Vector3 f = transform.forward;
+        pitch = Mathf.Asin(Mathf.Clamp(f.z, -1f, 1f)) * Mathf.Rad2Deg;
+        yaw = Mathf.Atan2(f.y, f.x) * Mathf.Rad2Deg;
     }
 
     void Update()
@@ -1180,7 +1195,7 @@ public class SimpleOrbitCamera : MonoBehaviour
             yaw += Input.GetAxis("Mouse X") * rotateSpeed;
             pitch -= Input.GetAxis("Mouse Y") * rotateSpeed;
             pitch = Mathf.Clamp(pitch, -89f, 89f);
-            transform.rotation = Quaternion.Euler(pitch, yaw, 0);
+            ApplyRotation();
         }
 
         float speed = Input.GetKey(KeyCode.LeftShift) ? fastMoveSpeed : moveSpeed;
@@ -1190,13 +1205,23 @@ public class SimpleOrbitCamera : MonoBehaviour
         if (Input.GetKey(KeyCode.S)) move -= transform.forward;
         if (Input.GetKey(KeyCode.A)) move -= transform.right;
         if (Input.GetKey(KeyCode.D)) move += transform.right;
-        if (Input.GetKey(KeyCode.E)) move += transform.up;
-        if (Input.GetKey(KeyCode.Q)) move -= transform.up;
+        if (Input.GetKey(KeyCode.E)) move += transform.up;      // up = +Z（升高）
+        if (Input.GetKey(KeyCode.Q)) move -= transform.up;      // 降低
 
         transform.position += move.normalized * speed * Time.deltaTime;
 
         float scroll = Input.GetAxis("Mouse ScrollWheel");
         if (Mathf.Abs(scroll) > 0)
             transform.position += transform.forward * scroll * scrollZoomSpeed;
+    }
+
+    /// 绕 Z 偏航后再绕水平轴俯仰，全程保持 +Z 朝上
+    void ApplyRotation()
+    {
+        Quaternion qYaw = Quaternion.AngleAxis(yaw, Vector3.forward);
+        Vector3 right = qYaw * Vector3.right;
+        Quaternion qPitch = Quaternion.AngleAxis(pitch, right);
+        transform.rotation = qYaw * qPitch;
+        transform.up = Vector3.forward;
     }
 }
