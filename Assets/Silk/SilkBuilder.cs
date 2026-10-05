@@ -85,7 +85,7 @@ public enum SilkRole { Radii, Spiral }
  * 敌人切断、定时老化、半空中发射即断），故拆成「谁触发」与「怎么断」两层：
  *
  *   SilkBreakSignal  —— 一次断裂请求的完整描述（谁、在哪、什么模式、附带参数）
- *   SilkBreakChannel —— 全局事件通道，任何对象都能订阅/发布，SilkBuilder 只负责执行
+ *   SilkEventBus —— 全局事件总线，任何对象都能 Post，SilkBuilder 只负责执行
  *
  * 这样明天做跑酷时，「玩家抓住丝线后松手」只需发一个 SilkBreakSignal，
  * 不需要碰 SilkBuilder 的内部逻辑。
@@ -110,8 +110,8 @@ public enum SilkBreakPointMode
     Normalized,    // 按跨度比例 0~1（从低处往高处算）
 }
 
-/// <summary>一次断裂请求的完整描述。不可变，用构造函数创建。</summary>
-public class SilkBreakSignal
+/// <summary>一次断裂请求的完整描述。既是数据，也是事件（实现 ISilkEvent）。</summary>
+public class SilkBreakSignal : ISilkEvent
 {
     public SilkBreakCause cause;              // 谁触发的
     public SilkBreakPointMode pointMode;      // 断点怎么定
@@ -120,6 +120,7 @@ public class SilkBreakSignal
     public Vector3 initialVelocity;           // 断裂后注入的初速度（明天跑酷用）
     public float tipBoost = 1.6f;             // 初速度沿 root→末端的增幅
     public bool injectVelocity = false;       // 是否注入初速度
+    public SilkLine target;                   // 指定断裂的线；null = 广播
 
     public SilkBreakSignal(SilkBreakCause c)
     {
@@ -148,37 +149,134 @@ public class SilkBreakSignal
         tipBoost = boost;
         return this;
     }
+
+    public SilkBreakSignal On(SilkLine line)
+    {
+        target = line;
+        return this;
+    }
+
+    /// <summary>事件入口：总线调用。断裂的具体执行交给 SilkBuilder。</summary>
+    public void Handle(SilkBuilder handler)
+    {
+        if (handler == null) return;
+        handler.ExecuteBreak(this);
+    }
+}
+
+/* ============ 其他事件类型（示范「加事件不改分发」） ============ */
+
+/// <summary>抓住丝线：末端挂上某物。</summary>
+public class SilkGrabSignal : ISilkEvent
+{
+    public Transform attachPoint;
+    public string label = "物体";
+    public bool startSwing = false;      // 抓住后是否立刻开始摆动
+
+    public SilkGrabSignal(Transform point, string name = "物体", bool swing = false)
+    {
+        attachPoint = point; label = name; startSwing = swing;
+    }
+
+    public void Handle(SilkBuilder handler)
+    {
+        if (handler == null) return;
+        handler.ExecuteGrab(this);
+    }
+}
+
+/// <summary>松手：末端脱钩，转自然下坠。</summary>
+public class SilkReleaseSignal : ISilkEvent
+{
+    public void Handle(SilkBuilder handler)
+    {
+        if (handler == null) return;
+        handler.ExecuteRelease();
+    }
+}
+
+/// <summary>对丝线施加一次力（泵力/横推），明天跑酷的核心输入。</summary>
+public class SilkForceSignal : ISilkEvent
+{
+    public Vector3 force;        // 世界坐标下的力
+    public float tipBoost = 1.6f;
+
+    public SilkForceSignal(Vector3 f, float boost = 1.6f)
+    {
+        force = f; tipBoost = boost;
+    }
+
+    public void Handle(SilkBuilder handler)
+    {
+        if (handler == null) return;
+        handler.ExecuteForce(this);
+    }
 }
 
 /// <summary>
-/// 全局断裂事件通道。任何 MonoBehaviour 都能订阅，SilkBuilder 自动执行。
-/// 用静态事件而非单例引用，避免装配顺序问题。
+/// 全局事件总线 —— 统一控制不同事件。
+///
+/// 为什么不用 C# 的 event 直接订阅：
+///   每加一种事件就要加一个 event 字段，发布处要写 N 个 if，
+///   订阅方也得记住有哪些 event 名。事件一多就失控。
+///
+/// 本总线的做法：
+///   · 所有事件实现 ISilkEvent（自带一个处理器方法）
+///   · 处理器在构造时注册到总线
+///   · 发布方只管 Post(evt)，总线按类型找到对应处理器
+///   · 加新事件 = 新建一个实现 ISilkEvent 的类 + 一个处理器，**分发逻辑零改动**
+///
+/// 这也正是 Unity 官方 StateMachine 文档与 Mina Pecheux
+/// "How to use events to implement a messaging system in 30 minutes"
+/// 讲的模式：事件与处理解耦，发布方不认识处理器。
 /// </summary>
-public static class SilkBreakChannel
+public interface ISilkEvent
 {
-    /// <summary>请求断裂。参数为「哪根线」和「怎么断」。</summary>
-    public static event System.Action<SilkLine, SilkBreakSignal> OnBreakRequested;
+    /// <summary>处理这个事件。handler 通常是 SilkBuilder。</summary>
+    void Handle(SilkBuilder handler);
+}
 
-    public static void Request(SilkLine line, SilkBreakSignal signal)
+/// <summary>事件总线。静态类，任何脚本可Post/Register，无装配顺序依赖。</summary>
+public static class SilkEventBus
+{
+    // Type -> 处理该类型的处理器列表
+    static readonly System.Collections.Generic.Dictionary<Type, List<object>>
+        handlers = new Dictionary<Type, List<object>>();
+
+    /// <summary>注册一个能处理 T 类型事件的处理器。</summary>
+    public static void Register<T>(object handler) where T : ISilkEvent
     {
-        if (line == null || signal == null) return;
-        OnBreakRequested?.Invoke(line, signal);
+        var t = typeof(T);
+        if (!handlers.TryGetValue(t, out var list))
+        {
+            list = new List<object>();
+            handlers[t] = list;
+        }
+        if (!list.Contains(handler)) list.Add(handler);
     }
 
-    /// <summary>只广播不指定线（例如玩家松手，所有连着玩家的线都该断）</summary>
-    public static event System.Action<SilkBreakSignal> OnBroadcast;
-
-    public static void Broadcast(SilkBreakSignal signal)
+    public static void Unregister<T>(object handler) where T : ISilkEvent
     {
-        if (signal == null) return;
-        OnBroadcast?.Invoke(signal);
+        if (handlers.TryGetValue(typeof(T), out var list))
+            list.Remove(handler);
     }
 
-    public static void Clear()
+    /// <summary>发布事件。bus 会找到所有能处理该类型的处理器并逐个调用。</summary>
+    public static void Post<T>(T evt) where T : ISilkEvent
     {
-        OnBreakRequested = null;
-        OnBroadcast = null;
+        if (evt == null) return;
+        if (!handlers.TryGetValue(typeof(T), out var list)) return;
+        // 复制一份再遍历：处理器里可能会注册/注销，避免集合被修改。
+        // 手动复制而非 list.ToArray()，省掉 System.Linq 依赖。
+        int n = list.Count;
+        var snapshot = new object[n];
+        for (int i = 0; i < n; i++) snapshot[i] = list[i];
+        foreach (var h in snapshot)
+            ((T)evt).Handle(h as SilkBuilder);
     }
+
+    /// <summary>清空所有注册（重开场景时用，避免静态残留）。</summary>
+    public static void Clear() => handlers.Clear();
 }
 
 /* ===================== 体素网格 ===================== */
@@ -1198,6 +1296,32 @@ public class SilkChain : MonoBehaviour
         endDriven = target != null;
     }
 
+    /// <summary>
+    /// 对整条链施加一次力（明天跑酷的施力入口）。
+    /// 沿 root→末端线性衰减注入，末端受力最大（符合甩鞭的受力分布）。
+    /// 泵力（沿绳）传 force = 切线方向；横推传垂直方向。
+    /// </summary>
+    public void ApplyForce(Vector3 force, float tipBoost = 1.6f)
+    {
+        if (force.sqrMagnitude < 1e-8f) return;
+        float dt = Time.deltaTime > 0f ? Time.deltaTime : 0.02f;
+
+        if (endDriven)
+        {
+            // 末端被驱动时，玩家输入直接改变末端速度（明天跑酷手感的关键）
+            drivenVelocity += force * dt;
+            return;
+        }
+
+        // 自由摆动时按位置权重注入到各节点
+        int last = nodes.Count - 1;
+        for (int i = 1; i <= last; i++)
+        {
+            float t = i / (float)last;
+            velocities[i] += force * Mathf.Lerp(1f, tipBoost, t) * dt;
+        }
+    }
+
     /// <summary>把末端节点瞬移到指定位置（挂载瞬间用，避免第一帧跳变）。</summary>
     public void SnapEndTo(Vector3 worldPos)
     {
@@ -1324,10 +1448,14 @@ public class SilkBuilder : MonoBehaviour
         mainCam = null;
         spatialHash = new SilkSpatialHash(8f);
 
-        // 订阅断裂信号通道：外部（玩家控制器、敌人、老化系统）发信号，
-        // 由本组件统一执行断裂。这样跑酷的多种触发源不必碰 SilkBuilder 内部逻辑。
-        SilkBreakChannel.OnBreakRequested += HandleBreakRequest;
-        SilkBreakChannel.OnBroadcast += HandleBreakBroadcast;
+        // 向事件总线注册各类事件的处理器。
+        // 外部（玩家控制器、敌人、老化系统）只需 SilkEventBus.Post(evt)，
+        // 不必认识 SilkBuilder 的任何内部 API。
+        // 加新事件类型时在这里加一行 Register 即可，总线分发逻辑不动。
+        SilkEventBus.Register<SilkBreakSignal>(this);
+        SilkEventBus.Register<SilkGrabSignal>(this);
+        SilkEventBus.Register<SilkReleaseSignal>(this);
+        SilkEventBus.Register<SilkForceSignal>(this);
 
         previewGO = new GameObject("PreviewLine");
         previewGO.transform.SetParent(transform);
@@ -1437,39 +1565,97 @@ public class SilkBuilder : MonoBehaviour
 
     void OnDestroy()
     {
-        // 静态事件必须退订，否则 SilkBuilder 销毁后事件仍持有引用（内存泄漏 + 幽灵调用）
-        SilkBreakChannel.OnBreakRequested -= HandleBreakRequest;
-        SilkBreakChannel.OnBroadcast -= HandleBreakBroadcast;
+        // 事件总线是静态的，必须退订，否则 SilkBuilder 销毁后
+        // 仍被总线持有（内存泄漏 + 幽灵调用）
+        SilkEventBus.Unregister<SilkBreakSignal>(this);
+        SilkEventBus.Unregister<SilkGrabSignal>(this);
+        SilkEventBus.Unregister<SilkReleaseSignal>(this);
+        SilkEventBus.Unregister<SilkForceSignal>(this);
     }
 
-    /* ============ 断裂信号处理 ============ */
+    /* ============ 事件执行器（由 SilkEventBus 统一调用） ============ */
+    /* 每个事件类型一个 Execute 方法。加新事件时：
+     *   1) 新建 class XxxSignal : ISilkEvent，实现 Handle 里调 handler.ExecuteXxx(this)
+     *   2) 在这里加对应的 ExecuteXxx
+     *   3) 在 Awake 里加一行 Register<XxxSignal>(this)
+     * SilkEventBus 的分发逻辑完全不用改 —— 这就是「统一信号控制」的收益。*/
 
-    void HandleBreakRequest(SilkLine line, SilkBreakSignal signal)
+    /// <summary>执行断裂。signal.target 为空则广播到所有可断的线。</summary>
+    public void ExecuteBreak(SilkBreakSignal signal)
     {
-        if (line == null || signal == null) return;
-        if (line.BreakBySignal(this, signal))
+        if (signal == null) return;
+        int count = 0;
+
+        if (signal.target != null)
+        {
+            // 指定线
+            if (signal.target.BreakBySignal(this, signal)) count = 1;
+        }
+        else
+        {
+            // 广播：对所有状态允许断裂的线执行
+            var snapshot = new List<SilkLine>(silkLines);
+            foreach (var line in snapshot)
+            {
+                if (line == null || !line.CanBeCut) continue;
+                if (line.BreakBySignal(this, signal)) count++;
+            }
+        }
+
+        if (count > 0)
         {
             RebuildSpatialHash();
-            Debug.Log("[Break] " + signal.cause + " 断裂成功（指定线）");
+            Debug.Log("[Event] 断裂 " + signal.cause + " × " + count +
+                      (signal.target != null ? "（指定线）" : "（广播）"));
         }
     }
 
-    /// <summary>广播式断裂：不指定线，对所有未断的线发信号。
-    /// 用于「玩家松手」「爆炸」这类一次影响多条线的场景。</summary>
-    void HandleBreakBroadcast(SilkBreakSignal signal)
+    /// <summary>执行抓住：把末端挂到指定点上。</summary>
+    public void ExecuteGrab(SilkGrabSignal signal)
     {
-        if (signal == null) return;
+        if (signal == null || signal.attachPoint == null) return;
+        // 抓最近的可挂载线
+        SilkLine best = null;
+        float bestD = pickRadius;
+        Vector3 p = signal.attachPoint.position;
+        foreach (var line in silkLines)
+        {
+            if (line == null || line.life != SilkLifeState.Static) continue;
+            float d = Vector3.Distance(p, (line.rootFrom.WorldPosition + line.rootTo.WorldPosition) * 0.5f);
+            if (d < bestD) { bestD = d; best = line; }
+        }
+        if (best == null) return;
+
+        if (best.Attach(signal.attachPoint, this, signal.label))
+        {
+            if (signal.startSwing) best.StartSwing();
+            Debug.Log("[Event] 抓住 " + signal.label);
+        }
+    }
+
+    /// <summary>执行松手：所有已挂载的线脱钩下坠。</summary>
+    public void ExecuteRelease()
+    {
         int count = 0;
         var snapshot = new List<SilkLine>(silkLines);
         foreach (var line in snapshot)
         {
-            if (line == null || !line.CanBeCut) continue;   // 状态守卫
-            if (line.BreakBySignal(this, signal)) count++;
+            if (line == null) continue;
+            if (line.life == SilkLifeState.Anchored || line.life == SilkLifeState.Swinging)
+                if (line.Release()) count++;
         }
-        if (count > 0)
+        if (count > 0) Debug.Log("[Event] 松手 " + count + " 根");
+    }
+
+    /// <summary>执行施力：对所有可动线施加一次力。</summary>
+    public void ExecuteForce(SilkForceSignal signal)
+    {
+        if (signal == null) return;
+        var snapshot = new List<SilkLine>(silkLines);
+        foreach (var line in snapshot)
         {
-            RebuildSpatialHash();
-            Debug.Log("[Break] " + signal.cause + " 广播断裂 " + count + " 根");
+            if (line == null || !line.NeedsPhysics) continue;
+            line.chain.ApplyForce(signal.force, signal.tipBoost);
         }
     }
 
@@ -1510,7 +1696,8 @@ public class SilkBuilder : MonoBehaviour
         }
 
         // 发信号：右键 = ManualCut + 预设断点 + 零初速度
-        SilkBreakChannel.Request(bestLine, new SilkBreakSignal(SilkBreakCause.ManualCut));
+        // 走统一事件总线；指定线用 On()，不指定则广播
+        SilkEventBus.Post(new SilkBreakSignal(SilkBreakCause.ManualCut).On(bestLine));
     }
 
     public AnchorPoint CreateAnchorAt(Vector3 worldPoint)
