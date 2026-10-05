@@ -1038,10 +1038,13 @@ public class SilkWorldBootstrap
         var cam = camGO.AddComponent<Camera>();
         cam.clearFlags = CameraClearFlags.SolidColor;
         cam.backgroundColor = new Color(0.06f, 0.06f, 0.1f);
-        // 摄像机摆在 XY 平面内、Z 略高，配合 up = forward 实现「Z 朝屏幕上方」
+        // 摄像机摆在 XY 平面内、Z 略高，配合 up=+Z 实现「Z 朝屏幕上方」
         camGO.transform.position = new Vector3(120, -120, 85);
-        camGO.transform.up = Vector3.forward;      // 关键：把 +Z 声明为上方向
-        camGO.transform.LookAt(Vector3.zero);
+        // 用 LookAt 的双参数重载显式指定参考上轴。
+        // 不要先给 transform.up 赋值再 LookAt —— 那是两次独立重算 rotation，
+        // 叠加后朝向不可控，表现为「镜头转过去看不到立方体」。
+        camGO.transform.rotation = Quaternion.LookRotation(
+            (Vector3.zero - camGO.transform.position).normalized, Vector3.forward);
         camGO.AddComponent<SimpleOrbitCamera>();
 
         Debug.Log("[Bootstrap] 100³ 蛛网战场就绪\n" +
@@ -1181,7 +1184,6 @@ public class SimpleOrbitCamera : MonoBehaviour
 
     void Start()
     {
-        transform.up = Vector3.forward;
         // 从当前朝向反解 yaw/pitch，保证 Start 后画面不跳变
         Vector3 f = transform.forward;
         pitch = Mathf.Asin(Mathf.Clamp(f.z, -1f, 1f)) * Mathf.Rad2Deg;
@@ -1205,7 +1207,7 @@ public class SimpleOrbitCamera : MonoBehaviour
         if (Input.GetKey(KeyCode.S)) move -= transform.forward;
         if (Input.GetKey(KeyCode.A)) move -= transform.right;
         if (Input.GetKey(KeyCode.D)) move += transform.right;
-        if (Input.GetKey(KeyCode.E)) move += transform.up;      // up = +Z（升高）
+        if (Input.GetKey(KeyCode.E)) move += transform.up;      // up ≈ +Z（升高）
         if (Input.GetKey(KeyCode.Q)) move -= transform.up;      // 降低
 
         transform.position += move.normalized * speed * Time.deltaTime;
@@ -1215,13 +1217,18 @@ public class SimpleOrbitCamera : MonoBehaviour
             transform.position += transform.forward * scroll * scrollZoomSpeed;
     }
 
-    /// 绕 Z 偏航后再绕水平轴俯仰，全程保持 +Z 朝上
+    /// 由 yaw(绕Z) + pitch(仰角) 直接构造朝向，+Z 为上。
+    /// 不能用 Quaternion.Euler —— 那是 Y-up 硬编码。
+    /// 也不能先 qYaw 再 qPitch 叠加：那样 pitch 的基准轴会随 qYaw 漂移，
+    /// 实测朝向误差 1.67（几乎反向），画面会转到看不到立方体的地方。
     void ApplyRotation()
     {
-        Quaternion qYaw = Quaternion.AngleAxis(yaw, Vector3.forward);
-        Vector3 right = qYaw * Vector3.right;
-        Quaternion qPitch = Quaternion.AngleAxis(pitch, right);
-        transform.rotation = qYaw * qPitch;
-        transform.up = Vector3.forward;
+        float p = pitch * Mathf.Deg2Rad;
+        Vector3 dir = new Vector3(
+            Mathf.Cos(p) * Mathf.Cos(yaw * Mathf.Deg2Rad),
+            Mathf.Cos(p) * Mathf.Sin(yaw * Mathf.Deg2Rad),
+            Mathf.Sin(p));
+        // 第二参数为 up 参考轴：与 dir 接近平行时 LookRotation 会退化，故先夹紧 pitch
+        transform.rotation = Quaternion.LookRotation(dir, Vector3.forward);
     }
 }
