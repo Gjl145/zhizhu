@@ -201,8 +201,9 @@ public class SilkSegment : MonoBehaviour
     {
         if (lr == null) return;
 
-        // 主丝粗、辅丝细。真实蛛网这个比例约 2~3 倍
-        float roleWidth = role == SilkRole.Radii ? 1.8f : 0.85f;
+        // 主丝粗、辅丝细。真实蛛网这个比例约 2~3 倍。
+        // 数值比上一版调细（原 1.8/0.85 偏粗，截图里像粗线而非蛛丝）
+        float roleWidth = role == SilkRole.Radii ? 1.2f : 0.5f;
         lr.widthMultiplier = roleWidth * widthScale;
 
         // 主丝偏白（新鲜、承重），辅丝略暗（细密、积灰）
@@ -871,8 +872,9 @@ public class SilkBuilder : MonoBehaviour
     public float pickRadius = 15f;
 
     [Header("蛛网结构（静止观感的层次）")]
-    [Tooltip("主丝（绷紧承重）占比。真实蛛网主丝少、辅丝多，默认 0.3")]
-    [Range(0f, 1f)] public float primaryRatio = 0.3f;
+    [Tooltip("主丝（绷紧承重）占比。默认 0 = 只生成垂落丝，"
+           + "垂度调大后主丝也明显下垂会与辅丝混淆。拖到 0.3 可恢复主辅分层")]
+    [Range(0f, 1f)] public float primaryRatio = 0f;
 
     readonly List<AnchorPoint> anchors = new();
     readonly List<SilkLine> silkLines = new();
@@ -1097,9 +1099,12 @@ public class SilkBuilder : MonoBehaviour
         go.transform.SetParent(transform);
         var seg = go.AddComponent<SilkSegment>();
         seg.from = a; seg.to = b; seg.parentLine = line;
-        // 结构化分配：谁是主丝、谁是辅丝、松紧粗细各不同。
-        // 真实蛛网主丝（辐射丝）绷紧承重，辅丝（螺旋丝）松垂装饰。
-        // 垂度按用户反馈加大：之前 0.02~0.16 视觉上「不够多、不够明显」。
+        /* 角色分配：默认全部生成辅丝（垂落丝）。
+         * 用户反馈「同时出现主丝和垂落丝」是多余的 —— 垂度调大后主丝
+         * 也明显下垂，与辅丝难以区分，反而成了杂线。
+         * 因此 primaryRatio 默认 0；主丝（Radii）样式保留，
+         * 拖到 0.3 左右可恢复主辅分层，或手动指定。
+         * 垂度按用户反馈加大：之前 0.02~0.16 视觉上「不够多、不够明显」。*/
         bool isRadii = Random.value < primaryRatio;
         seg.role = isRadii ? SilkRole.Radii : SilkRole.Spiral;
         // 主丝绷紧（tension 高 -> 垂度小），辅丝松垂
@@ -1478,15 +1483,18 @@ public class SimpleOrbitCamera : MonoBehaviour
 
         if (Input.GetMouseButton(1))
         {
-            // Z-up 下水平与垂直旋转的屏幕表现不同，需分别取符号（Python 实测）：
-            //   水平：绕 +Z 正向 → 物体反向移动，跟手要取反
-            //   垂直：绕水平轴     → 物体同向移动，跟手要保持
-            float signX = dragFollowsMouse ? -1f : 1f;
+            /* 拖拽方向：轨道相机旋转时目标恒在画面中心，
+             * 用户实际看到的是「场景反向移动」。
+             * Python 按屏幕位移实测（相机在 (120,-120,85) 原地转 10°）：
+             *   yaw+10  -> 场景横移 −29.5（偏左）   ✓ 鼠标右拖时想要的效果
+             *   pitch+10 -> 场景纵移 −33.0（偏下）  ✓ 鼠标下拖时想要的效果
+             * 所以两个轴都取 +1。
+             * 前一版误按「物体跟手」取符号（−1/+1），实测背景反着走。
+             */
+            float signX = dragFollowsMouse ? 1f : -1f;
             float signY = dragFollowsMouse ? 1f : -1f;
             yaw += signX * Input.GetAxis("Mouse X") * rotateSpeed;
             pitch += signY * Input.GetAxis("Mouse Y") * rotateSpeed;
-            // 夹到 ±85 而非 ±89：LookRotation(dir, +Z) 在 dir 接近垂直于 +Z 时
-            // 参考轴退化，Python 全角度扫描确认 ±89 那一行有 49 组退化
             pitch = Mathf.Clamp(pitch, -85f, 85f);
             ApplyRotation();
         }
