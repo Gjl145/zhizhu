@@ -226,7 +226,7 @@ public class SilkSegment : MonoBehaviour
         {
             fadeTimer += Time.deltaTime;
             float a = 1f - fadeTimer / 2.5f;
-            transform.position += (Vector3.down * 0.4f + new Vector3(
+            transform.position += (new Vector3(0, 0, -0.4f) + new Vector3(
                 Mathf.Sin(fadeTimer * 3f) * 0.15f, 0,
                 Mathf.Cos(fadeTimer * 2.5f) * 0.15f)) * Time.deltaTime;
             if (lr.material != null)
@@ -241,7 +241,7 @@ public class SilkSegment : MonoBehaviour
 
         Vector3 mid = (from.WorldPosition + to.WorldPosition) * 0.5f;
         if (state == SilkState.Intact && !isFreeEnd && !noSag)
-            mid += Vector3.down * (1f - tension) * 0.7f;
+            mid += new Vector3(0, 0, -(1f - tension) * 0.7f);   // Z 为高度，向下弯
 
         lr.positionCount = 3;
         lr.SetPosition(0, from.WorldPosition);
@@ -490,10 +490,11 @@ public class SilkChain : MonoBehaviour
         if (dt <= 0f) return;
 
         // 1. 显式速度积分：重力 + 空气阻力，根节点不参与
+        //    重力沿 -Z（项目约定：Z = 高度），不是 Unity 默认的 Vector3.down
         float dragFactor = Mathf.Clamp01(1f - airDrag * dt * 60f);
         for (int i = 1; i < nodes.Count; i++)
         {
-            velocities[i] += Vector3.down * (gravity * dt);
+            velocities[i] += new Vector3(0, 0, -gravity * dt);
             velocities[i] *= damping;
             velocities[i] *= dragFactor;
             nodes[i].transform.position += velocities[i] * dt;
@@ -883,62 +884,55 @@ public class SilkBuilder : MonoBehaviour
         var wallAnchors = anchors.FindAll(a => a.type == AnchorType.Wall);
         if (wallAnchors.Count < 6) { Debug.LogWarning("[SilkBuilder] 壁面锚点不足"); return; }
 
-        // 顶面正中锚点（X=0, Y=0, Z 高）
-        Vector3 center = grid.GetCenter();
+        // 坐标约定：X = 左右，Y = 前后，Z = 高度（重力沿 -Z）
+        Vector3 c = grid.GetCenter();
+        float h = grid.GetHalfSize();
+        const float EPS = 1.5f;
+
+        // 顶面：Z 接近 +h 且 X/Y 都在中心
         var topAnchors = wallAnchors.FindAll(a =>
-            Mathf.Abs(a.WorldPosition.x - grid.transform.position.x) < 3f &&
-            Mathf.Abs(a.WorldPosition.y - grid.transform.position.y) < 3f &&
-            a.WorldPosition.z > grid.transform.position.z + grid.GetHalfSize() * 0.5f);
+            Mathf.Abs(a.WorldPosition.x - c.x) < 3f &&
+            Mathf.Abs(a.WorldPosition.y - c.y) < 3f &&
+            a.WorldPosition.z > c.z + h - EPS);
 
-        // 底面正中锚点（X=0, Z 低）
+        // 底面：Z 接近 -h（X/Y 网格铺满）
         var bottomAnchors = wallAnchors.FindAll(a =>
-            Mathf.Abs(a.WorldPosition.x - grid.transform.position.x) < 3f &&
-            Mathf.Abs(a.WorldPosition.y - grid.transform.position.y) < 3f &&
-            a.WorldPosition.z < grid.transform.position.z - grid.GetHalfSize() * 0.5f);
+            a.WorldPosition.z < c.z - h + EPS);
 
-        // 左右面上半部锚点（Z 3/4~1）
+        // 左右面高区：X 贴 ±h，且 Z 在 3/4~1 区间
         var highAnchors = wallAnchors.FindAll(a =>
-            (Mathf.Abs(a.WorldPosition.x - (grid.transform.position.x + grid.GetHalfSize())) < 3f ||
-             Mathf.Abs(a.WorldPosition.x - (grid.transform.position.x - grid.GetHalfSize())) < 3f) &&
-            a.WorldPosition.z > grid.transform.position.z + grid.GetHalfSize() * 0.5f);
+            (Mathf.Abs(a.WorldPosition.x - (c.x + h)) < EPS ||
+             Mathf.Abs(a.WorldPosition.x - (c.x - h)) < EPS) &&
+            a.WorldPosition.z > c.z + h * 0.75f - EPS);
 
-        // 左右面中部锚点（Z 0~3/4）
-        var midAnchors = wallAnchors.FindAll(a =>
-            (Mathf.Abs(a.WorldPosition.x - (grid.transform.position.x + grid.GetHalfSize())) < 3f ||
-             Mathf.Abs(a.WorldPosition.x - (grid.transform.position.x - grid.GetHalfSize())) < 3f) &&
-            Mathf.Abs(a.WorldPosition.z - grid.transform.position.z) < grid.GetHalfSize() * 0.5f);
+        // 左右面整体（用于同面纵向连接）
+        var sideAnchors = wallAnchors.FindAll(a =>
+            Mathf.Abs(a.WorldPosition.x - (c.x + h)) < EPS ||
+            Mathf.Abs(a.WorldPosition.x - (c.x - h)) < EPS);
 
-        // 左右面底部锚点
-        var lowAnchors = wallAnchors.FindAll(a =>
-            (Mathf.Abs(a.WorldPosition.x - (grid.transform.position.x + grid.GetHalfSize())) < 3f ||
-             Mathf.Abs(a.WorldPosition.x - (grid.transform.position.x - grid.GetHalfSize())) < 3f) &&
-            a.WorldPosition.z < grid.transform.position.z - grid.GetHalfSize() * 0.5f);
-
-        // ===== 1. 顶面正中 → 下方（上半部） =====
+        // ===== 1. 顶面正中 → 左右高区 =====
         if (topAnchors.Count > 0 && highAnchors.Count > 0)
         foreach (var top in topAnchors)
         {
-            for (int i = 0; i < 3; i++)
+            for (int i = 0; i < 4; i++)
             {
                 var target = highAnchors[Random.Range(0, highAnchors.Count)];
                 if (target != top) CreateSilkLine(top, target, SilkColor.White, BreakMode.Middle);
             }
         }
 
-        // ===== 2. 底面正中 → 上方（中部） =====
-        if (bottomAnchors.Count > 0 && midAnchors.Count > 0)
+        // ===== 2. 底面网格 → 左右高区（纵向贯穿，玩家所在真实高度层） =====
+        if (bottomAnchors.Count > 0 && highAnchors.Count > 0)
         foreach (var bot in bottomAnchors)
         {
-            for (int i = 0; i < 3; i++)
-            {
-                var target = midAnchors[Random.Range(0, midAnchors.Count)];
-                if (target != bot) CreateSilkLine(bot, target, SilkColor.White, BreakMode.Middle);
-            }
+            // 每个底面锚点连向 1 个高区锚点，靠去重自然收敛
+            var target = highAnchors[Random.Range(0, highAnchors.Count)];
+            if (target != bot) CreateSilkLine(bot, target, SilkColor.White, BreakMode.Middle);
         }
 
-        // ===== 3. 左面 ↔ 右面（高对高） =====
+        // ===== 3. 左面 ↔ 右面（高区横连，跨越城市） =====
         if (highAnchors.Count > 1)
-        for (int i = 0; i < 8; i++)
+        for (int i = 0; i < 10; i++)
         {
             var a = highAnchors[Random.Range(0, highAnchors.Count)];
             var b = highAnchors[Random.Range(0, highAnchors.Count)];
@@ -946,41 +940,22 @@ public class SilkBuilder : MonoBehaviour
                 CreateSilkLine(a, b, SilkColor.White, BreakMode.Middle);
         }
 
-        // ===== 4. 左面 ↔ 右面（中对中） =====
-        if (midAnchors.Count > 1)
-        for (int i = 0; i < 8; i++)
+        // ===== 4. 同面纵向辐射（左面内部 / 右面内部） =====
+        for (int i = 0; i < 12; i++)
         {
-            var a = midAnchors[Random.Range(0, midAnchors.Count)];
-            var b = midAnchors[Random.Range(0, midAnchors.Count)];
-            if (a != b && VoxelDistance(a.position, b.position) >= 5)
-                CreateSilkLine(a, b, SilkColor.White, BreakMode.Middle);
-        }
-
-        // ===== 5. 左面 ↔ 右面（低对低） =====
-        if (lowAnchors.Count > 1)
-        for (int i = 0; i < 5; i++)
-        {
-            var a = lowAnchors[Random.Range(0, lowAnchors.Count)];
-            var b = lowAnchors[Random.Range(0, lowAnchors.Count)];
-            if (a != b && VoxelDistance(a.position, b.position) >= 5)
-                CreateSilkLine(a, b, SilkColor.White, BreakMode.Middle);
-        }
-
-        // ===== 6. 同面纵向（左面上下相连） =====
-        for (int i = 0; i < 10; i++)
-        {
-            var a = wallAnchors[Random.Range(0, wallAnchors.Count)];
-            var b = wallAnchors[Random.Range(0, wallAnchors.Count)];
-            // 同一面（X 相同）且高度不同
+            var a = sideAnchors[Random.Range(0, sideAnchors.Count)];
+            var b = sideAnchors[Random.Range(0, sideAnchors.Count)];
+            // 同一面（X 相同）且高度差大于 5 格 → 纵向丝线
             if (a != b &&
                 Mathf.Abs(a.WorldPosition.x - b.WorldPosition.x) < 1f &&
-                Mathf.Abs(a.WorldPosition.y - b.WorldPosition.y) < 1f &&
                 Mathf.Abs(a.WorldPosition.z - b.WorldPosition.z) > 5f)
                 CreateSilkLine(a, b, SilkColor.White, BreakMode.Middle);
         }
 
         RebuildSpatialHash();
-        Debug.Log("[SilkBuilder] 织网完成，共 " + silkLines.Count + " 根丝线");
+        Debug.Log("[SilkBuilder] 织网完成，共 " + silkLines.Count + " 根丝线" +
+                  "（顶面 " + topAnchors.Count + " / 底面 " + bottomAnchors.Count +
+                  " / 高区 " + highAnchors.Count + "）");
     }
 
     void RebuildSpatialHash()
@@ -1110,29 +1085,34 @@ public class SilkWorldBootstrap
         }
     }
 
-    /* ============ 锚点：左右面 Z=3/4~1，顶面正中 ============ */
+    /* ============ 锚点：底面满网格 / 左右面 3/4~1 高区 / 顶面中心一点 ============
+     *
+     * 坐标约定（全项目统一）：X = 左右，Y = 前后，Z = 高度（重力沿 -Z）。
+     * 之前此方法把 Vector3.up 当高度、Vector3.forward 当前后，导致：
+     *   · 左右面的高度区间乘到了 Y 轴上（实际成了"前后区间"）
+     *   · "顶面"点写到了 Y=+h 的前面板上，"底面"点写到了 Y=-h 的后面板上
+     * 现在全部按 Z 为高度重写。
+     */
     static void GenerateAnchors(VoxelGrid grid, int spacing)
     {
+        Vector3 c = grid.transform.position;
         float h = grid.GetHalfSize();
         int count = 0;
 
-        // ===== 左右面：从底部到 3/4 高度，多排锚点 =====
+        // ===== 左右面（X = ±h）：仅 3/4~1 高区，Y 前后多排 =====
+        // 模拟城市内部不同高度的高楼：只有高处有锚点，低处留空给玩家活动
+        float zHighStart = h * 0.75f;              // 高区起点
+        float zHighEnd   = h;                       // 高区终点（顶部）
+
         for (int face = 0; face < 2; face++)
         {
-            Vector3 n = (face == 0) ? Vector3.right : Vector3.left;  // X 面
-            Vector3 u = Vector3.up;                                   // Z 轴（高度）
-            Vector3 v = Vector3.forward;                              // Y 轴（前后）
+            float x = (face == 0) ? h : -h;         // 左右两面
 
-            // 从底部到 3/4 高度，全部铺满
-            float zStart = -h + spacing;     // 底部开始
-            float zEnd = h * 0.75f;         // 到 3/4 结束
-
-            for (float ou = -h + spacing; ou < h; ou += spacing)       // 前后方向
+            for (float y = -h + spacing; y < h; y += spacing)          // Y 前后多排
             {
-                for (float ov = zStart; ov < zEnd; ov += spacing)     // 高度：底部 → 3/4
+                for (float z = zHighStart; z <= zHighEnd; z += spacing) // Z 高度：高区
                 {
-                    Vector3 local = n * h + u * ov + v * ou;
-                    var world = grid.transform.position + local;
+                    var world = c + new Vector3(x, y, z);
                     var go = new GameObject();
                     go.transform.SetParent(grid.transform);
                     var a = go.AddComponent<AnchorPoint>();
@@ -1142,36 +1122,12 @@ public class SilkWorldBootstrap
             }
         }
 
-        // ===== 顶面：正中心一小簇（十字短线，簇臂约 spacing） =====
+        // ===== 底面（Z = -h）：X/Y 网格铺满 =====
+        for (float x = -h + spacing; x < h; x += spacing)
         {
-            // 以正中心为原点的十字：中心点 + 四个方向各一排
-            Vector3[] offsets =
-            {
-                new Vector3(0, 0, 0),
-                new Vector3( spacing, 0, 0),
-                new Vector3(-spacing, 0, 0),
-                new Vector3(0,  spacing, 0),
-                new Vector3(0, -spacing, 0),
-            };
-            foreach (var off in offsets)
-            {
-                var world = grid.transform.position + off + new Vector3(0, 0, h);
-                var go = new GameObject();
-                go.transform.SetParent(grid.transform);
-                var a = go.AddComponent<AnchorPoint>();
-                a.Setup(world, grid.WorldToVoxel(world), AnchorType.Wall);
-                count++;
-            }
-        }
-
-        // ===== 底面：保留最中间一排（X=0 的线） =====
-        {
-            // 底面正中一条线：X=0, Y=0, Z 从底部到顶部（和顶面同一条垂直线）
-            // 其实顶面和底面共用一条竖线，这里不需要额外生成
-            // 但如果底面也需要独立一排（Y方向），就加：
             for (float y = -h + spacing; y < h; y += spacing)
             {
-                var world = grid.transform.position + new Vector3(0, y, -h);
+                var world = c + new Vector3(x, y, -h);
                 var go = new GameObject();
                 go.transform.SetParent(grid.transform);
                 var a = go.AddComponent<AnchorPoint>();
@@ -1180,10 +1136,23 @@ public class SilkWorldBootstrap
             }
         }
 
+        // ===== 顶面（Z = +h）：仅正中心一点 =====
+        {
+            var world = c + new Vector3(0, 0, h);
+            var go = new GameObject();
+            go.transform.SetParent(grid.transform);
+            var a = go.AddComponent<AnchorPoint>();
+            a.Setup(world, grid.WorldToVoxel(world), AnchorType.Wall);
+            count++;
+        }
+
+        // 需求明确：前后面（Y = ±h）完全无锚点，此处刻意不生成
+
         Debug.Log("[Bootstrap] 锚点：" + count + " 个\n" +
-                  "左右面：底部 → 3/4 高度，多排（模拟高楼不同层高）\n" +
-                  "顶面：正中心一小簇（十字，5 点）\n" +
-                  "底面：正中一排");
+                  "底面(Z=-h)：X/Y 网格铺满\n" +
+                  "左右面(X=±h)：仅 3/4~1 高区，Y 多排（模拟高楼）\n" +
+                  "顶面(Z=+h)：正中心 1 点\n" +
+                  "前后面(Y=±h)：无锚点");
     }
 }
 
