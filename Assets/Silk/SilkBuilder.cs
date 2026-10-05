@@ -23,6 +23,12 @@ public enum SilkColor { White, Yellow, Red }
 public enum AnchorType { Wall, Internal, SilkNode }
 public enum BreakMode { Middle, Quarter, ThreeQuarter, SpiderShot }
 
+/* 丝线的结构角色。真实蛛网不是所有丝线都一样：
+ *   Radii  主丝/辐射丝 —— 从中心辐射向外，绷紧、承重、粗
+ *   Spiral 辅丝/螺旋丝 —— 横向连接，松弛、装饰、细
+ * 静止观感的关键就在这个区分：全是同一种，网就没有层次。 */
+public enum SilkRole { Radii, Spiral }
+
 /* ===================== 体素网格 ===================== */
 public class VoxelGrid : MonoBehaviour
 {
@@ -136,6 +142,16 @@ public class SilkSegment : MonoBehaviour
     [Tooltip("渲染采样段数。越大弧线越平滑，3 就够看出弧度，8 接近丝质")]
     [Range(2, 16)] public int sagSegments = 6;
 
+    [Header("结构角色（静止观感的层次来源）")]
+    [Tooltip("Radii 主丝绷紧承重 / Spiral 辅丝松垂装饰。混合两者网才有层次")]
+    public SilkRole role = SilkRole.Spiral;
+
+    [Tooltip("粗细倍率。真实蛛网主丝约为辅丝的 2~3 倍")]
+    [Range(0.2f, 3f)] public float widthScale = 1f;
+
+    [Tooltip("颜色微差异：老丝偏黄、沾灰。0=纯白 1=明显泛黄")]
+    [Range(0f, 1f)] public float ageTint = 0f;
+
     LineRenderer lr;
     float fadeTimer;
 
@@ -159,6 +175,7 @@ public class SilkSegment : MonoBehaviour
         lr.material = new Material(sh);
 
         // 真实蛛丝：两端细（贴墙处几乎看不见），中段略粗
+        // 基准曲线，widthScale 在 ApplyRoleStyle 里乘上去
         lr.widthCurve = new AnimationCurve(
             new Keyframe(0f, 0.012f),
             new Keyframe(0.15f, 0.038f),
@@ -175,8 +192,28 @@ public class SilkSegment : MonoBehaviour
         lr.receiveShadows = false;
         lr.generateLightingData = true;
 
-        // 乳白色丝线
-        lr.material.color = new Color(0.95f, 0.93f, 0.9f, 0.85f);
+        ApplyRoleStyle();
+    }
+
+    /// 按结构角色与老化程度应用粗细与颜色。
+    /// 静止观感的层次全靠这个 —— 193 根丝线参数全同，网就没有结构感。
+    public void ApplyRoleStyle()
+    {
+        if (lr == null) return;
+
+        // 主丝粗、辅丝细。真实蛛网这个比例约 2~3 倍
+        float roleWidth = role == SilkRole.Radii ? 1.8f : 0.85f;
+        lr.widthMultiplier = roleWidth * widthScale;
+
+        // 主丝偏白（新鲜、承重），辅丝略暗（细密、积灰）
+        float baseV = role == SilkRole.Radii ? 0.95f : 0.88f;
+        // ageTint 让老丝泛黄：R 降、B 降、G 基本不变
+        float t = Mathf.Clamp01(ageTint);
+        lr.material.color = new Color(
+            Mathf.Lerp(baseV, 0.82f, t),
+            Mathf.Lerp(baseV * 0.98f, 0.78f, t),
+            Mathf.Lerp(baseV * 0.95f, 0.62f, t),
+            0.85f);
     }
 
     public void StartFade()
@@ -450,6 +487,9 @@ public class SilkLine
         chain.damping = 0.985f;
         chain.gravity = 15f;
         chain.subdivisions = 3;
+        // 形态连续性：沿断裂前那条悬链线布点，而不是直线均分。
+        // 这样断裂瞬间垂度不会归零，视觉上不会「弹一下」。
+        chain.catenarySag = oldSeg.sagRatio;
         chain.Build(high, node, this, oldSeg.tension);
 
         Object.Destroy(oldSeg.gameObject);
@@ -505,6 +545,84 @@ public class SilkChain : MonoBehaviour
     AnchorPoint root;   // 固定端（墙上）
     bool initialized = false;
 
+    [Header("形态连续性")]
+    [Tooltip("断裂瞬间沿悬链线布点时使用的垂度比例，需与断裂前 SilkSegment 的 sagRatio 一致，"
+           + "否则断裂帧会有形态跳变（视觉上「弹一下」）。0=纯直线")]
+    public float catenarySag = 0.07f;
+
+    /// 悬链线布点结果：节点位置 + 各段弧长
+    struct CatenaryLayout
+    {
+        public List<Vector3> points;         // 长度 n+1，含两端
+        public List<float> restLengths;      // 长度 n
+    }
+
+    /// 沿悬链线布点并按弧长分配段长。
+    /// sagRatio <= 0 或求解失败时退化为直线均分。
+    CatenaryLayout BuildCatenaryLayout(Vector3 a, Vector3 b, int n, float sagRatio)
+    {
+        var res = new CatenaryLayout();
+        Vector3 span = b - a;
+        float dist = span.magnitude;
+
+        res.points = new List<Vector3>();
+        res.restLengths = new List<float>();
+        if (dist < 0.0001f)
+        {
+            for (int i = 0; i <= n; i++) res.points.Add(a);
+            for (int i = 0; i < n; i++) res.restLengths.Add(0f);
+            return res;
+        }
+
+        // 退化条件：垂度为 0，或丝线水平对齐（无重力方向分量）
+        bool degenerate = sagRatio <= 0.0001f ||
+                         Mathf.Abs(Vector3.Dot(span.normalized, Vector3.forward)) > 0.999f;
+
+        if (!degenerate)
+        {
+            float sag = dist * sagRatio;
+            float half = dist * 0.5f;
+            float catA = half;
+            for (int it = 0; it < 12; it++)
+            {
+                float x = half / Mathf.Max(catA, 0.0001f);
+                float ch = Mathf.Cosh(x);
+                float f = catA * (ch - 1f) - sag;
+                float d = (ch - 1f) - x * Mathf.Sinh(x);
+                if (Mathf.Abs(d) < 0.0001f) break;
+                catA -= f / d;
+                catA = Mathf.Clamp(catA, half * 0.05f, half * 20f);
+            }
+            if (float.IsNaN(catA) || float.IsInfinity(catA)) degenerate = true;
+            else
+            {
+                for (int i = 0; i <= n; i++)
+                {
+                    float t = i / (float)n;
+                    Vector3 p = Vector3.Lerp(a, b, t);
+                    if (i > 0 && i < n)
+                    {
+                        float x0 = (t - 0.5f) * 2f * half;
+                        float x = Mathf.Clamp(x0 / catA, -12f, 12f);
+                        float y = catA * (Mathf.Cosh(x) - 1f) - sag;
+                        if (!float.IsNaN(y) && !float.IsInfinity(y))
+                            p += Vector3.forward * y;
+                    }
+                    res.points.Add(p);
+                }
+                // 段长 = 实际弧长（悬链线上下不对称，不能等分）
+                for (int i = 0; i < n; i++)
+                    res.restLengths.Add((res.points[i + 1] - res.points[i]).magnitude);
+                return res;
+            }
+        }
+
+        // 退化：直线均分
+        for (int i = 0; i <= n; i++) res.points.Add(a + span * (i / (float)n));
+        for (int i = 0; i < n; i++) res.restLengths.Add(dist / n);
+        return res;
+    }
+
     /// 由 SilkLine 调用：高处固定点 → 断点，细分并建段
     public void Build(AnchorPoint highAnchor, AnchorPoint breakNode, SilkLine owner, float tension)
     {
@@ -517,13 +635,19 @@ public class SilkChain : MonoBehaviour
         if (totalLen < 0.001f) { enabled = false; return; }
 
         int n = Mathf.Max(1, subdivisions);
-        float segLen = totalLen / n;
+
+        /* 断裂瞬间的形态连续性（静止 → 动态 的关键）：
+         * 断裂前丝线是悬链线（两端固定、中部下垂），若这里按直线均分节点，
+         * 垂度会在断裂帧瞬间归零，视觉上「弹一下」。
+         * 因此这里沿同一条悬链线布点，并按弧长分配 restLengths，
+         * 让断裂前后的形状严格连续。*/
+        var layout = BuildCatenaryLayout(a, b, n, catenarySag);
 
         // 断点本身作为末端节点保留
         nodes.Add(highAnchor);
         for (int i = 1; i < n; i++)
         {
-            Vector3 p = a + total * (i / (float)n);
+            Vector3 p = layout[i];
             var go = new GameObject("ChainNode_" + i);
             go.transform.SetParent(transform);
             var node = go.AddComponent<AnchorPoint>();
@@ -539,8 +663,17 @@ public class SilkChain : MonoBehaviour
         }
         nodes.Add(breakNode);
 
-        for (int i = 0; i < nodes.Count - 1; i++)
-            restLengths.Add(segLen);
+        // 段长按弧长分配：悬链线上半段更陡、下半段更平，段长不等
+        if (layout.restLengths != null && layout.restLengths.Count == n)
+        {
+            for (int i = 0; i < n; i++) restLengths.Add(layout.restLengths[i]);
+        }
+        else
+        {
+            // 兜底：退化为等分
+            float segLen = totalLen / n;
+            for (int i = 0; i < nodes.Count - 1; i++) restLengths.Add(segLen);
+        }
 
         // 显式速度初始化为 0 —— 当前是「无初速度」的自然摆动
         for (int i = 0; i < nodes.Count; i++)
@@ -708,6 +841,10 @@ public class SilkBuilder : MonoBehaviour
     public LayerMask wallLayer;
     public float cutMaxDistance = 500f;
     public float pickRadius = 15f;
+
+    [Header("蛛网结构（静止观感的层次）")]
+    [Tooltip("主丝（绷紧承重）占比。真实蛛网主丝少、辅丝多，默认 0.3")]
+    [Range(0f, 1f)] public float primaryRatio = 0.3f;
 
     readonly List<AnchorPoint> anchors = new();
     readonly List<SilkLine> silkLines = new();
@@ -932,7 +1069,17 @@ public class SilkBuilder : MonoBehaviour
         go.transform.SetParent(transform);
         var seg = go.AddComponent<SilkSegment>();
         seg.from = a; seg.to = b; seg.parentLine = line;
-        seg.tension = Random.Range(0.5f, 1f);
+        // 结构化分配：谁是主丝、谁是辅丝、松紧粗细各不同。
+        // 真实蛛网主丝（辐射丝）绷紧承重，辅丝（螺旋丝）松垂装饰。
+        bool isRadii = Random.value < primaryRatio;
+        seg.role = isRadii ? SilkRole.Radii : SilkRole.Spiral;
+        // 主丝绷紧（tension 高 -> 垂度小），辅丝松垂
+        seg.tension = isRadii ? Random.Range(0.80f, 1.0f) : Random.Range(0.35f, 0.65f);
+        // 垂度：主丝 0.02~0.045（近绷直），辅丝 0.09~0.16（明显松垂）
+        seg.sagRatio = isRadii ? Random.Range(0.02f, 0.045f) : Random.Range(0.09f, 0.16f);
+        // 老化程度：辅丝更旧更暗（细密结构先积灰）
+        seg.ageTint = isRadii ? Random.Range(0f, 0.25f) : Random.Range(0.15f, 0.6f);
+        seg.ApplyRoleStyle();
         line.segments.Add(seg);
         spatialHash.Insert(seg);
         return line;
