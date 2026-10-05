@@ -878,6 +878,11 @@ public class SilkBuilder : MonoBehaviour
 
     readonly List<AnchorPoint> anchors = new();
     readonly List<SilkLine> silkLines = new();
+
+    // 丝线去重集合。必须在 ClearAll 里同步清空 ——
+    // 否则重新织网时会被上一轮的记录挡住，织不出线。
+    readonly HashSet<long> lineKeys = new();
+
     SilkSpatialHash spatialHash;
 
     AnchorPoint firstAnchor;
@@ -1083,15 +1088,9 @@ public class SilkBuilder : MonoBehaviour
 
     public SilkLine CreateSilkLine(AnchorPoint a, AnchorPoint b, SilkColor color, BreakMode mode = BreakMode.Middle)
     {
-        // 去重
-        string pairKey = GetPairKey(a, b);
-        foreach (var existing in silkLines)
-        {
-            if (GetPairKey(existing.rootFrom, existing.rootTo) == pairKey)
-            {
-                return existing;
-            }
-        }
+        // 去重：key 基于体素坐标，与对象生命周期解耦
+        if (lineKeys.Contains(GetPairKey(a, b))) return null;
+        lineKeys.Add(GetPairKey(a, b));
 
         var line = new SilkLine(a, b, color, mode);
         silkLines.Add(line);
@@ -1119,11 +1118,28 @@ public class SilkBuilder : MonoBehaviour
         return line;
     }
 
-    static string GetPairKey(AnchorPoint a, AnchorPoint b)
+    /// 丝线去重键：**基于体素坐标**，不用 GetHashCode。
+    ///
+    /// 为什么不用 GetHashCode：Unity 的 MonoBehaviour.GetHashCode 返回
+    /// InstanceID，而 InstanceID 在对象销毁后会被复用 ——
+    /// 断裂时 BreakNode 被销毁，下一轮新建的锚点可能拿到相同 ID，
+    /// 导致两个不同的点对被误判为重复（该连的线被吞掉）。
+    ///
+    /// 位打包：每个坐标 8 位（+64 偏移，覆盖 ±50 的100³ 网格），
+    /// 点 A 占高 24 位、点 B 占低 24 位，顺序无关由「排序后再打包」保证。
+    /// 用 long 而非 string，避免每次比较都产生 GC。
+    static long GetPairKey(AnchorPoint a, AnchorPoint b)
     {
-        int ha = a.GetHashCode();
-        int hb = b.GetHashCode();
-        return ha < hb ? ha + "_" + hb : hb + "_" + ha;
+        Vector3Int pa = a.position, pb = b.position;
+        // 先排序，保证 (A,B) 与 (B,A) 得到同一个 key
+        bool swap = pa.x > pb.x ||
+                    (pa.x == pb.x && (pa.y > pb.y ||
+                                    (pa.y == pb.y && pa.z > pb.z)));
+        if (swap) { Vector3Int t = pa; pa = pb; pb = t; }
+
+        long ka = ((long)(pa.x + 64) << 16) | ((pa.y + 64) << 8) | (pa.z + 64);
+        long kb = ((long)(pb.x + 64) << 16) | ((pb.y + 64) << 8) | (pb.z + 64);
+        return (ka << 24) | kb;
     }
 
     public void ClearAll()
@@ -1138,7 +1154,30 @@ public class SilkBuilder : MonoBehaviour
             line.chainGO = null;
         }
         silkLines.Clear();
+        // 去重集合必须同步清空，否则重新织网会被上一轮的记录挡住
+        lineKeys.Clear();
         spatialHash.Clear();
+    }
+
+    /// 立即销毁场景中所有 SilkSegment（含正在淡出的残留）。
+    /// ClearAll 的 StartFade 是「标记淡出，2.5 秒后才 Destroy」，
+    /// 在此期间这些 GameObject 仍可见但已从 silkLines 移除、不受管理，
+    /// 重新织网时会与新线重叠。重新织网前调用本方法彻底清场。
+    void DestroyFadingSegments()
+    {
+        var segs = FindObjectsOfType<SilkSegment>();
+        foreach (var seg in segs)
+            if (seg) Object.Destroy(seg.gameObject);
+
+        // ChainSeg / ChainNode 也一并清掉，避免约束链残留
+        var chains = FindObjectsOfType<SilkChain>();
+        foreach (var ch in chains)
+            if (ch) Object.Destroy(ch.gameObject);
+
+        // 断裂产生的 BreakNode 同理
+        var nodes = FindObjectsOfType<AnchorPoint>();
+        foreach (var nd in nodes)
+            if (nd != null && nd.type == AnchorType.SilkNode) Object.Destroy(nd.gameObject);
     }
 
     /// <summary>
@@ -1156,6 +1195,11 @@ public class SilkBuilder : MonoBehaviour
 
     public void GenerateWeb()
     {
+        /* 重新织网前，把上一轮「正在淡出但已不受管理」的残留彻底清掉。
+         * 否则 silkLines.Clear() 只清列表，旧的 Seg GameObject 还会存活 2.5 秒，
+         * 与新一轮的线重叠 —— 视觉上就是「同一个点对之间多条线」。
+         * （配合基于体素坐标的 GetPairKey，从根本上避免重复建线）*/
+        DestroyFadingSegments();
         ClearAll();
         SyncAnchorsFromScene();
         var wallAnchors = anchors.FindAll(a => a.type == AnchorType.Wall);
