@@ -29,6 +29,109 @@ public enum BreakMode { Middle, Quarter, ThreeQuarter, SpiderShot }
  * 静止观感的关键就在这个区分：全是同一种，网就没有层次。 */
 public enum SilkRole { Radii, Spiral }
 
+/* ===================== 断裂信号（信号驱动） =====================
+ *
+ * 原实现是「右键 → 找最近丝线 → 用预设 BreakMode 断」，所有触发逻辑
+ * 耦合在 SilkBuilder.TryCutNearest 里。跑酷需要多种触发源（玩家末端物体、
+ * 敌人切断、定时老化、半空中发射即断），故拆成「谁触发」与「怎么断」两层：
+ *
+ *   SilkBreakSignal  —— 一次断裂请求的完整描述（谁、在哪、什么模式、附带参数）
+ *   SilkBreakChannel —— 全局事件通道，任何对象都能订阅/发布，SilkBuilder 只负责执行
+ *
+ * 这样明天做跑酷时，「玩家抓住丝线后松手」只需发一个 SilkBreakSignal，
+ * 不需要碰 SilkBuilder 的内部逻辑。
+ */
+
+/* 谁触发的断裂 */
+public enum SilkBreakCause
+{
+    ManualCut,     // 玩家右键划断
+    PlayerRelease, // 玩家松手（跑酷主场景）
+    AttachHit,     // 末端物体碰到障碍
+    EnemyCut,      // 敌人切断
+    Aging,         // 老化
+    ShotRelease,   // 发射后在空中断开
+}
+
+/* 断点如何确定 */
+public enum SilkBreakPointMode
+{
+    Preset,        // 用 SilkLine 自带的 BreakMode（1/4~1/2 随机）
+    WorldPoint,    // 指定世界坐标（玩家的手 / 碰撞点）
+    Normalized,    // 按跨度比例 0~1（从低处往高处算）
+}
+
+/// <summary>一次断裂请求的完整描述。不可变，用构造函数创建。</summary>
+public class SilkBreakSignal
+{
+    public SilkBreakCause cause;              // 谁触发的
+    public SilkBreakPointMode pointMode;      // 断点怎么定
+    public Vector3 worldPoint;                // pointMode=WorldPoint 时用
+    public float normalizedT = 0.5f;          // pointMode=Normalized 时用
+    public Vector3 initialVelocity;           // 断裂后注入的初速度（明天跑酷用）
+    public float tipBoost = 1.6f;             // 初速度沿 root→末端的增幅
+    public bool injectVelocity = false;       // 是否注入初速度
+
+    public SilkBreakSignal(SilkBreakCause c)
+    {
+        cause = c;
+        pointMode = SilkBreakPointMode.Preset;
+    }
+
+    public SilkBreakSignal At(Vector3 worldPos)
+    {
+        pointMode = SilkBreakPointMode.WorldPoint;
+        worldPoint = worldPos;
+        return this;
+    }
+
+    public SilkBreakSignal AtNormalized(float t)
+    {
+        pointMode = SilkBreakPointMode.Normalized;
+        normalizedT = Mathf.Clamp01(t);
+        return this;
+    }
+
+    public SilkBreakSignal WithVelocity(Vector3 v, float boost = 1.6f)
+    {
+        injectVelocity = true;
+        initialVelocity = v;
+        tipBoost = boost;
+        return this;
+    }
+}
+
+/// <summary>
+/// 全局断裂事件通道。任何 MonoBehaviour 都能订阅，SilkBuilder 自动执行。
+/// 用静态事件而非单例引用，避免装配顺序问题。
+/// </summary>
+public static class SilkBreakChannel
+{
+    /// <summary>请求断裂。参数为「哪根线」和「怎么断」。</summary>
+    public static event System.Action<SilkLine, SilkBreakSignal> OnBreakRequested;
+
+    public static void Request(SilkLine line, SilkBreakSignal signal)
+    {
+        if (line == null || signal == null) return;
+        OnBreakRequested?.Invoke(line, signal);
+    }
+
+    /// <summary>只广播不指定线（例如玩家松手，所有连着玩家的线都该断）</summary>
+    public static event System.Action<SilkBreakSignal> OnBroadcast;
+
+    public static void Broadcast(SilkBreakSignal signal)
+    {
+        if (signal == null) return;
+        OnBroadcast?.Invoke(signal);
+    }
+
+    public static void Clear()
+    {
+        OnBreakRequested = null;
+        OnBroadcast = null;
+    }
+}
+
 /* ===================== 体素网格 ===================== */
 public class VoxelGrid : MonoBehaviour
 {
@@ -449,6 +552,10 @@ public class SilkLine
     }
 
     public bool BreakAtPresetPoint(SilkBuilder builder)
+        => Break(builder, breakPoint, null);
+
+    /// <summary>信号驱动的断裂入口。signal 为 null 时按预设断点、零初速度。</summary>
+    public bool Break(SilkBuilder builder, Vector3 point, SilkBreakSignal signal)
     {
         if (hasBroken) return false;
 
@@ -457,17 +564,61 @@ public class SilkLine
         foreach (var seg in segments)
         {
             if (seg == null) continue;
-            float d = PointToSegment(breakPoint, seg.from.WorldPosition, seg.to.WorldPosition);
+            float d = PointToSegment(point, seg.from.WorldPosition, seg.to.WorldPosition);
             if (d < bestD) { bestD = d; target = seg; }
         }
         if (target == null) return false;
 
-        SplitSegment(target, breakPoint, builder);
+        Vector3 vel = Vector3.zero;
+        float boost = 1.6f;
+        bool inject = false;
+        if (signal != null)
+        {
+            vel = signal.initialVelocity;
+            boost = signal.tipBoost;
+            inject = signal.injectVelocity;
+        }
+
+        SplitSegment(target, point, builder, vel, boost, inject);
         hasBroken = true;
         return true;
     }
 
-    void SplitSegment(SilkSegment oldSeg, Vector3 bp, SilkBuilder builder)
+    /// <summary>按信号解析出断点世界坐标，然后断裂。</summary>
+    public bool BreakBySignal(SilkBuilder builder, SilkBreakSignal signal)
+    {
+        if (signal == null || hasBroken) return false;
+
+        Vector3 point;
+        switch (signal.pointMode)
+        {
+            case SilkBreakPointMode.WorldPoint:
+                point = signal.worldPoint;
+                break;
+            case SilkBreakPointMode.Normalized:
+                {
+                    // 从低处往高处算 normalizedT，与 ComputeBreakPoint 的约定一致
+                    Vector3 a = rootFrom.WorldPosition, b = rootTo.WorldPosition;
+                    Vector3 low = a.z <= b.z ? a : b;
+                    Vector3 high = a.z <= b.z ? b : a;
+                    point = Vector3.Lerp(low, high, signal.normalizedT);
+                    break;
+                }
+            default: // Preset
+                point = breakPoint;
+                break;
+        }
+
+        return Break(builder, point, signal);
+    }
+
+    /// <summary>
+    /// 把丝线从断点切开，保留「高处 → 断点」这半截交给 SilkChain。
+    /// 末尾的初速度参数为明天跑酷预留：现在默认为零（自然摆动），
+    /// 明天由 SilkBreakSignal.WithVelocity 注入。
+    /// </summary>
+    void SplitSegment(SilkSegment oldSeg, Vector3 bp, SilkBuilder builder,
+                       Vector3 initialVelocity, float tipBoost, bool injectVelocity)
     {
         var grid = builder.grid;
 
@@ -497,6 +648,12 @@ public class SilkLine
         chain.catenarySag = oldSeg.sagRatio;
         chain.slackScale = 1.15f;    // 略松于弧长，重力能把弧线拉直
         chain.Build(high, node, this, oldSeg.tension);
+
+        // 必须在 Build() 之后、首帧 Update 之前注入初速度。
+        // Build 里 velocities 全部初始化为 0，此时施加冲量才正确；
+        // 若改初始位置（污染 prevPositions）会首帧瞬移。
+        if (injectVelocity && chain != null)
+            chain.ApplyInitialVelocity(initialVelocity, tipBoost);
 
         Object.Destroy(oldSeg.gameObject);
     }
@@ -914,6 +1071,11 @@ public class SilkBuilder : MonoBehaviour
         mainCam = null;
         spatialHash = new SilkSpatialHash(8f);
 
+        // 订阅断裂信号通道：外部（玩家控制器、敌人、老化系统）发信号，
+        // 由本组件统一执行断裂。这样跑酷的多种触发源不必碰 SilkBuilder 内部逻辑。
+        SilkBreakChannel.OnBreakRequested += HandleBreakRequest;
+        SilkBreakChannel.OnBroadcast += HandleBreakBroadcast;
+
         previewGO = new GameObject("PreviewLine");
         previewGO.transform.SetParent(transform);
         previewLine = previewGO.AddComponent<LineRenderer>();
@@ -1020,11 +1182,50 @@ public class SilkBuilder : MonoBehaviour
         previewGO.SetActive(false);
     }
 
-    /* ============ 右键断丝：找最近丝线 → 用自身 breakMode 断 ============ */
+    void OnDestroy()
+    {
+        // 静态事件必须退订，否则 SilkBuilder 销毁后事件仍持有引用（内存泄漏 + 幽灵调用）
+        SilkBreakChannel.OnBreakRequested -= HandleBreakRequest;
+        SilkBreakChannel.OnBroadcast -= HandleBreakBroadcast;
+    }
+
+    /* ============ 断裂信号处理 ============ */
+
+    void HandleBreakRequest(SilkLine line, SilkBreakSignal signal)
+    {
+        if (line == null || signal == null) return;
+        if (line.BreakBySignal(this, signal))
+        {
+            RebuildSpatialHash();
+            Debug.Log("[Break] " + signal.cause + " 断裂成功（指定线）");
+        }
+    }
+
+    /// <summary>广播式断裂：不指定线，对所有未断的线发信号。
+    /// 用于「玩家松手」「爆炸」这类一次影响多条线的场景。</summary>
+    void HandleBreakBroadcast(SilkBreakSignal signal)
+    {
+        if (signal == null) return;
+        int count = 0;
+        var snapshot = new List<SilkLine>(silkLines);
+        foreach (var line in snapshot)
+        {
+            if (line == null || line.hasBroken) continue;
+            if (line.BreakBySignal(this, signal)) count++;
+        }
+        if (count > 0)
+        {
+            RebuildSpatialHash();
+            Debug.Log("[Break] " + signal.cause + " 广播断裂 " + count + " 根");
+        }
+    }
+
+    /* ============ 右键断丝：找最近丝线 → 发一个 ManualCut 信号 ============
+     * 保留了「右键切最近丝线」的交互，但改为发信号而非直接断裂，
+     * 这样走的是同一条代码路径，与跑酷的信号驱动保持一致。
+     */
     void TryCutNearest(Ray ray)
     {
-        Debug.Log("===== [Cut] 右键触发 =====");
-
         if (silkLines.Count == 0)
         {
             Debug.Log("[Cut] 没有丝线");
@@ -1055,20 +1256,8 @@ public class SilkBuilder : MonoBehaviour
             return;
         }
 
-        Debug.Log("[Cut] 选中丝线: " + bestLine.rootFrom.position + " → " + bestLine.rootTo.position
-                  + " | 断裂点=" + bestLine.breakPoint
-                  + " | from.z=" + bestLine.rootFrom.WorldPosition.z
-                  + " to.z=" + bestLine.rootTo.WorldPosition.z);
-
-        if (bestLine.BreakAtPresetPoint(this))
-        {
-            RebuildSpatialHash();
-            Debug.Log("[Cut] >>> 断裂成功！自由端自然掉落");
-        }
-        else
-        {
-            Debug.Log("[Cut] >>> 断裂失败");
-        }
+        // 发信号：右键 = ManualCut + 预设断点 + 零初速度
+        SilkBreakChannel.Request(bestLine, new SilkBreakSignal(SilkBreakCause.ManualCut));
     }
 
     public AnchorPoint CreateAnchorAt(Vector3 worldPoint)
@@ -1307,11 +1496,13 @@ public class SilkBuilder : MonoBehaviour
         List<SilkLine> candidates = new List<SilkLine>();
         foreach (var line in silkLines) if (!line.hasBroken) candidates.Add(line);
         int count = 0;
+        // 老化同样走信号路径，与右键/跑酷保持一致
+        var signal = new SilkBreakSignal(SilkBreakCause.Aging);
         foreach (var line in candidates)
         {
             if (Random.value < breakChance)
             {
-                if (line.BreakAtPresetPoint(this)) count++;
+                if (line.BreakBySignal(this, signal)) count++;
             }
         }
         RebuildSpatialHash();
