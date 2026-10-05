@@ -53,6 +53,21 @@ public enum SilkLifeState
     Fading,    // 淡出（终态）
 }
 
+/// <summary>
+/// 可挂到丝线末端的物体。玩家、敌人、箱子、道具都实现它即可。
+/// 明天扩展 SpiderShot（发射后粘住某物拉过来）时，
+/// 只需让目标体实现本接口，不用改 SilkLine / SilkChain 任何内部逻辑。
+/// </summary>
+public interface SilkAttachable
+{
+    /// <summary>丝线末端应挂在这个点上（通常是手、钩子、头顶等）。</summary>
+    Transform AttachPoint { get; }
+
+    /// <summary>挂载时的显示名，用于日志。</summary>
+    string name { get; }
+}
+
+
 public enum SilkColor { White, Yellow, Red }
 public enum AnchorType { Wall, Internal, SilkNode }
 public enum BreakMode { Middle, Quarter, ThreeQuarter, SpiderShot }
@@ -551,7 +566,8 @@ public class SilkLine
     public Vector3 breakPoint;
     public SilkChain chain;        // 非 Static 时接管运动的约束链
     public GameObject chainGO;     // 约束链的根 GameObject
-    public Transform attached;     // Anchored/Swinging 时末端挂载物（明天= 玩家）
+    public Transform attached;     // Anchored/Swinging 时末端的挂点位置
+    public SilkAttachable attachedBody;  // 挂载物本体（实现了接口的，可为 null）
 
     public SilkLine(AnchorPoint a, AnchorPoint b, SilkColor c, BreakMode mode = BreakMode.Middle)
     {
@@ -613,27 +629,64 @@ public class SilkLine
 
     /* ============ 状态机公共 API（明天跑酷直接调） ============ */
 
-    /// <summary>抓住丝线：末端挂上玩家，链条转为 Anchored。
-    /// 明天「玩家碰到丝线」时调用。返回是否成功。</summary>
-    public bool Grab(Transform player, SilkBuilder builder)
+    /// <summary>
+    /// 挂载任意物体到丝线末端 —— 玩家、敌人、箱子、道具都行。
+    /// 只需实现 SilkAttachable 接口（提供挂点 Transform）。
+    /// 这是 SpiderShot 一类能力的扩展点：粘住什么就拉什么。
+    /// </summary>
+    public bool Attach(SilkAttachable target, SilkBuilder builder)
     {
-        if (player == null) return false;
-        if (!TryTransition(SilkLifeState.Anchored, "抓住丝线")) return false;
+        if (target == null || target.AttachPoint == null) return false;
+        if (!TryTransition(SilkLifeState.Anchored, "挂载 " + target.name)) return false;
 
-        attached = player;
+        attachedBody = target;
+        attached = target.AttachPoint;
         EnsureChain(builder);
+        // 挂载后把末端节点对齐到挂点并交给它驱动，
+        // 避免第一帧从墙上「跳」到物体
+        if (chain != null)
+        {
+            chain.SnapEndTo(attached.position);
+            chain.DriveEndTo(attached);
+        }
         return true;
     }
+
+    /// <summary>简化版：直接挂一个 Transform（无需实现接口）。</summary>
+    public bool Attach(Transform point, SilkBuilder builder, string label = "物体")
+    {
+        if (point == null) return false;
+        if (!TryTransition(SilkLifeState.Anchored, "挂载 " + label)) return false;
+
+        attachedBody = null;
+        attached = point;
+        EnsureChain(builder);
+        if (chain != null)
+        {
+            chain.SnapEndTo(attached.position);
+            // 末端交给挂载物驱动：丝线不再决定末端位置，改为跟随物体
+            chain.DriveEndTo(attached);
+        }
+        return true;
+    }
+
+    /// <summary>抓住丝线：末端挂上玩家，链条转为 Anchored。</summary>
+    public bool Grab(Transform player, SilkBuilder builder)
+        => Attach(player, builder, "玩家");
 
     /// <summary>开始施力摆动。明天按 W/S/A/D 时调用。</summary>
     public bool StartSwing()
         => TryTransition(SilkLifeState.Swinging, "施力");
 
-    /// <summary>松手：末端脱钩，转入自然下坠。松手事件调用。</summary>
+    /// <summary>松手：末端脱钩，转入自然下坠。</summary>
     public bool Release()
     {
         if (!TryTransition(SilkLifeState.FreeFall, "松手")) return false;
-        attached = null;      // 脱钩，末端不再挂物体
+        // 末端交还物理：取消驱动后由重力 + 阻尼接管，
+        // 此时末端速度就是玩家松手那一刻的真实速度
+        if (chain != null) chain.DriveEndTo(null);
+        attached = null;
+        attachedBody = null;      // 脱钩，末端不再挂物体
         return true;
     }
 
@@ -1059,10 +1112,16 @@ public class SilkChain : MonoBehaviour
 
         // 1. 显式速度积分：重力 + 空气阻力，根节点不参与
         //    重力沿 -Z（项目约定：Z = 高度），不是 Unity 默认的 Vector3.down
+        //末节点在被外部驱动（挂载物）时不施加重力 —— 它由挂载物驱动
+        int last = nodes.Count - 1;
         float dragFactor = Mathf.Clamp01(1f - airDrag * dt * 60f);
-        for (int i = 1; i < nodes.Count; i++)
+        for (int i = 1; i <= last; i++)
         {
-            velocities[i] += new Vector3(0, 0, -gravity * dt);
+            bool isDrivenEnd = (i == last && endDriven);
+            if (!isDrivenEnd)
+                velocities[i] += new Vector3(0, 0, -gravity * dt);
+            else if (endDriven)
+                velocities[i] = drivenVelocity;      // 完全交给外部（玩家输入）
             velocities[i] *= damping;
             velocities[i] *= dragFactor;
             nodes[i].transform.position += velocities[i] * dt;
@@ -1071,7 +1130,7 @@ public class SilkChain : MonoBehaviour
         // 2. 多轮距离约束：从根到端依次修正，形成自然弧线
         for (int it = 0; it < solverIterations; it++)
         {
-            for (int i = 0; i < nodes.Count - 1; i++)
+            for (int i = 0; i < last; i++)
             {
                 Vector3 a = nodes[i].WorldPosition;
                 Vector3 b = nodes[i + 1].WorldPosition;
@@ -1108,6 +1167,51 @@ public class SilkChain : MonoBehaviour
             nodes[0].transform.position = root.WorldPosition;
             velocities[0] = Vector3.zero;
         }
+
+        // 3. 末端被驱动时，每帧末尾把它对齐到挂载点，
+        //    约束求解产生的位置修正会写回 drivenVelocity，
+        //    这样玩家的输入与绳索约束形成闭环（明天跑酷的核心）。
+        if (endDriven && endTarget != null)
+        {
+            Vector3 cur = nodes[last].WorldPosition;
+            Vector3 want = endTarget.position;
+            nodes[last].transform.position = want;
+            drivenVelocity = (want - cur) / dt;
+        }
+    }
+
+    /* ============ 末端驱动（跑酷挂载物扩展） ============ */
+
+    /// <summary>末端是否由外部驱动。true 时末端不受重力，由挂载物决定位置。</summary>
+    public bool endDriven = false;
+
+    /// <summary>驱动末端的挂载点（玩家手部等）。</summary>
+    public Transform endTarget = null;
+
+    /// <summary>由外部写入的末端速度（每帧 Solve 后回读）。</summary>
+    public Vector3 drivenVelocity = Vector3.zero;
+
+    /// <summary>让末端跟随某个挂载点。传 null 恢复自由摆动。</summary>
+    public void DriveEndTo(Transform target)
+    {
+        endTarget = target;
+        endDriven = target != null;
+    }
+
+    /// <summary>把末端节点瞬移到指定位置（挂载瞬间用，避免第一帧跳变）。</summary>
+    public void SnapEndTo(Vector3 worldPos)
+    {
+        if (nodes.Count < 2) return;
+        int last = nodes.Count - 1;
+        // 重算末端各段长度，保持 restLengths 与实际位置一致
+        for (int i = 0; i < last; i++)
+        {
+            if (i + 1 == last) restLengths[i] =
+                Vector3.Distance(nodes[i].WorldPosition, worldPos);
+        }
+        nodes[last].transform.position = worldPos;
+        velocities[last] = Vector3.zero;
+        drivenVelocity = Vector3.zero;
     }
 
     void OnDestroy()
