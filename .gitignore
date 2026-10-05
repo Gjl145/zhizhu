@@ -43,5 +43,5 @@ Thumbs.db
 .DS_Store
 desktop.ini
 
-# 保留目录结构用（空目录不提交，Unity 的 .meta 已覆盖 Assets）
-!/[Aa]ssets/**/*.meta
+# WorkBuddy 工作区数据（项目记忆目录，本地保留不入库）
+.workbuddy/memory/
