@@ -672,7 +672,10 @@ public class SilkChain : MonoBehaviour
         nodes.Add(highAnchor);
         for (int i = 1; i < n; i++)
         {
-            Vector3 p = layout[i];
+            // 防御：layout.points 理论上必有 n+1 个元素，但结构体默认值可能为 null
+            Vector3 p = (layout.points != null && i < layout.points.Count)
+                        ? layout.points[i]
+                        : Vector3.Lerp(a, b, i / (float)n);
             var go = new GameObject("ChainNode_" + i);
             go.transform.SetParent(transform);
             var node = go.AddComponent<AnchorPoint>();
