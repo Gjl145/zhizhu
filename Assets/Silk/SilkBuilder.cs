@@ -223,6 +223,38 @@ public class SilkForceSignal : ISilkEvent
 }
 
 /// <summary>
+/// 发射丝线：从施力点向命中点生成一条新的静态丝线。
+/// 这是 SpiderShot 的基础 —— 后续「结网」功能也走这条路径。
+/// </summary>
+public class SilkFireSignal : ISilkEvent
+{
+    public Vector3 from;         // 发射点（玩家手部）
+    public Vector3 to;           // 命中点（墙面）
+    public bool autoAttach;      // 生成后是否立刻挂上去
+
+    public SilkFireSignal(Vector3 f, Vector3 t, bool attach = true)
+    {
+        from = f; to = t; autoAttach = attach;
+    }
+
+    public void Handle(SilkBuilder handler)
+    {
+        if (handler == null) return;
+        handler.ExecuteFire(this);
+    }
+}
+
+/// <summary>操作模式。自由视角与第三人称跑酷的输入完全不同，必须分开。</summary>
+public enum SilkControlMode
+{
+    /// <summary>自由飞行相机：WASD/QE 移动，右键环绕。用于构建蛛网。</summary>
+    FreeFly,
+
+    /// <summary>第三人称：主角是一个球，自己发射/回收丝线，跑酷摆荡。</summary>
+    Parkour,
+}
+
+/// <summary>
 /// 全局事件总线 —— 统一控制不同事件。
 ///
 /// 为什么不用 C# 的 event 直接订阅：
@@ -1486,6 +1518,10 @@ public class SilkBuilder : MonoBehaviour
 
     SilkSpatialHash spatialHash;
 
+    /// <summary>第三人称跑酷模式。为 true 时本组件不响应鼠标左键与 R，
+    /// 避免与玩家的「发射丝线」「重置」冲突。由控制器在切模式时设置。</summary>
+    public bool parkourMode = false;
+
     AnchorPoint firstAnchor;
     bool isFirstSelected;
     LineRenderer previewLine;
@@ -1515,6 +1551,7 @@ public class SilkBuilder : MonoBehaviour
         SilkEventBus.Register<SilkGrabSignal>(this);
         SilkEventBus.Register<SilkReleaseSignal>(this);
         SilkEventBus.Register<SilkForceSignal>(this);
+        SilkEventBus.Register<SilkFireSignal>(this);
 
         previewGO = new GameObject("PreviewLine");
         previewGO.transform.SetParent(transform);
@@ -1548,7 +1585,9 @@ public class SilkBuilder : MonoBehaviour
             }
         }
 
-        if (Input.GetMouseButtonDown(0)) TryPickOrCreateAnchor();
+        // Parkour 模式下左键归玩家（发射丝线），
+        // 否则会同时触发「连丝」和「发射」两件事
+        if (Input.GetMouseButtonDown(0) && !parkourMode) TryPickOrCreateAnchor();
 
         if (isFirstSelected && firstAnchor != null)
         {
@@ -1572,7 +1611,7 @@ public class SilkBuilder : MonoBehaviour
             }
         }
 
-        if (Input.GetKeyDown(KeyCode.R)) ResetSelection();
+        if (Input.GetKeyDown(KeyCode.R) && !parkourMode) ResetSelection();
         if (Input.GetKeyDown(KeyCode.C)) ClearAll();
         if (Input.GetKeyDown(KeyCode.G)) GenerateWeb();
         if (Input.GetKeyDown(KeyCode.X)) AgeWeb(0.15f);
@@ -1630,6 +1669,7 @@ public class SilkBuilder : MonoBehaviour
         SilkEventBus.Unregister<SilkGrabSignal>(this);
         SilkEventBus.Unregister<SilkReleaseSignal>(this);
         SilkEventBus.Unregister<SilkForceSignal>(this);
+        SilkEventBus.Unregister<SilkFireSignal>(this);
     }
 
     /* ============ 事件执行器（由 SilkEventBus 统一调用） ============ */
@@ -1667,6 +1707,44 @@ public class SilkBuilder : MonoBehaviour
             Debug.Log("[Event] 断裂 " + signal.cause + " × " + count +
                       (signal.target != null ? "（指定线）" : "（广播）"));
         }
+    }
+
+    /// <summary>
+    /// 执行发射：在 from 与 to 之间生成一条新的静态丝线。
+    /// 这是 SpiderShot 与后续「结网」功能的共同基础。
+    /// </summary>
+    public void ExecuteFire(SilkFireSignal signal)
+    {
+        if (signal == null) return;
+
+        // 距离太短不生成（避免退化线段导致除零）
+        float len = Vector3.Distance(signal.from, signal.to);
+        if (len < 1f) return;
+
+        // 命中点若已有锚点就复用，否则新建一个（CreateAnchorAt 内含 5 格去重）
+        var anchor = CreateAnchorAt(signal.to);
+
+        // 发射点一侧：优先用已选中的锚点（玩家抓着的线），
+        // 没有就以 from 为点新建一个。
+        var fromAnchor = firstAnchor;
+        if (fromAnchor == null)
+            fromAnchor = CreateAnchorAt(signal.from);
+
+        if (fromAnchor == null || anchor == null) return;
+        if (fromAnchor == anchor) return;
+
+        var line = CreateSilkLine(fromAnchor, anchor, defaultColor, BreakMode.Middle);
+        if (line == null) return;   // 去重命中（同一对点已有线）
+
+        if (signal.autoAttach)
+        {
+            // 新线还挂在 fromAnchor 上，把它转成可摆动的约束链并挂到发射点
+            var tip = CreateAnchorAt(signal.from);
+            if (tip != null) line.Attach(tip, this, "发射点");
+        }
+
+        Debug.Log("[Event] 发射丝线 " + fromAnchor.position + " → " + anchor.position +
+                  " 长度 " + len.ToString("F1"));
     }
 
     /// <summary>执行抓住：把末端挂到指定点上。</summary>
@@ -2224,6 +2302,12 @@ public class SimpleOrbitCamera : MonoBehaviour
     [Tooltip("按 F 切换拖拽方向")]
     public KeyCode flipKey = KeyCode.F;
 
+    /// <summary>
+    /// 相机是否响应输入。Parkour 模式下必须关掉 ——
+    /// 否则 WASD/QE/Space 会同时被相机和玩家读取，两边一起动。
+    /// </summary>
+    public static bool inputEnabled = true;
+
     float yaw, pitch;   // yaw 绕 Z，pitch 仰角
 
     void Start()
@@ -2236,6 +2320,14 @@ public class SimpleOrbitCamera : MonoBehaviour
 
     void Update()
     {
+        // Parkour 模式下完全交出输入 —— 否则 WASD/QE 会和玩家控制器同时响应
+        if (!inputEnabled)
+        {
+            // 仍允许右键环绕（方便观察），但不响应键盘
+            HandleLookOnly();
+            return;
+        }
+
         if (Input.GetKeyDown(flipKey))
         {
             dragFollowsMouse = !dragFollowsMouse;
@@ -2275,6 +2367,18 @@ public class SimpleOrbitCamera : MonoBehaviour
         float scroll = Input.GetAxis("Mouse ScrollWheel");
         if (Mathf.Abs(scroll) > 0)
             transform.position += transform.forward * scroll * scrollZoomSpeed;
+    }
+
+    /// <summary>只响应右键环绕，不响应键盘移动。Parkour 模式下相机跟随玩家。</summary>
+    void HandleLookOnly()
+    {
+        if (!Input.GetMouseButton(1)) return;
+        float signX = dragFollowsMouse ? 1f : -1f;
+        float signY = dragFollowsMouse ? 1f : -1f;
+        yaw += signX * Input.GetAxis("Mouse X") * rotateSpeed;
+        pitch += signY * Input.GetAxis("Mouse Y") * rotateSpeed;
+        pitch = Mathf.Clamp(pitch, -85f, 85f);
+        ApplyRotation();
     }
 
     /// 由 yaw(绕Z) + pitch(仰角) 直接构造朝向，+Z 为上。
@@ -2334,6 +2438,16 @@ public class SilkParkourController : MonoBehaviour
     [Header("抓取")]
     public float grabRange = 30f;
 
+    [Header("发射丝线")]
+    [Tooltip("射线检测距离，决定最远能粘到哪")]
+    public float fireRange = 200f;
+
+    [Tooltip("射线检测层。~0 = 所有层（内墙在 Default 上，能命中）")]
+    public LayerMask fireMask = ~0;
+
+    [Tooltip("发射距离过近则忽略，避免退化线段")]
+    public float minFireLength = 5f;
+
     [Header("初始位置")]
     public Vector3 startPosition = new Vector3(0f, 0f, 30f);
 
@@ -2352,10 +2466,15 @@ public class SilkParkourController : MonoBehaviour
     bool isFlying;
     Vector3 bodyVelocity;             // 挂载期间的自身速度（由位置差反推）
     Transform visual;                 // 可见球体（自动创建）
+    SimpleOrbitCamera cam;            // 第三人称时由它跟随
+
+    /// <summary>自己发射出去的丝线。只能断这些，不能断系统生成的网。</summary>
+    public List<SilkLine> firedLines = new();
 
     void Start()
     {
         builder = FindObjectOfType<SilkBuilder>();
+        cam = FindObjectOfType<SimpleOrbitCamera>();
         transform.position = startPosition;
         CreateVisual();
     }
@@ -2399,12 +2518,64 @@ public class SilkParkourController : MonoBehaviour
         float dt = Time.deltaTime;
         if (dt <= 0f) return;
 
-        if (isFlying) UpdateFlight(dt);
-        else UpdateSwing(dt);
+        // 模式切换必须在处理输入之前 —— 它决定本帧谁读键盘
+        HandleModeSwitch();
 
-        HandleKeys();
-        UpdateVisualColor();
+        // 只在 Parkour 模式下才跑玩家逻辑，
+        // FreeFly 时相机自己响应 WASD，玩家必须完全静止
+        if (mode == SilkControlMode.Parkour)
+        {
+            if (isFlying) UpdateFlight(dt);
+            else UpdateSwing(dt);
+            HandleKeys();
+            UpdateVisualColor();
+            FollowCamera();
+        }
     }
+
+    SilkControlMode mode = SilkControlMode.FreeFly;
+
+    /// <summary>切模式：Tab 键在自由视角 / 第三人称跑酷之间切换。</summary>
+    void HandleModeSwitch()
+    {
+        if (!Input.GetKeyDown(KeyCode.Tab)) return;
+
+        mode = mode == SilkControlMode.FreeFly
+            ? SilkControlMode.Parkour
+            : SilkControlMode.FreeFly;
+
+        // Parkour 时关掉相机输入，否则两边同时响应 WASD/QE
+        SimpleOrbitCamera.inputEnabled = (mode == SilkControlMode.FreeFly);
+
+        // 同步告知 SilkBuilder：跑酷模式下左键/R 归玩家，它别抢
+        if (builder != null) builder.parkourMode = (mode == SilkControlMode.Parkour);
+
+        if (mode == SilkControlMode.Parkour)
+        {
+            // 从相机当前位置接手，玩家不会瞬移
+            transform.position = cam != null ? cam.transform.position : startPosition;
+            flightVel = Vector3.zero;
+            isFlying = true;
+        }
+        Debug.Log("[Mode] 切换为 " + mode);
+    }
+
+    /// <summary>第三人称：相机跟在玩家身后，保持固定距离与朝向。</summary>
+    void FollowCamera()
+    {
+        if (cam == null) return;
+        float dist = camDistance;
+        float height = camHeight;
+        // 相机保持在玩家的「上方 + 后方」，
+        // 高度方向是 +Z（项目约定 Z 为高度轴）
+        cam.transform.position = transform.position
+                               + new Vector3(0f, -dist * 0.5f, height);
+        cam.transform.up = Vector3.forward;
+    }
+
+    [Header("第三人称相机")]
+    public float camDistance = 40f;
+    public float camHeight = 12f;
 
     /* ---------- 脱手飞行：纯重力 + 阻尼 ---------- */
     void UpdateFlight(float dt)
@@ -2458,6 +2629,12 @@ public class SilkParkourController : MonoBehaviour
             else DoRelease();
         }
 
+        // 左键：发射丝线（自己发射的才能自己断开）
+        if (Input.GetMouseButtonDown(0)) TryFire();
+
+        // X：断开自己发射的第一根丝线
+        if (Input.GetKeyDown(KeyCode.X)) CutFirstFiredLine();
+
         if (Input.GetKeyDown(KeyCode.R))
         {
             DoRelease();
@@ -2465,6 +2642,68 @@ public class SilkParkourController : MonoBehaviour
             flightVel = Vector3.zero;
             isFlying = true;
         }
+    }
+
+    /// <summary>
+    /// 发射丝线：从球心沿当前朝向做射线检测，命中点生成一条静态丝线。
+    /// 这是 SpiderShot 的基础，后续「结网」也走这条路径。
+    /// </summary>
+    void TryFire()
+    {
+        if (builder == null) return;
+        if (cam == null) cam = FindObjectOfType<SimpleOrbitCamera>();
+        if (cam == null) return;
+
+        Vector3 origin = transform.position;
+        Vector3 dir = cam.transform.forward;
+        if (Physics.Raycast(origin, dir, out RaycastHit hit, fireRange, fireMask))
+        {
+            if (Vector3.Distance(origin, hit.point) < minFireLength) return;
+
+            // 走事件总线：外部只需知道「发一条线」，不碰 SilkBuilder 内部
+            SilkEventBus.Post(new SilkFireSignal(origin, hit.point, autoAttach: true));
+
+            // 记录已发射的线，供后续「自己断开」用
+            if (builder.Lines.Count > 0)
+            {
+                var last = builder.Lines[builder.Lines.Count - 1];
+                if (!firedLines.Contains(last)) firedLines.Add(last);
+            }
+        }
+        else
+        {
+            Debug.Log("[Parkour] 发射未命中任何表面");
+        }
+    }
+
+    /// <summary>断开自己发射的第一根丝线。系统生成的网不能断。</summary>
+    void CutFirstFiredLine()
+    {
+        while (firedLines.Count > 0)
+        {
+            var line = firedLines[0];
+            // 空引用或状态不允许断裂的（已摆动/已脱手）直接丢弃
+            if (line == null || !line.CanBeCut)
+            {
+                firedLines.RemoveAt(0);
+                continue;
+            }
+            // 若正抓着这根，先松手
+            if (line == grabbed) DoRelease();
+            RequestCut(line);
+            firedLines.RemoveAt(0);
+            break;
+        }
+    }
+
+    void RequestCut(SilkLine line)
+    {
+        if (line == null) return;
+        // 断在靠近玩家的一端，让玩家这一侧脱手
+        var signal = new SilkBreakSignal(SilkBreakCause.PlayerRelease)
+            .AtNormalized(0.35f)      // 从低处往高处算 0.35
+            .On(line);
+        SilkEventBus.Post(signal);
     }
 
     /// <summary>抓最近的 Static 状态丝线。</summary>
