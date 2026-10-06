@@ -2386,9 +2386,9 @@ public class SilkWorldBootstrap
         CreateInnerWalls(world.transform, grid.GetHalfSize());
         GenerateAnchors(grid, 8);
 
-        /* 跑酷测试关卡（临时）。
-         * 删除：删掉这一行 + SilkTestLevel.cs 整个文件即可。*/
-        if (SilkBuilder.createTestLevel) SilkTestLevel.Create(grid.GetHalfSize());
+        /* 跑酷测试关卡（临时）—— 属于**游戏世界**，FreeFly 下不该出现。
+         * 所以改为在 HandleModeSwitch 里按模式建/清，不在 Build 里无条件创建。
+         * 删除：删掉这两处调用 + SilkTestLevel.cs 整个文件即可。*/
 
         var builderGO = new GameObject("SilkBuilder");
         var builder = builderGO.AddComponent<SilkBuilder>();
@@ -2826,22 +2826,18 @@ public class SilkParkourController : MonoBehaviour
         cam = FindObjectOfType<SimpleOrbitCamera>();
         // ScreenPointToRay 定义在 Camera 上，必须单独取
         camComp = cam != null ? cam.GetComponent<Camera>() : Camera.main;
-        transform.position = startPosition;
-        CreateVisual();
-        UpdateVisualColor();   // 立即上色+摆朝向，否则第一帧是默认朝向
-        FollowCamera();        // 立即摆一次相机，切 Tab 当帧就能看到球
 
-        /* 诊断日志：一眼确认球、相机、位置是否都正常。
-         * 之前「看不到球」反复查不出，就是因为缺这条日志。*/
-        Debug.Log("[Parkour] 初始化完成" +
-                  "\n  球位置 = " + transform.position +
-                  "\n  球半径 = " + visualRadius +
-                  "\n  visual = " + (visual != null ? visual.name : "!! 未创建") +
-                  "\n  bodyRenderer = " + (bodyRenderer != null ? "有" : "!! 无") +
-                  "\n  相机 = " + (cam != null ? cam.transform.position.ToString() : "!! 为空") +
-                  "\n  相机距离 = " + (cam != null
-                      ? Vector3.Distance(cam.transform.position, transform.position).ToString("F1")
-                      : "-"));
+        /* 初始是 FreeFly（编辑器世界）—— **不建球**。
+         * 球只属于游戏世界，在编辑器世界里出现会污染画面。
+         * 这是之前的设计缺陷：CreateVisual 在 Start 里无条件调用，
+         * 导致 FreeFly 下也能看到球。*/
+        if (mode == SilkControlMode.Parkour)
+        {
+            transform.position = startPosition;
+            CreateVisual();
+            UpdateVisualColor();
+            FollowCamera();
+        }
     }
 
     /// <summary>自动创建一个可见球体代表「玩家」。
@@ -3010,30 +3006,50 @@ public class SilkParkourController : MonoBehaviour
 
         if (mode == SilkControlMode.Parkour)
         {
-            // 不要把球传到相机位置 —— 相机在 (120,-120,85)，
-            // 那是立方体外很远的角落，球会直接跑出画面导致「看不到球」。
-            // 球保持在 startPosition（立方体中心偏上），相机改为跟随它。
+            /* 进游戏世界：建球（之前是 Start 里无条件建，
+             * 导致 FreeFly 下也能看到球 —— 两个世界被混在一起了）。*/
             transform.position = startPosition;
             flightVel = Vector3.zero;
             isFlying = true;
-            // 关键：立刻把相机摆到球旁边。
-            // 否则切模式这一帧相机还在 (120,-120,85)，
-            // 离球 190 格，球小到看不见 —— 这才是「看不到球」的真因。
-            FollowCamera();
+            CreateVisual();       // 幂等：已存在则直接返回
+            UpdateVisualColor();
+            FollowCamera();       // 立刻摆相机，当帧就能看到球
+            // 测试关卡属于游戏世界，FreeFly 下不该存在
+            if (builder != null && builder.createTestLevel) SilkTestLevel.Create(TestLevelHalfSize());
         }
         else
         {
-            /* 切回 FreeFly：把相机拉回立方体中心附近。
-             * Parkour 期间 FollowCamera 每帧改写相机位置，
-             * 不还原的话相机会停在球附近（球可能在房间另一头），
-             * 看起来就像「没切回来」。*/
+            /* 回编辑器世界：销毁球与测试关卡，保持画面干净。
+             * FreeFly 属于关卡编辑，不该有玩家角色和跑酷台子。*/
+            DestroyVisual();
+            SilkTestLevel.Clear();
             if (cam != null)
             {
                 cam.transform.position = freeFlyCameraPos;
                 cam.ResetOrientation();
             }
         }
-        Debug.Log("[Mode] 切换为 " + mode);
+        Debug.Log("[Mode] 切换为 " + mode + " | 球 " +
+                  (visual != null ? "存在" : "已销毁"));
+    }
+
+    /// <summary>测试关卡用的立方体半高。从 SilkBuilder 拿，保持与网格一致。</summary>
+    float TestLevelHalfSize()
+    {
+        var g = builder != null ? builder.grid : null;
+        return g != null ? g.GetHalfSize() : 50f;
+    }
+
+    /// <summary>销毁主角球。回FreeFly 时调用，让编辑器世界保持干净。</summary>
+    void DestroyVisual()
+    {
+        if (visual != null)
+        {
+            Object.Destroy(visual.gameObject);
+            visual = null;
+        }
+        bodyRenderer = null;
+        noseRenderer = null;
     }
 
     /// <summary>
