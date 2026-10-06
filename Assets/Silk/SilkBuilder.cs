@@ -3309,6 +3309,7 @@ public class SilkParkourController : MonoBehaviour
     {
         if (mode == SilkControlMode.Parkour) FollowCamera();
         ScanRenderers();
+        ScanDuplicates();
     }
 
     float lastScan = -99f;
@@ -3371,7 +3372,68 @@ public class SilkParkourController : MonoBehaviour
                   " / 残影 " + ghost + "，可见点对 " + groups.Count);
     }
 
-[Tooltip("扫描场景里被重复渲染的丝线（排查重影）")]
+/* 3. 精确定位「同一对锚点被建了两次」的来源。
+     *
+     * 2026-10-06 实测日志：同端点被渲染 2 层，可见 2 / 残影 0。
+     * 去重是按体素坐标做的，同一对锚点本不该同时存在 ->
+     * 必然是「去重被绕过」或「有段不走CreateSilkLine」。
+     *
+     * 判据：GameObject 名字直接记录了创建来源
+     *   "Seg_A_B"      = SilkBuilder.CreateSilkLine（走走去重，应被挡住）
+     *   "SegChain_A"   = SilkLine.SplitSegment断裂时新建（**绕过 lineKeys**）
+     *   "Seg"          = SilkLine.CreateSegment（备用，暂未接线）
+     * 名字前缀一看就知道是谁干的，无需猜测。
+     *
+     * 同时打印世界坐标：体素相同但世界坐标不同 = 两个不同的 AnchorPoint
+     * 顶到了同一格，这才是「看起来分开」的真正原因。*/
+    void ScanDuplicates()
+    {
+        var groups = new Dictionary<string, List<SilkSegment>>();
+        foreach (var seg in FindObjectsOfType<SilkSegment>())
+        {
+            if (seg == null) continue;
+            if (seg.from == null || seg.to == null) continue;
+            var pa = seg.from.position; var pb = seg.to.position;
+            string key = (pa.x < pb.x || (pa.x == pb.x && pa.y < pb.y))
+                ? pa + "|" + pb : pb + "|" + pa;
+            if (!groups.ContainsKey(key)) groups[key] = new List<SilkSegment>();
+            groups[key].Add(seg);
+        }
+
+        foreach (var kv in groups)
+        {
+            if (kv.Value.Count < 2) continue;
+
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("[Dup]锚点对 " + kv.Key + " 被建了 " + kv.Value.Count + " 次：");
+            for (int i = 0; i < kv.Value.Count; i++)
+            {
+                var seg = kv.Value[i];
+                string src = seg.gameObject.name.StartsWith("SegChain_") ? "断裂生成"
+                           : seg.gameObject.name.StartsWith("Seg_") ? "正常建线"
+                           : "其它";
+                sb.AppendLine("   #" + i + " 来源=" + src +
+                              " 名字=" + seg.gameObject.name +
+                              " 状态=" + seg.state +
+                              " chainDriven=" + seg.chainDriven +
+                              "\n       from 世界坐标=" + seg.from.WorldPosition +
+                              " to 世界坐标=" + seg.to.WorldPosition +
+                              "\n       父线=" + (seg.parentLine != null
+                                       ? seg.parentLine.life.ToString() : "无") +
+                              " 实例ID=" + (seg.parentLine != null
+                                       ? seg.parentLine.GetInstanceID() : 0));
+            }
+            // 两段的 from/to 是否是同一个 AnchorPoint 对象？
+            var a0 = kv.Value[0];
+            var a1 = kv.Value[1];
+            sb.Append("   端点是否同一对象: from " +
+                      (a0.from == a1.from ? "同一" : "不同(体素撞车)") +
+                      " / to " + (a0.to == a1.to ? "同一" : "不同(体素撞车)"));
+            Debug.Log(sb.ToString());
+        }
+    }
+
+    [Tooltip("扫描场景里被重复渲染的丝线（排查重影）")]
     public bool renderScan = true;
 
     SilkControlMode mode = SilkControlMode.FreeFly;
