@@ -3258,6 +3258,22 @@ public class SilkParkourController : MonoBehaviour
         Paint(body, freeColor);
         bodyRenderer = body.GetComponent<MeshRenderer>();
 
+        /* 【地面检测用的触发器碰撞体】
+         *
+         * 上面把 Collider 销毁了（原意：位置由脚本控制，物理会打架），
+         * 但这样一来「向下探测地面的射线」打不到任何东西 ->
+         * 球会直接穿过平台掉下去（用户报告「控制不了小球」）。
+         *
+         * 解法：单独挂一个 isTrigger 的 SphereCollider。
+         *   · isTrigger = 不产生碰撞响应，不与物理体相互作用，不会打架
+         *   · 能被 Physics.Raycast 命中 -> 地面吸附可用
+         *   · 仍会挡住「点选自己」的射线（配合 layer 使用）
+         * 半径略小于视觉球，贴合感更好。
+         */
+        var groundProbe = body.AddComponent<SphereCollider>();
+        groundProbe.isTrigger = true;
+        groundProbe.radius = 0.9f / Mathf.Max(body.transform.lossyScale.x, 0.0001f);
+
         // 朝向指示：一个压扁的球体，放在「前方」提示朝向
         // 高度轴是 +Z（项目约定），所以前方用相机水平朝向
         var nose = GameObject.CreatePrimitive(PrimitiveType.Sphere);
@@ -3352,16 +3368,35 @@ public class SilkParkourController : MonoBehaviour
         // FreeFly 时相机自己响应 WASD，玩家必须完全静止
         if (mode == SilkControlMode.Parkour)
         {
-            if (grabbed != null && !isFlying) UpdateSwing(dt);  // 抓丝线：泵力摆荡
             HandleKeys();
-            UpdateVisualColor();
 
-            if (isFlying)
+            /* 【调度重构】移动不再依赖 isFlying。
+             *
+             * 原逻辑：`if (isFlying) { ...; UpdateFreeMove(); }`
+             * 而发射丝线会把 isFlying 置false —— 于是**只要发射过一次，
+             * 就再也走不动了**。这是玩家「控制不了小球」的直接原因。
+             *
+             * 现在按「有没有抓着丝线」分流，三种状态互不抢控制权：
+             *   抓着丝线      -> 摆荡物理（UpdateSwing）
+             *   空中且有惯性  -> 惯性飞行（UpdateFlight）
+             *   其它          -> 地面移动（UpdateFreeMove，永远可控）
+             */
+            if (grabbed != null && !isFlying)
             {
-                // 松手后短暂保留惯性飞行（含撞墙反弹），玩家一按方向键就接管
-                if (flightVel.sqrMagnitude > 1f) UpdateFlight(dt);
-                if (!AnyDirectionKey()) UpdateFreeMove(dt);
+                UpdateSwing(dt);          // 摆荡：末端被丝线驱动
             }
+            else if (isFlying)
+            {
+                if (flightVel.sqrMagnitude > 1f) UpdateFlight(dt);   // 惯性
+                if (!AnyDirectionKey()) UpdateFreeMove(dt);            // 松手时落地接管
+                else { flatVel = Vector3.zero; UpdateFreeMove(dt); }  // 有输入则立刻转为可控
+            }
+            else
+            {
+                UpdateFreeMove(dt);        // 地面常态：始终可控
+            }
+
+            UpdateVisualColor();
         }
 
         /* 相机跟随已移到 LateUpdate —— Unity 的 Update 顺序不保证，
@@ -3596,6 +3631,7 @@ public class SilkParkourController : MonoBehaviour
              * 导致 FreeFly 下也能看到球 —— 两个世界被混在一起了）。*/
             transform.position = startPosition;
             flightVel = Vector3.zero;
+            flatVel = Vector3.zero;   // 地面速度也要清，否则带着上一世界的惯性
             isFlying = true;
             CreateVisual();       // 幂等：已存在则直接返回
             UpdateVisualColor();
@@ -3797,20 +3833,135 @@ public class SilkParkourController : MonoBehaviour
     [Tooltip("撞墙后的速度保留比例。0=完全弹停，1=原速反弹，<1 有能量损失")]
     [Range(0f, 1f)] public float wallBounce = 0.4f;
 
-    /* ---------- 自由移动：WASD 控球，相机负责看 ---------- */
+    /* ---------- 地面移动：WASD 控球 ---------- */
+    /* 【为什么重写】原实现有三个问题，导致玩家「控制不了球」：
+     *
+     * 1. UpdateFreeMove 只在 `if (isFlying)` 里被调用。
+     *    而发射丝线时（FireAtAnchor / TryFireAndHook）会设 isFlying=false
+     *    —— 于是**只要发射过一次，就再也走不动了**，只能按 R 重置。
+     *    这是「控制不了小球」的直接原因。
+     *
+     * 2. 没有地面检测：`transform.position += ...` 直接改坐标，
+     *    球会笔直穿过平台掉下去。
+     *
+     * 3. 没有速度插值：按下即瞬移到满速，松开即停，没有加减速。
+     *
+     * 现在：移动与 isFlying **完全解耦** —— 只要没抓着丝线就始终可控。
+     * 抓着丝线时由UpdateSwing 接管（摆荡），松手后自动交还给移动。
+     */
     void UpdateFreeMove(float dt)
     {
-        // 未抓着丝线时，WASD 直接移动球本身（第三人称常见操作）
-        Vector3 move = Vector3.zero;
-        if (Input.GetKey(KeyCode.W)) move += camLookFlat;
-        if (Input.GetKey(KeyCode.S)) move -= camLookFlat;
-        if (Input.GetKey(KeyCode.A)) move -= camLookFlatPerp;
-        if (Input.GetKey(KeyCode.D)) move += camLookFlatPerp;
-        if (Input.GetKey(KeyCode.E)) move += Vector3.forward;   // 升高
-        if (Input.GetKey(KeyCode.Q)) move -= Vector3.forward;   // 降低
+        // 目标方向：相机水平朝向为「前」，左右取其垂直方向
+        Vector3 wish = Vector3.zero;
+        if (Input.GetKey(KeyCode.W)) wish += MoveForward;
+        if (Input.GetKey(KeyCode.S)) wish -= MoveForward;
+        if (Input.GetKey(KeyCode.A)) wish -= MoveRight;
+        if (Input.GetKey(KeyCode.D)) wish += MoveRight;
+        if (Input.GetKey(KeyCode.E)) wish += Vector3.forward;   // 升高
+        if (Input.GetKey(KeyCode.Q)) wish -= Vector3.forward;   // 降低
 
-        if (move.sqrMagnitude < 0.0001f) return;
-        transform.position += move.normalized * moveSpeed * dt;
+        bool hasInput = wish.sqrMagnitude > 0.0001f;
+
+        /* 速度用插值逼近目标，而不是直接赋值。
+         * 直接赋值 = 按下瞬间满速、松开瞬间停死，非常生硬。
+         * 用加速度 + 减速度分开控制，松手有惯性余韵，手感更自然。*/
+        Vector3 targetVel = hasInput
+            ? wish.normalized * moveSpeed * (Input.GetKey(KeyCode.LeftShift) ? sprintMultiplier : 1f)
+            : Vector3.zero;
+
+        float rate = hasInput ? groundAccel : groundDecel;
+        // MoveTowards 保证不会超过目标速度，且帧率无关
+        flatVel = Vector3.MoveTowards(flatVel, targetVel, rate * dt);
+
+        if (flatVel.sqrMagnitude > 0.0001f)
+        {
+            Vector3 next = transform.position + flatVel * dt;
+
+            /* 地面吸附：向下探一小段，若脚下有面就把球贴上去。
+             * 没有这一步的话，纯坐标改写会让球直接穿过平台。*/
+            next = StickToGround(next);
+
+            transform.position = next;
+        }
+
+        bodyVelocity = flatVel;
+        UpdateVisualFacing();
+    }
+
+    /// <summary>把球吸附到脚下的地面上，防止穿过平台。
+    /// 做法：从目标位置向下投一段射线，命中则把球放在命中点上方一个半径处。
+    /// 若脚下无地面（悬空），保持原位置 —— 交给重力逻辑处理。</summary>
+    Vector3 StickToGround(Vector3 desired)
+    {
+        if (camComp == null) return desired;
+
+        float radius = visualRadius;
+        Vector3 origin = desired + Vector3.forward * radius;
+        // 向下探一个「半径 + 容差」的距离：容差让走上平台时被吸上去，
+        // 而走下平台时不会立刻掉落（一格容差 ≈ 0.6 格）。
+        float probe = groundSnapDistance + radius;
+
+        if (Physics.Raycast(origin, -Vector3.forward, out RaycastHit hit,
+                            probe, groundMask,
+                            QueryTriggerInteraction.Ignore))
+        {
+            Vector3 p = hit.point + Vector3.forward * radius;
+            // 只在「当前位置不在地面下方」时吸附，避免每帧抖动
+            if (desired.z < p.z || Mathf.Abs(desired.z - p.z) < 0.01f) return p;
+            return desired;
+        }
+        return desired;
+    }
+
+    [Tooltip("地面吸附的容差（格）。走上平台会吸上去，走下有短暂悬空感")]
+    public float groundSnapDistance = 0.6f;
+
+    [Tooltip("地面层（用于向下吸附，防止球穿过平台）。默认全部，"
+           + "测试关卡的方块未设自定义层，用 Everything 最稳")]
+    public LayerMask groundMask = ~0;
+
+    [Tooltip("地面加速度（格/秒²）。越大越「立刻响应」")]
+    public float groundAccel = 260f;
+
+    [Tooltip("地面减速度（格/秒²）。松手后减速，越大停得越快")]
+    public float groundDecel = 190f;
+
+    [Tooltip("按住左Shift 的速度倍率")]
+    public float sprintMultiplier = 1.8f;
+
+    /// <summary>水平移动速度（XZ 平面），已做插值。
+    /// 独立于 flightVel（那是空中惯性），两者互不干扰。</summary>
+    Vector3 flatVel = Vector3.zero;
+
+    /// <summary>移动的「前方」= 相机朝向在水平面上的投影。
+    /// 相机被右键环绕改变后，W 的方向跟着变，符合第三人称直觉。</summary>
+    Vector3 MoveForward
+    {
+        get
+        {
+            if (cam == null) return Vector3.forward;
+            Vector3 d = cam.transform.forward;
+            d.z = 0f;
+            if (d.sqrMagnitude < 0.0001f)
+            {
+                // 相机正好垂直俯视时 forward 的水平投影为 0，退回用 up 的投影
+                d = cam.transform.up;
+                d.z = 0f;
+            }
+            return d.sqrMagnitude < 0.0001f ? Vector3.forward : d.normalized;
+        }
+    }
+
+    /// <summary>移动的「右方」= 前方在水平面内顺时针转 90°。
+    /// 不直接用 cam.transform.right，因为相机的 up 是 +Z，
+    /// right 在俯视时会退化。</summary>
+    Vector3 MoveRight
+    {
+        get
+        {
+            Vector3 f = MoveForward;
+            return new Vector3(-f.y, f.x, 0f);
+        }
     }
 
     /// <summary>是否按了移动/摆动键。用来判断玩家是否在主动操作 ——
@@ -3822,27 +3973,14 @@ public class SilkParkourController : MonoBehaviour
                Input.GetKey(KeyCode.E) || Input.GetKey(KeyCode.Q);
     }
 
-    /// <summary>相机的水平朝向（用于 WASD 移动）</summary>
-    Vector3 camLookFlat
-    {
-        get
-        {
-            if (cam == null) return Vector3.forward;
-            Vector3 d = cam.transform.forward;
-            d.z = 0f;
-            return d.sqrMagnitude < 0.0001f ? Vector3.right : d.normalized;
-        }
-    }
+    /// <summary>相机的水平朝向（用于 WASD 移动）。
+    /// 与 MoveForward 是同一套逻辑，直接复用，避免两处退化行为不一致
+    /// （旧实现相机垂直俯视时退化方向不同，会让「鼻尖」与W 键方向打架）。
+    /// </summary>
+    Vector3 camLookFlat => MoveForward;
 
     /// <summary>相机朝向的左方向（水平）</summary>
-    Vector3 camLookFlatPerp
-    {
-        get
-        {
-            Vector3 f = camLookFlat;
-            return new Vector3(-f.y, f.x, 0f);
-        }
-    }
+    Vector3 camLookFlatPerp => MoveRight;
 
     [Header("自由移动")]
     [Tooltip("WASD 移动球的速度")]
@@ -3933,6 +4071,7 @@ public class SilkParkourController : MonoBehaviour
             DoRelease();
             transform.position = startPosition;
             flightVel = Vector3.zero;
+            flatVel = Vector3.zero;   // 地面速度也要清，否则带着上一世界的惯性
             isFlying = true;
             if (builder != null) builder.CancelPendingNode();
             FollowCamera();
