@@ -3595,7 +3595,8 @@ public class SilkParkourController : MonoBehaviour
              * 【蜘蛛侠2 的动量守恒—— 本次修改的重点】
              * 原代码在「有方向键」时执行 `flatVel = Vector3.zero`，
              * 也就是**玩家一按键就把摆荡攒下的速度清零**，
-             * 瞬间从数百格/秒掉回moveSpeed(450)，而且每帧都清、永远追不回。
+             * 瞬间从数百格/秒掉回 moveSpeed（当时是450，现为 40），
+             * 而且每帧都清、永远追不回。
              *
              * 这违背了《漫威蜘蛛侠2》的核心设计（官方原话）：
              *   "momentum carries between swings"（动量在摆荡之间保留）
@@ -3604,8 +3605,8 @@ public class SilkParkourController : MonoBehaviour
              * 说明地面速度只是补充量级。
              *
              * 现在改为：按方向键只**转向**，不清速度；
-             * 速度由MomentumPreserve 逐步收敛到 moveSpeed，
-             * 让摆荡收益平滑过渡而不是瞬间消失。*/
+             * 超出 moveSpeed 的部分由 momentumBleed 平滑收敛，
+             * 让摆荡收益逐渐过渡而不是瞬间消失。*/
             if (grabbed != null && !isFlying)
             {
                 UpdateSwing(dt);          // 摆荡：末端被丝线驱动
@@ -3614,18 +3615,12 @@ public class SilkParkourController : MonoBehaviour
             {
                 if (flightVel.sqrMagnitude > 1f) UpdateFlight(dt);   // 惯性
 
-                if (AnyDirectionKey())
-                {
-                    /* 玩家主动操控：接管速度但**保留动量**。
-                     * 把 flightVel 的水平分量并入 flatVel，
-                     * 而不是丢弃 —— 这样摆荡攒下的速度不会消失。*/
-                    AdoptFlightMomentum();
-                    UpdateFreeMove(dt);
-                }
-                else
-                {
-                    UpdateFreeMove(dt);  // 无输入：惯性飞行自然衰减
-                }
+                /* 玩家主动操控：接管速度但**保留动量**。
+                 * 把 flightVel 的水平分量并入 flatVel 而不是丢弃 ——
+                 * 这样摆荡攒下的速度不会消失。*/
+                if (AnyDirectionKey()) AdoptFlightMomentum();
+
+                UpdateFreeMove(dt);
             }
             else
             {
@@ -3869,6 +3864,8 @@ public class SilkParkourController : MonoBehaviour
             transform.position = startPosition;
             flightVel = Vector3.zero;
             flatVel = Vector3.zero;   // 地面速度也要清，否则带着上一世界的惯性
+            vertVel = 0f;         // 垂直速度同理，否则切回来时悬空或卡在跳跃中
+            grounded = false;
             isFlying = true;
             CreateVisual();       // 幂等：已存在则直接返回
             UpdateVisualColor();
@@ -4281,8 +4278,8 @@ public class SilkParkourController : MonoBehaviour
     /// 玩家在惯性飞行中按下方向键时调用：**接管但保留动量**。
     ///
     /// 【为什么不能直接 flatVel = Vector3.zero】
-    /// 旧代码一按方向键就把水平速度清零，玩家从摆荡的数百格/秒
-    /// 瞬间掉回 moveSpeed(450)，摆荡带来的收益全部消失 ——
+    /// 旧代码一按方向键就把水平速度清零，玩家从摆荡攒下的高速
+    /// 瞬间掉回 moveSpeed，摆荡收益全部消失 ——
     /// 这正是「感觉移动很慢」的病根（数值调再高也没用）。
     ///
     /// 现在把 flightVel 的水平分量并入 flatVel，
@@ -4509,6 +4506,8 @@ public class SilkParkourController : MonoBehaviour
             transform.position = startPosition;
             flightVel = Vector3.zero;
             flatVel = Vector3.zero;   // 地面速度也要清，否则带着上一世界的惯性
+            vertVel = 0f;         // 垂直速度同理
+            grounded = false;
             isFlying = true;
             if (builder != null) builder.CancelPendingNode();
             FollowCamera();
@@ -4927,6 +4926,18 @@ public class SilkParkourController : MonoBehaviour
             grabbed = null;
         }
         isFlying = true;
+
+        /* 垂直状态也要重置。
+         *
+         * 【为什么要】本函数原先只重置 isFlying，但抓丝线期间
+         * grounded/vertVel 可能处于任意状态（起跳后被抓住、
+         * 摆荡中垂直速度已被物理改写）。松手后若不清理：
+         *   · vertVel 残留 -> 下次落地被误判成「还在上升」
+         *   · grounded 残留 true -> 空中按空格会错误地再跳一次
+         * 统一收敛到「空中、无垂直速度」的一致状态。*/
+        vertVel = 0f;
+        grounded = false;
+
         // 只在真的松过手时才打 —— DoRelease 由空格触发，频率低，
         // 但玩家若连按会刷屏，故加个开关。默认不输出。
         if (verboseReleaseLog)
