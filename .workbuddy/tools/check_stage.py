@@ -82,13 +82,24 @@ if not ov:
 print()
 print('=== 基础区路线（沿 +X 前进）===')
 seq = sorted(B.keys())
-basic = [n for n in seq if not n.startswith(('4', '5'))]
+# 基础区= Plat_0..Plat_3；Plat_4/5 是刻意用y 方向隔开的摆荡进阶区。
+# 注意平台名形如 "Plat_4_摆荡钩子"，不能startswith('4') 过滤。
+basic = [n for n in seq if not re.match(r'Plat_[45]', n)]
 ok_all = True
 for i in range(len(basic) - 1):
     a, b = basic[i], basic[i + 1]
     gap = B[b][0][0] - B[a][0][1]
     yov = min(B[a][1][1], B[b][1][1]) - max(B[a][1][0], B[b][1][0])
     dz = B[b][2][1] - B[a][2][1]
+
+    # y 方向完全分离 => 不是「同一路上的下一段」，
+    # 而是刻意用空间隔开的独立区（如摆荡进阶区），不参与地面路线判定
+    if yov <= 0:
+        print('  %s -> %s: y 方向分离（%.0f..%.0f vs %.0f..%.0f）'
+              ' -> 判定为独立区段，跳过地面路线检查'
+              % (a, b, B[a][1][0], B[a][1][1], B[b][1][0], B[b][1][1]))
+        continue
+
     # 判定：顶面落差要能跳上；x 间隙不能超出全速起跳跨度
     okz = dz <= apex - 0.5
     okx = gap <= reach
