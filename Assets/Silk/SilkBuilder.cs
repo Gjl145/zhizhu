@@ -2611,13 +2611,10 @@ public class SimpleOrbitCamera : MonoBehaviour
 
     void Update()
     {
-        // Parkour 模式下完全交出输入 —— 否则 WASD/QE 会和玩家控制器同时响应
-        if (!inputEnabled)
-        {
-            // 仍允许右键环绕（方便观察），但不响应键盘
-            HandleLookOnly();
-            return;
-        }
+        /* Parkour 模式：相机完全交出控制权。
+         * 视角锁死在球上（固定在球后方 + 始终 LookAt 球），
+         * 由 SilkParkourController.FollowCamera 负责。此处不响应任何输入。*/
+        if (!inputEnabled) return;
 
         if (Input.GetKeyDown(flipKey))
         {
@@ -3017,19 +3014,22 @@ public class SilkParkourController : MonoBehaviour
     {
         if (cam == null) return;
 
-        // 用 cam.LookDirFlat（由 yaw 直接算出）而不是 cam.transform.forward。
-        // 原因：transform.forward 会被本方法的位置写入与相机自身的旋转写入
-        // 互相拉扯 —— 位置跟随读 forward、旋转又改 forward，下一帧位置就偏了，
-        // 表现为画面抖动。
-        Vector3 look = cam.LookDirFlat;
-        if (look.sqrMagnitude < 0.0001f) look = Vector3.back;
-
+        /* 极简版：相机固定在球的 -Y 侧偏上，**始终正对球**。
+         * 不响应任何鼠标输入 —— 视角完全由球的位置决定。
+         *
+         * 之前的问题：位置用 cam.LookDirFlat（yaw 推算）摆，
+         * 而朝向又由 SimpleOrbitCamera.ApplyRotation 决定 ——
+         * 两套逻辑同时改相机，鼠标一动位置和朝向一起变，
+         * 看起来就是「位置在动而不是视角在转」。*/
         cam.transform.position = transform.position
-                               - look * camDistance
-                               + new Vector3(0f, 0f, camHeight);
+                               + new Vector3(0f, -camDistance, camHeight);
         cam.transform.up = Vector3.forward;
-        // 不写 rotation —— 交给 SimpleOrbitCamera 的 ApplyRotation，
-        // 否则会覆盖右键环绕的结果
+
+        // 始终 LookAt 球 —— 这就是「视角锁死在球上」
+        Vector3 toBall = transform.position - cam.transform.position;
+        if (toBall.sqrMagnitude > 0.0001f)
+            cam.transform.rotation =
+                Quaternion.LookRotation(toBall.normalized, Vector3.forward);
     }
 
     [Header("蜘蛛侠式发射")]
