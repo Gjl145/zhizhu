@@ -584,10 +584,19 @@ public class SilkSegment : MonoBehaviour
 
     /// <summary>显示/隐藏本段的渲染。同一根线只能有一个渲染来源，
     /// 否则会看到「一条悬链线 + 一条折线」的重影。</summary>
+    /// <summary>本段是否应该由自己画线。
+    /// 两个标记都要满足才画：
+    ///   visible    —— 显式隐藏（如清场）
+    ///   !chainDriven —— 没被 SilkChain 接管渲染
+    /// </summary>
+    public bool OwnsRender => visible && !chainDriven;
+
     public void SetVisible(bool on)
     {
         visible = on;
-        if (lr != null) lr.enabled = on;
+        // 同步 LineRenderer.enabled —— 光改 visible 不够，
+        // 因为 chainDriven 期间 lr.enabled 可能是 false 状态残留
+        if (lr != null) lr.enabled = OwnsRender;
     }
 
     // 钟摆物理
@@ -998,11 +1007,45 @@ public class SilkLine
         chain.damping = 0.995f;
         chain.gravity = 15f;
         chain.subdivisions = 8;
-        chain.catenarySag = 0f;      // 抓住时链条按直线起步，不再带悬链线弧度
-        chain.slackScale = 1.0f;
+
+        /* 参数必须与 SplitSegment 保持一致，否则同一根线在
+         * 「抓住」和「断裂」两条路径下形态不同 —— 用户会看到
+         * 抓住时线突然绷直、断裂时线保持弧度。
+         * 抓住时线还没被破坏，所以沿用当前段的弧度与松弛系数。*/
+        var seg0 = segments.Count > 0 ? segments[0] : null;
+        chain.catenarySag = seg0 != null ? seg0.sagRatio : 0.07f;
+        chain.slackScale = 1.15f;
+        chain.maxStrain = 0.25f;
+
         chain.Build(rootFrom, rootTo, this, 1f);
         // 渲染不再需要「让位」—— SilkChain 只用那一个 SilkSegment 画线，
         // 形状由物理节点决定，没有第二个渲染源。
+    }
+
+    /// <summary>把丝线恢复到静态状态：销毁约束链、解除渲染接管、
+    /// 交回给 SilkSegment 的悬链线渲染。</summary>
+    public void RestoreStatic()
+    {
+        // 1. 先解除渲染接管，否则约束链销毁后没人写顶点，线会僵住
+        foreach (var seg in segments)
+            if (seg != null)
+            {
+                seg.chainDriven = false;
+                seg.SetVisible(true);
+            }
+
+        // 2. 销毁约束链（含 ChainNode 子物件）
+        if (chain != null)
+        {
+            chain.DriveEndTo(null);
+            if (chainGO != null) Object.Destroy(chainGO);
+            else Object.Destroy(chain.gameObject);
+        }
+        chain = null;
+        chainGO = null;
+        attached = null;
+        attachedBody = null;
+        life = SilkLifeState.Static;
     }
 
     /// <summary>让静态悬链线重新可见（链条销毁时用）。</summary>
@@ -1313,9 +1356,11 @@ public class SilkChain : MonoBehaviour
                     res.points.Add(p);
                 }
                 // 段长按弧长分配：悬链线上下不对称，不能等分。
-                // slack 是「松弛系数」：>1 让绳索略长于弧长，
-                // 重力才能把弧线逐渐拉直 —— 这正是断裂后丝线「失去张力而展开」的物理。
-                // 上一版误把 restLengths 锁成弧长，导致弧线被固定、整条刚性摆动。
+                // slackScale 是「绳索比当前弧线长多少」——
+                // 它决定绳索有多松（rest 越大越松、垂得越厉害），
+                // 与 maxStrain（弹性上限）配合：
+                //   静垂度由 slackScale 决定
+                //   挂重物后能否绷直由 maxStrain 决定
                 for (int i = 0; i < n; i++)
                     res.restLengths.Add(
                         (res.points[i + 1] - res.points[i]).magnitude * slackScale);
@@ -1401,7 +1446,11 @@ public class SilkChain : MonoBehaviour
         if (owner != null && owner.segments.Count > 0)
         {
             renderSeg = owner.segments[0];
-            renderSeg.chainDriven = true;   // 交给本组件渲染，它自己不再画
+            // 交给本组件渲染：设chainDriven 并关掉它自己的 LineRenderer，
+            // 否则两个渲染源同时画 -> 视觉上两条线
+            renderSeg.chainDriven = true;
+            var lr0 = renderSeg.GetComponent<LineRenderer>();
+            if (lr0 != null) lr0.enabled = false;
         }
 
         initialized = true;
@@ -1456,16 +1505,24 @@ public class SilkChain : MonoBehaviour
                 float len = d.magnitude;
                 if (len < 0.0001f) continue;
 
-                /* 弹性绳索：静止长度 rest 允许被拉伸到 rest*(1+maxStrain)。
-                 * - 拉伸超过上限 -> 硬约束拉回，绳索「绷直」不再伸长
-                 * - 压缩（len<rest）-> 允许，绳索松弛下垂
-                 * 这样只施加重力时自然下垂；
-                 * 末端挂重物时先被拉长，到上限后绷直 —— 符合真实材料。*/
+                /* 弹性绳索（单向拉伸，类似真实蛛丝）。
+                 *
+                 * rest = 该段的「自然长度」。允许被拉伸到 rest*(1+maxStrain)：
+                 *   len < rest        -> 松弛，不修正（重力让它自然下垂）
+                 *   rest <= len <= max -> 正常拉伸，不修正（形变在弹性范围内）
+                 *   len > max         -> 拉回到 max（绷直，不再伸长）
+                 *
+                 * 上一版写成 restNow = len>maxLen ? maxLen : rest，
+                 * 导致「压缩时也强行拉回rest」—— 绳索永远绷直，
+                 * 因为 rest 已slackScale 放大 15%。
+                 * 弹性绳只能被拉长，不能被压短，所以压缩时不修正。*/
                 float maxLen = rest * (1f + maxStrain);
-                float restNow = len > maxLen ? maxLen : rest;
-                float diff = ((len - restNow) / len) * stiffness;
+                float diff = 0f;
+                if (len > maxLen)
+                    diff = ((len - maxLen) / len) * stiffness;
                 if (diff > 1f) diff = 1f;
-                else if (diff < -1f) diff = -1f;
+                else if (diff < 0f) diff = 0f;
+                if (diff == 0f) continue;      // 松弛或正常拉伸，无需修正
 
                 if (i == 0)
                 {
@@ -1530,8 +1587,11 @@ public class SilkChain : MonoBehaviour
     public void SetRenderSegment(SilkSegment seg)
     {
         renderSeg = seg;
+        if (seg == null) return;
         // 被接管的段不再自己渲染，否则又会出现两个渲染源
-        if (seg != null) seg.chainDriven = true;
+        seg.chainDriven = true;
+        var lr = seg.GetComponent<LineRenderer>();
+        if (lr != null) lr.enabled = false;
     }
 
     /// <summary>末端是否由外部驱动。true 时末端不受重力，由挂载物决定位置。</summary>
@@ -2300,8 +2360,8 @@ public class SilkBuilder : MonoBehaviour
             if (line.chain != null) Object.Destroy(line.chain.gameObject);
             line.chain = null;
             line.chainGO = null;
-            // 链条销毁后渲染责任回到静态悬链线，否则线会不可见
-            line.RestoreStaticRender();
+            // 链条销毁后完整回到静态：恢复渲染 + 停止物理更新
+            line.RestoreStatic();
         }
         silkLines.Clear();
         // 去重集合必须同步清空，否则重新织网会被上一轮的记录挡住
