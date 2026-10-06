@@ -1635,11 +1635,9 @@ public class SilkBuilder : MonoBehaviour
     [Tooltip("玩家自建节点的世界空间碰撞半径。默认锚点仅 0.06 格，射线打不中，固化时必须放大才能被动态丝线粘住")]
     public float playerNodeRadius = 1.5f;
 
-    /* 注意：必须是 static —— Build() 在 SilkWorldBootstrap 里是静态方法，
-     * 拿不到 MonoBehaviour 的实例字段。 */
     [Tooltip("是否生成跑酷测试关卡（3 个平台 + 沟壑）。"
            + "临时功能，删除 SilkTestLevel.cs 后请把这里也移除")]
-    public static bool createTestLevel = true;
+    public bool createTestLevel = true;
 
     /// <summary>第三人称跑酷模式。为 true 时本组件不响应鼠标左键与 R，
     /// 避免与玩家的「发射丝线」「重置」冲突。由控制器在切模式时设置。</summary>
@@ -3013,6 +3011,7 @@ public class SilkParkourController : MonoBehaviour
             isFlying = true;
             CreateVisual();       // 幂等：已存在则直接返回
             UpdateVisualColor();
+            logFollowOnce = true; // 每次切模式重打一次诊断
             FollowCamera();       // 立刻摆相机，当帧就能看到球
             // 测试关卡属于游戏世界，FreeFly 下不该存在
             if (builder != null && builder.createTestLevel) SilkTestLevel.Create(TestLevelHalfSize());
@@ -3090,9 +3089,10 @@ public class SilkParkourController : MonoBehaviour
         /* 诊断：确认相机在球外且球在画面内。
          * 用户报告「变成第一人称」—— 若相机在球内（距离 < 球半径），
          * 球会填满整个视野或被 near plane 裁掉，看起来就是「看不到球」。
-         * 这里把关键数值算出来，一次定位。*/
-        if (verboseFollowLog)
+         * 只在切模式时打一次 —— 放在 LateUpdate 里每帧打会刷屏（实测刷了 3000+ 次）。*/
+        if (logFollowOnce)
         {
+            logFollowOnce = false;
             float dist = Vector3.Distance(cam.transform.position, transform.position);
             bool inside = dist < visualRadius;
             Debug.Log("[Follow] 相机到球 " + dist.ToString("F1") + " 格" +
@@ -3102,6 +3102,9 @@ public class SilkParkourController : MonoBehaviour
                       " | 球前表面距相机 " + (dist - visualRadius).ToString("F1") + " 格");
         }
     }
+
+    /// <summary>每次切到 Parkour 时重置，让 [Follow] 诊断重新打一次。</summary>
+    bool logFollowOnce = true;
 
     [Tooltip("每帧输出相机跟随诊断（排查「看不到球」时开启）")]
     public bool verboseFollowLog = true;
