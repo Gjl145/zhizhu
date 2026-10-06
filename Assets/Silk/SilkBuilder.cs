@@ -271,17 +271,22 @@ public enum SilkControlMode
 /// </summary>
 public class SilkPinNodeSignal : ISilkEvent
 {
-    public Vector3 position;      // 要固化的位置（通常是玩家当前位置）
+    public Vector3 position;      // 要固化的位置
 
-    public SilkPinNodeSignal(Vector3 pos)
+    /// <summary>是否把该点记为「连线起点」（下一步点另一个点就连线）。</summary>
+    public bool selectAsStart = false;
+
+    public SilkPinNodeSignal(Vector3 pos, bool selectAsStart = false)
     {
         position = pos;
+        this.selectAsStart = selectAsStart;
     }
 
     public void Handle(SilkBuilder handler)
     {
         if (handler == null) return;
-        handler.ExecutePinNode(this);
+        // 两步流程：第一个点是起点，第二个点才连线
+        handler.ExecuteNodeClick(this);
     }
 }
 
@@ -1802,10 +1807,16 @@ public class SilkBuilder : MonoBehaviour
         }
     }
 
+    /// <summary>连线的起点（等待第二个点）。null = 当前没有待连线的点。</summary>
+    AnchorPoint pendingNode = null;
+
     /// <summary>
-    /// 执行固化：把某点变成玩家自建的可粘附节点。
-    /// 同一位置重复调用会复用已有节点（靠 5 格去重），
-    /// 因此多道线可以共��同一个节点 —— 这正是「结网」需要的。
+    /// 第 1 步：固化一个节点（只放点，**不连线**）。
+    /// 同位置重复调用会复用已有节点（5格去重），
+    /// 因此多道线可以共用同一个节点 —— 这正是「结网」需要的。
+    ///
+    /// 若 signal.selectAsStart 为真，则把它记为连线起点，
+    /// 下次玩家点第二个点时才会真正建线。
     /// </summary>
     public AnchorPoint ExecutePinNode(SilkPinNodeSignal signal)
     {
@@ -1818,15 +1829,72 @@ public class SilkBuilder : MonoBehaviour
         if (anchor.type != AnchorType.PlayerNode)
         {
             anchor.MarkAsPlayerNode(playerNodeRadius);
-            Debug.Log("[Node] 固化玩家节点 " + anchor.position);
+            Debug.Log("[Node] 固化节点 " + anchor.position);
+        }
+
+        if (signal.selectAsStart)
+        {
+            pendingNode = anchor;
+            anchor.SetHighlight(true);
+            Debug.Log("[Node] 已选为连线起点，再点一个点即可连线");
         }
         return anchor;
     }
 
     /// <summary>
-    /// 执行结网：在两个点之间生成静态丝线。
-    /// 两端都走 CreateAnchorAt，所以若玩家先前已在这些位置固化过节点，
-    /// 就会自动复用 —— 实现「多线共节点」。
+    /// 第 2 步：把刚点出的节点与上一个选中点连起来。
+    /// 若没有待连线的起点，则把这个点记为新的起点（等下一个点）。
+    /// 这样「点A → 点B → 连线；点C → 点D → 连线」可以连续做。
+    /// </summary>
+    public AnchorPoint ExecuteNodeClick(SilkPinNodeSignal signal)
+    {
+        if (signal == null) return null;
+
+        var anchor = CreateAnchorAt(signal.position);
+        if (anchor == null) return null;
+        if (anchor.type != AnchorType.PlayerNode)
+        {
+            anchor.MarkAsPlayerNode(playerNodeRadius);
+            Debug.Log("[Node] 固化节点 " + anchor.position);
+        }
+
+        // 还没有起点 -> 这一下只是选起点
+        if (pendingNode == null)
+        {
+            pendingNode = anchor;
+            anchor.SetHighlight(true);
+            Debug.Log("[Node] 选为起点 (" + anchor.position + ")，再点一个点连线");
+            return anchor;
+        }
+
+        // 已有起点 -> 连线
+        if (pendingNode == anchor)
+        {
+            Debug.Log("[Node] 点了同一个点，取消选中");
+            CancelPendingNode();
+            return anchor;
+        }
+
+        var line = CreateSilkLine(pendingNode, anchor, defaultColor, BreakMode.Middle);
+        Debug.Log("[Link] " + pendingNode.position + " → " + anchor.position +
+                  (line != null ? " 连线成功" : " 已有线（去重）"));
+        CancelPendingNode();
+        return anchor;
+    }
+
+    /// <summary>取消待连线的起点。</summary>
+    public void CancelPendingNode()
+    {
+        if (pendingNode != null) pendingNode.SetHighlight(false);
+        pendingNode = null;
+    }
+
+    /// <summary>当前是否有待连线的起点（供 UI 查询）。</summary>
+    public bool HasPendingNode => pendingNode != null;
+
+    /// <summary>
+    /// 结网：在两个点之间生成静态丝线（一步到位，供脚本/调试用）。
+    /// 玩家交互走 ExecuteNodeClick 的两步流程。
     /// </summary>
     public void ExecuteSpan(SilkSpanSignal signal)
     {
@@ -2694,10 +2762,16 @@ public class SilkParkourController : MonoBehaviour
         // FreeFly 时相机自己响应 WASD，玩家必须完全静止
         if (mode == SilkControlMode.Parkour)
         {
-            if (isFlying) UpdateFlight(dt);
-            else UpdateSwing(dt);
+            if (grabbed != null && !isFlying) UpdateSwing(dt);  // 抓丝线：泵力摆荡
             HandleKeys();
             UpdateVisualColor();
+
+            if (isFlying)
+            {
+                // 松手后短暂保留惯性飞行（含撞墙反弹），玩家一按方向键就接管
+                if (flightVel.sqrMagnitude > 1f) UpdateFlight(dt);
+                if (!AnyDirectionKey()) UpdateFreeMove(dt);
+            }
         }
 
         /* 相机跟随放在最后：Unity 的 Update 顺序不确定，
@@ -2821,7 +2895,58 @@ public class SilkParkourController : MonoBehaviour
     [Tooltip("撞墙后的速度保留比例。0=完全弹停，1=原速反弹，<1 有能量损失")]
     [Range(0f, 1f)] public float wallBounce = 0.4f;
 
-    /* ---------- 挂载摆动：按输入移动自己，丝线末端跟随 ---------- */
+    /* ---------- 自由移动：WASD 控球，相机负责看 ---------- */
+    void UpdateFreeMove(float dt)
+    {
+        // 未抓着丝线时，WASD 直接移动球本身（第三人称常见操作）
+        Vector3 move = Vector3.zero;
+        if (Input.GetKey(KeyCode.W)) move += camLookFlat;
+        if (Input.GetKey(KeyCode.S)) move -= camLookFlat;
+        if (Input.GetKey(KeyCode.A)) move -= camLookFlatPerp;
+        if (Input.GetKey(KeyCode.D)) move += camLookFlatPerp;
+        if (Input.GetKey(KeyCode.E)) move += Vector3.forward;   // 升高
+        if (Input.GetKey(KeyCode.Q)) move -= Vector3.forward;   // 降低
+
+        if (move.sqrMagnitude < 0.0001f) return;
+        transform.position += move.normalized * moveSpeed * dt;
+    }
+
+    /// <summary>是否按了移动/摆动键。用来判断玩家是否在主动操作 ——
+    /// 没按任何键时，惯性飞行才继续；按了就立刻接管为可控移动。</summary>
+    bool AnyDirectionKey()
+    {
+        return Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.S) ||
+               Input.GetKey(KeyCode.A) || Input.GetKey(KeyCode.D) ||
+               Input.GetKey(KeyCode.E) || Input.GetKey(KeyCode.Q);
+    }
+
+    /// <summary>相机的水平朝向（用于 WASD 移动）</summary>
+    Vector3 camLookFlat
+    {
+        get
+        {
+            if (cam == null) return Vector3.forward;
+            Vector3 d = cam.transform.forward;
+            d.z = 0f;
+            return d.sqrMagnitude < 0.0001f ? Vector3.right : d.normalized;
+        }
+    }
+
+    /// <summary>相机朝向的左方向（水平）</summary>
+    Vector3 camLookFlatPerp
+    {
+        get
+        {
+            Vector3 f = camLookFlat;
+            return new Vector3(-f.y, f.x, 0f);
+        }
+    }
+
+    [Header("自由移动")]
+    [Tooltip("WASD 移动球的速度")]
+    public float moveSpeed = 35f;
+
+    /* ---------- 挂荡：按输入移动自己，丝线末端跟随 ---------- */
     void UpdateSwing(float dt)
     {
         if (grabbed == null) { isFlying = true; return; }
@@ -2865,8 +2990,12 @@ public class SilkParkourController : MonoBehaviour
             else DoRelease();
         }
 
-        // 左键：蜘蛛侠式发射 —— 斜向上前方发射并自动勾住
-        if (Input.GetMouseButtonDown(0)) TryFireAndHook();
+        // 左键：**只放一个节点**，不连线。
+        // 第一次点= 选为连线起点，第二次点 = 连线（之后自动清空，可继续下一组）
+        if (Input.GetMouseButtonDown(0)) PlaceNode();
+
+        // B：蜘蛛侠式发射（斜上勾住并摆荡）—— 走另一条路径
+        if (Input.GetKeyDown(KeyCode.B)) TryFireAndHook();
 
         // X：断开自己发射的第一根丝线
         if (Input.GetKeyDown(KeyCode.X)) CutFirstFiredLine();
@@ -2883,7 +3012,37 @@ public class SilkParkourController : MonoBehaviour
             transform.position = startPosition;
             flightVel = Vector3.zero;
             isFlying = true;
+            if (builder != null) builder.CancelPendingNode();
+            FollowCamera();
         }
+
+        // 右键：取消待连线的起点
+        if (Input.GetMouseButtonDown(1) && builder != null && builder.HasPendingNode)
+            builder.CancelPendingNode();
+    }
+
+    /// <summary>
+    /// 左键：放一个节点（固化当前位置的命中点），不自动连线。
+    /// 第一次点选为起点，第二次点才连线 —— 流程可见、可控。
+    /// </summary>
+    void PlaceNode()
+    {
+        if (builder == null) return;
+        if (cam == null) cam = FindObjectOfType<SimpleOrbitCamera>();
+        if (cam == null) return;
+
+        Vector3 origin = transform.position;
+        // 用相机的水平朝向作为射线方向（视线方向），而不是斜上发射方向
+        Vector3 dir = cam.transform.forward;
+        if (!Physics.Raycast(origin, dir, out RaycastHit hit, fireRange, fireMask))
+        {
+            Debug.Log("[Node] 未命中任何表面");
+            return;
+        }
+        if (Vector3.Distance(origin, hit.point) < minFireLength) return;
+
+        // 只固化节点，绝不建线
+        SilkEventBus.Post(new SilkPinNodeSignal(hit.point, selectAsStart: true));
     }
 
     /// <summary>
