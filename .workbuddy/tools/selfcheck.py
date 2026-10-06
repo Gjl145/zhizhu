@@ -144,12 +144,32 @@ ok('无重复方法定义（CS0111），已按类区间精确切分')
 # ---------- 7. 关键方法的调用点存在性 ----------
 must_call = ['ResolveGround', 'HandleJumpOrGrab', 'PickBestAnchor', 'DoJump',
              'AdoptFlightMomentum', 'ApplyRotation', 'HandleLookOnly',
-             'OrbitAround', 'ConnectForParkour', 'ClearRenderClaim']
+             'OrbitAround', 'ConnectForParkour', 'ClearRenderClaim',
+             # 诊断类也要检查 —— 曾因移出 LateUpdate 而变成死代码
+             'ScanHealth', 'ScanRenderers', 'ScanDuplicates', 'ScanDuplicates']
 for name in must_call:
     n = len(re.findall(r'\b' + name + r'\s*\(', s))
     if n < 2:
         err('%s 只有 %d 处出现（可能只有定义、无调用点）' % (name, n))
 ok('关键方法均有调用点（%d 个）' % len(must_call))
+
+# ---------- 7b. 扫描所有 void 方法，找「定义但无调用」的 ----------
+# 本项目踩过：ScanHealth 被移出 LateUpdate 后忘了保留调用 -> 静默失效。
+# 只检查本文件内可见的方法（private void 且名字唯一）。
+dead = []
+for m in re.finditer(r'\n    (?:public |private |)(?:static )?void (\w+)\s*\(\s*\)', s):
+    nm = m.group(1)
+    if nm in ('Start', 'Update', 'LateUpdate', 'FixedUpdate', 'Awake',
+              'OnDestroy', 'OnEnable', 'OnDisable'):
+        continue
+    n = len(re.findall(r'\b' + nm + r'\s*\(', s))
+    if n < 2:
+        dead.append(nm)
+if dead:
+    for nm in sorted(set(dead)):
+        warn('%s() 只有定义没有调用 —— 可能是死代码或漏接线' % nm)
+else:
+    ok('无「定义但无调用」的无参 void 方法')
 
 # ---------- 8. 已移除的方法不应有调用点 ----------
 removed = ['StickToGround(']

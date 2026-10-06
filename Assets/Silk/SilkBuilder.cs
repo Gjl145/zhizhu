@@ -3673,10 +3673,28 @@ public class SilkParkourController : MonoBehaviour
     /// </summary>
     void LateUpdate()
     {
-        if (mode == SilkControlMode.Parkour) FollowCamera();
+        if (mode == SilkControlMode.Parkour)
+        {
+            FollowCamera();
+            UpdateAimIndicator();   // 自动瞄准的目标指示（视觉引导）
+        }
+
+        /*诊断类扫描统一降频。
+         *
+         * 【为什么必须降频】这三个 Scan* 都调用 FindObjectsOfType<>()，
+         * 那是**全场景遍历**，每帧调用在场景复杂时开销明显。
+         * 且它们已默认关闭（renderScan 等），这里再加时间闸作为双保险，
+         * 避免以后有人打开开关后忘记性能影响。
+         * 注意 ScanHealth 自己有 5 秒闸门，无需重复。*/
+        if (Time.time - lastScan >= 2f)
+        {
+            ScanRenderers();
+            ScanDuplicates();
+            lastScan = Time.time;
+        }
+
+        // ScanHealth 自带 5 秒闸门，可直接调用
         ScanHealth();
-        ScanRenderers();
-        ScanDuplicates();
     }
 
     float lastScan = -99f;
@@ -3735,12 +3753,15 @@ public class SilkParkourController : MonoBehaviour
 
     /// <summary>全面扫描：列出场景里所有约束链与所有可见丝线段。
     /// 重影问题需要知道「到底有几个渲染源」才能定位，
-    /// 凭猜测改代码效率太低。每 2 秒一次。</summary>
+    /// 凭猜测改代码效率太低。
+    ///
+    /// 【节流已上移到 LateUpdate】原先这里自带 `Time.time - lastScan < 2f`
+    /// /// 闸门，与外层共用同一个 lastScan 变量 ->
+    /// ScanRenderers 更新了它，导致 ScanDuplicates 被永久跳过。
+    /// 现在统一由 LateUpdate 控制频率（2 秒一次），内部不再重复判断。</summary>
     void ScanRenderers()
     {
         if (!renderScan) return;
-        if (Time.time - lastScan < 2f) return;
-        lastScan = Time.time;
 
         /* 1. 约束链 —— 泄漏的话这里会 >1 */
         var chains = FindObjectsOfType<SilkChain>();
@@ -4474,12 +4495,22 @@ public class SilkParkourController : MonoBehaviour
         {
             // 地面（或刚落地）：普通跳跃
             DoJump();
+            return;
         }
-        else
-        {
-            // 空中：抓丝线（沿视线自动瞄准）
-            FireAtAnchor();
-        }
+
+        /* 空中：先尝试抓**已有的**丝线，抓不到才发射新的。
+         *
+         * 【为什么要区分】
+         * 蜘蛛侠2 里这两种是不同的操作：
+         *   ·抓已有丝线 = 空中调整轨迹、重新借力（连贯动作）
+         *   · 发射新丝线 = 建立全新连接（重新起摆）
+         * 之前只有后者（FireAtAnchor），玩家在空中无法利用已有的线，
+         * 只能不断新建 —— 动作会显得「每一下都是重新开始」，
+         * 少了连续摆荡的流畅感（幽灵行者说的「无缝衔接」）。
+         *
+         * TryGrab 此前一直无调用点（selfcheck 7b 扫出来的功能缺口），
+         * 现在接在这里：附近有可抓的线就抓，没有才发射。*/
+        if (!TryGrab()) FireAtAnchor();
     }
 
     /// <summary>普通跳跃。给一个向上的初速度，之后由重力接管。
@@ -4657,10 +4688,13 @@ public class SilkParkourController : MonoBehaviour
          * 既能作为后续发射/摆荡的挂点，也能被静态丝线连起来结网。*/
         if (Input.GetKeyDown(KeyCode.C)) PinCurrentNode();
 
-        /* V：两个固化节点之间结网（静态丝线）。
-         * 后端 ExecuteSpan 已实现；此处先留V 键位说明，
-         * 实际连线走「左键选点」那套 OnAnchorPicked（见FireAtAnchor）。
-         * 需求确认后再接线 —— 避免又一次猜错方向返工。*/
+        /* V：把已固化的节点两两连起来（静态结网）。
+         * 后端 TrySpanNodes 早已实现，此处接线。
+         *
+         * 用途：玩家在空中用 C 固化几个节点后，按 V 就能把它们连成网 ——
+         * 这是「自己构建挂点网络」的能力，也是本作的核心玩法之一
+         * （用户原话：构建静态丝线，方便结网）。*/
+        if (Input.GetKeyDown(KeyCode.V)) TrySpanNodes();
 
         if (Input.GetKeyDown(KeyCode.R))
         {
@@ -4764,6 +4798,116 @@ public class SilkParkourController : MonoBehaviour
     public bool verboseFireLog = false;
 
     float lastAnchorScore;
+
+    /* ---------- 自动瞄准的目标指示器 ----------
+     *
+     * 【为什么需要它 —— 参考《基于瞬移能力的关卡练习》】
+     * 那个视频里传送落点用**白色圆盘**明确标示「该站在哪」，
+     * 出发点用黄色 L 形标记，目标点用黄色方块 ——
+     * 玩家靠画面就能读懂「我要去哪、会落在哪」。
+     *
+     * 我们用 PickBestAnchor 自动选点，替玩家做了判断，
+     * 但玩家因此**失去了预期** —— 按左键之前不知道会钩到哪，
+     * 钩完也不知道球会挂在哪、朝哪摆。
+     * 自动化的代价是「信息不对等」，必须用视觉反馈补回来。
+     *
+     * 所以：选中候选点时高亮它，并在玩家与目标之间画一条指引线。
+     * 这样「自动瞄准」从黑箱变成可预期的动作。*/
+
+    LineRenderer aimLine;
+    Transform aimMarker;
+
+    /// <summary>当前被指示的目标（每帧刷新）。</summary>
+    AnchorPoint indicatedAnchor;
+
+    /// <summary>创建指示器的视觉物件。幂等。</summary>
+    void EnsureAimIndicator()
+    {
+        if (aimLine == null)
+        {
+            var go = new GameObject("AimLine");
+            go.transform.SetParent(transform, false);
+            aimLine = go.AddComponent<LineRenderer>();
+            Shader sh = Shader.Find("Sprites/Default");
+            if (sh == null) sh = Shader.Find("Universal Render Pipeline/Unlit");
+            if (sh != null) aimLine.material = new Material(sh)
+            {
+                color = new Color(1f, 0.85f, 0.2f, 0.55f)
+            };
+            aimLine.widthMultiplier = 0.6f;
+            aimLine.positionCount = 2;
+            aimLine.useWorldSpace = true;
+            aimLine.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            aimLine.receiveShadows = false;
+            go.transform.SetParent(builder != null ? builder.transform : transform, false);
+        }
+
+        if (aimMarker == null)
+        {
+            // 用一个压扁的球做「目标环」，比方块更轻、不遮挡视线
+            var m = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            m.name = "AimMarker";
+            var col = m.GetComponent<Collider>();
+            if (col != null) Object.Destroy(col);   // 只作视觉，不参与碰撞
+            m.transform.localScale = new Vector3(visualRadius * 0.9f,
+                                                 visualRadius * 0.9f,
+                                                 visualRadius * 0.9f);
+            var mr = m.GetComponent<MeshRenderer>();
+            if (mr != null)
+            {
+                Shader sh2 = Shader.Find("Sprites/Default");
+                if (sh2 != null) mr.material = new Material(sh2)
+                {
+                    color = new Color(1f, 0.85f, 0.2f, 0.35f)
+                };
+            }
+            m.transform.SetParent(builder != null ? builder.transform : transform, false);
+            aimMarker = m.transform;
+        }
+    }
+
+    /// <summary>显示指向某个锚点的指引。传 null 则隐藏。
+    /// 每帧调用（由UpdateAimIndicator 驱动）。</summary>
+    void ShowAimIndicator(AnchorPoint target)
+    {
+        indicatedAnchor = target;
+
+        bool show = target != null && target.AnchorAlive && builder != null
+                    && visual != null;      // visual 为 null 说明不在 Parkour
+
+        if (aimLine != null) aimLine.enabled = show;
+        if (aimMarker != null) aimMarker.gameObject.SetActive(show);
+        if (!show) return;
+
+        Vector3 from = transform.position + Vector3.forward * visualRadius;
+        Vector3 to = target.WorldPosition;
+
+        aimLine.positionCount = 2;
+        aimLine.SetPosition(0, from);
+        aimLine.SetPosition(1, to);
+
+        aimMarker.position = to;
+    }
+
+    /// <summary>每帧刷新指示器（LateUpdate 里调）。
+    /// 只在「未抓着丝线且在地面附近」时显示 —— 摆荡中不需要瞄准提示。</summary>
+    void UpdateAimIndicator()
+    {
+        EnsureAimIndicator();
+
+        bool shouldShow = mode == SilkControlMode.Parkour
+                       && grabbed == null          // 摆荡中不显示
+                       && !isFlying               // 空中惯性飞行时不显示
+                       && !dashUsedThisAirborne; // 刚冲刺过就不显示，避免干扰
+
+        if (!shouldShow)
+        {
+            ShowAimIndicator(null);
+            return;
+        }
+
+        ShowAimIndicator(PickBestAnchor());
+    }
 
     /// <summary>
     /// 自动瞄准：在视野内挑一个「最适合当前状态」的锚点。
@@ -5050,9 +5194,14 @@ public class SilkParkourController : MonoBehaviour
     }
 
     /// <summary>抓最近的 Static 状态丝线。</summary>
-    void TryGrab()
+    /// <summary>尝试抓住附近**已有**的丝线。返回是否抓成功。
+    ///
+    /// 【为什么返回 bool】空中按空格要先试抓、失败才发射新线
+    /// （见 HandleJumpOrGrab）—— 调用方需要知道结果才能决定下一步。
+    /// </summary>
+    bool TryGrab()
     {
-        if (builder == null) return;
+        if (builder == null) return false;
 
         SilkLine best = null;
         float bestD = grabRange;
@@ -5066,7 +5215,7 @@ public class SilkParkourController : MonoBehaviour
             if (d < bestD) { bestD = d; best = line; }
         }
 
-        if (best == null) return;
+        if (best == null) return false;
 
         // 通过事件总线发布抓住事件，并**指定目标线** ——
         // 不指定的话 ExecuteGrab 会用它自己的 pickRadius(15) 重新找，
@@ -5075,7 +5224,9 @@ public class SilkParkourController : MonoBehaviour
         SilkEventBus.Post(new SilkGrabSignal(transform, "玩家", startSwing: true).On(best));
         grabbed = best;
         isFlying = false;
-        Debug.Log("[Parkour] 抓住丝线");
+        if (verboseFireLog)
+            Debug.Log("[Grab] 抓住已有丝线");
+        return true;
     }
 
     /// <summary>松手：把末端速度交给自身，然后转入脱手飞行。</summary>

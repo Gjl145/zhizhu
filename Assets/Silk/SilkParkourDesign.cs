@@ -138,6 +138,8 @@ public static class SilkParkourDesign
     {
         "跳跃高度随速度缩放 —— 消逝之光2 的做法，奖励保持速度",
         "动作间无缝衔接 —— 摆荡→松手→冲刺→再摆荡要能连成循环",
+        "TryGrab 未接线 —— 玩家无法主动抓丝线，只能靠自动瞄准",
+        "TrySpanNodes 未接线 —— V 键结网（固化节点两两连起来）",
     };
 
     /// <summary>明确不做的（属于第一人称冲刺类玩法，与摆荡路线冲突）。</summary>
@@ -145,6 +147,30 @@ public static class SilkParkourDesign
     {
         "滑铲 Slide —— 《幽灵行者》招牌，收益主要在第一人称冲刺玩法",
         "跑墙 Wall-run —— 《幽灵行者》招牌，需要墙面检测与法线转向",
+    };
+
+    /// <summary>
+    /// 已实现但「无调用点」的方法 —— 由 selfcheck 的第 7b 项扫出来。
+    ///
+    /// 【为什么要记在这里】无调用的方法不会报错、不会被编译器警告，
+    /// 只会静默地不生效。它们要么是 Unity 特性调用，要么是功能缺口，
+    /// 混在一起容易遗忘。列出来才能决定「接线」还是「删掉」。
+    ///
+    /// · AutoBuild / BuildFromMenu —— Unity 特性调用
+    ///   （[RuntimeInitializeOnLoadMethod] / [MenuItem]），**正常**
+    /// · PinHere —— 意图占位，未实现
+    /// · TryGrab —— **功能缺口**：无法主动抓丝线
+    /// · TrySpanNodes —— 功能缺口：V 键结网未接线
+    /// · RestoreStaticRender —— 旧渲染路径遗留，可考虑删除
+    /// </summary>
+    public static readonly string[] UnwiredMethods =
+    {
+        "AutoBuild — Unity 特性调用，正常",
+        "BuildFromMenu — Unity 特性调用，正常",
+        "PinHere — 意图占位，未实现",
+        "TryGrab — 功能缺口：无法主动抓丝线",
+        "TrySpanNodes — 功能缺口：V 键结网未接线",
+        "RestoreStaticRender — 旧渲染路径遗留，可删",
     };
 
     /// <summary>三款参考游戏的共同设计原则。
