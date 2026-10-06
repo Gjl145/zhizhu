@@ -252,7 +252,30 @@ public class SilkFireSignal : ISilkEvent
     }
 }
 
-/// <summary>操作模式。自由视角与第三人称跑酷的输入完全不同，必须分开。</summary>
+/* ===================== 两个世界（重要约定，勿混淆） =====================
+ *
+ * 同一套架构（VoxelGrid / AnchorPoint / SilkLine / SilkChain / 事件总线），
+ * 但**运行的是两个完全不同的世界**，通过 Tab 切换：
+ *
+ *   FreeFly 自由视角 —— 编辑器世界
+ *     目的：方便后续搭建关卡
+ *     相机自由飞行，用鼠标左键手动连线、生成蛛网
+ *     关注：能否自由放置锚点、能否织出想要的网形
+ *     键位：WASD/QE 飞行 · 左键连丝 · G 织网 · C 清空 · X 老化 · R 取消
+ *
+ *   Parkour 第三人称 —— 游戏世界
+ *     目的：方便测试跑酷进度，是游戏本身
+ *     玩家操纵一个球，自己发射/回收丝线、构建挂点地形
+ *     关注：手感、摆荡是否爽、滑行是否顺畅
+ *     键位：WASD 控球 · 左键建锚点 · B 发射 · 空格抓/放 · X 断自己发的线
+ *            C 固化节点 · V 结网 · R 回起点
+ *
+ * ⚠ 两个世界的键位**故意不共享**，即便看起来能复用。
+ *   因为需求完全不同：编辑时要「精确操作」，游戏时要「手感优先」。
+ *   任何键位在两个世界都要独立声明，不许共用。
+ * ================================================================
+ */
+/// <summary>操作模式。自由视角（编辑）与第三人称（游戏）是两个世界。</summary>
 public enum SilkControlMode
 {
     /// <summary>自由飞行相机：WASD/QE 移动，右键环绕。用于构建蛛网。</summary>
@@ -1693,24 +1716,36 @@ public class SilkBuilder : MonoBehaviour
         }
         else previewGO.SetActive(false);
 
-        if (Input.GetMouseButtonDown(1))
+        /* 右键单击 = 断丝（仅 FreeFly 世界）。
+         * Parkour 下右键属于相机环绕 + 取消选中，
+         * 断丝改由X 键「断自己发射的线」承担 —— 两个世界不共享右键语义。*/
+        if (!parkourMode)
         {
-            rightClickStartPos = Input.mousePosition;
-            rightClickStartTime = Time.time;
-        }
-        if (Input.GetMouseButtonUp(1))
-        {
-            float dragDist = Vector3.Distance(Input.mousePosition, rightClickStartPos);
-            if (Time.time - rightClickStartTime < 0.3f && dragDist < 10f)
+            if (Input.GetMouseButtonDown(1))
             {
-                TryCutNearest(mainCam.ScreenPointToRay(Input.mousePosition));
+                rightClickStartPos = Input.mousePosition;
+                rightClickStartTime = Time.time;
+            }
+            if (Input.GetMouseButtonUp(1))
+            {
+                float dragDist = Vector3.Distance(Input.mousePosition, rightClickStartPos);
+                if (Time.time - rightClickStartTime < 0.3f && dragDist < 10f)
+                {
+                    TryCutNearest(mainCam.ScreenPointToRay(Input.mousePosition));
+                }
             }
         }
 
-        if (Input.GetKeyDown(KeyCode.R) && !parkourMode) ResetSelection();
-        if (Input.GetKeyDown(KeyCode.C)) ClearAll();
-        if (Input.GetKeyDown(KeyCode.G)) GenerateWeb();
-        if (Input.GetKeyDown(KeyCode.X)) AgeWeb(0.15f);
+        /* 以下是 FreeFly（编辑器世界）的键位 —— 必须全部加 !parkourMode。
+         * Parkour 下这些键属于另一个世界：X=断自己发的线、C=固化节点。
+         * 之前只有 R 加了门控，导致按 C 会同时「清空蛛网」和「固化节点」。*/
+        if (!parkourMode)
+        {
+            if (Input.GetKeyDown(KeyCode.R)) ResetSelection();
+            if (Input.GetKeyDown(KeyCode.C)) ClearAll();
+            if (Input.GetKeyDown(KeyCode.G)) GenerateWeb();
+            if (Input.GetKeyDown(KeyCode.X)) AgeWeb(0.15f);
+        }
     }
 
     void TryPickOrCreateAnchor()
@@ -3004,7 +3039,12 @@ public class SilkParkourController : MonoBehaviour
         if (Input.GetKeyDown(KeyCode.B)) TryFireAndHook();
 
         // X：断开自己发射的第一根丝线
+        // X = 断自己发射的线（Parkour 世界专属；
+        // FreeFly 世界的 X 是「老化」，两者语义不同，各自独立声明）
         if (Input.GetKeyDown(KeyCode.X)) CutFirstFiredLine();
+
+        // G = 断「视线指向」的丝线（Parkour 世界的划断操作）
+        if (Input.GetKeyDown(KeyCode.G)) CutLineUnderCrosshair();
 
         // C：把当前位置固化成可粘附节点（自己构建地形）
         if (Input.GetKeyDown(KeyCode.C)) PinHere();
@@ -3104,6 +3144,39 @@ public class SilkParkourController : MonoBehaviour
         shotsFired++;   // 计数达到 shotsToPin 后才允许就地建锚点
         Debug.Log("[Parkour] 勾住 " + hit.point + " 距离 " +
                   Vector3.Distance(origin, hit.point).ToString("F1"));
+    }
+
+    /// <summary>Parkour 世界的划断：切断视线中心指向的那根丝线。
+    /// 与 FreeFly 的「右键单击断最近线」是两套独立实现 ——
+    /// 因为两个世界的操作习惯不同，不共享。</summary>
+    void CutLineUnderCrosshair()
+    {
+        if (builder == null) return;
+        if (cam == null) cam = FindObjectOfType<SimpleOrbitCamera>();
+        if (cam == null) return;
+
+        // 从相机中心发射线，用最近中点判定命中
+        Ray ray = cam.ScreenPointToRay(new Vector3(Screen.width * 0.5f, Screen.height * 0.5f, 0f));
+        SilkLine best = null;
+        float bestD = 20f;   // 视线附近20 格内算命中
+        foreach (var line in builder.Lines)
+        {
+            if (line == null || !line.CanBeCut) continue;
+            Vector3 mid = (line.rootFrom.WorldPosition + line.rootTo.WorldPosition) * 0.5f;
+            Vector3 cp = ray.origin + ray.direction * Vector3.Dot(mid - ray.origin, ray.direction);
+            float d = Vector3.Distance(mid, cp);
+            if (d < bestD) { bestD = d; best = line; }
+        }
+
+        if (best == null)
+        {
+            Debug.Log("[Cut] 视线内没有可断的线");
+            return;
+        }
+        if (best == grabbed) DoRelease();
+        SilkEventBus.Post(new SilkBreakSignal(SilkBreakCause.PlayerRelease)
+            .AtNormalized(0.35f).On(best));
+        Debug.Log("[Cut] 断开视线所指的丝线");
     }
 
     /// <summary>取最近一根自己发射的线（刚生成的在列表末尾）。</summary>
