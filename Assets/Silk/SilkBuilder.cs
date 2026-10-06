@@ -1914,6 +1914,28 @@ public class SilkBuilder : MonoBehaviour
 
     void Awake()
     {
+        /* 【实例唯一性守卫】
+         *
+         * 若场景里有两个 SilkBuilder，两者的 Update 都会响应同一次左键，
+         * 且各自的 lineKeys 互不干扰 -> 同一对锚点会被各建一条线，
+         * 视觉上就是「一次点击出现两根分开的线」，而[NewLine] 总数持续增长。
+         *
+         * 这里让后来者直接失效：先到者保留完整功能，后来者退场。
+         * 比在两处 Build 入口加检查更稳（覆盖所有可能的创建路径）。*/
+        var all = FindObjectsOfType<SilkBuilder>();
+        foreach (var other in all)
+        {
+            if (other == null || other == this) continue;
+            if (other.GetInstanceID() < GetInstanceID())
+            {
+                // 已存在更早的实例 -> 我是多余的，自杀
+                Debug.LogWarning("[SilkBuilder] 检测到重复实例，销毁后来者 " +
+                                 gameObject.name + "（保留 " + other.gameObject.name + "）");
+                Destroy(gameObject);
+                return;
+            }
+        }
+
         if (grid == null) grid = FindObjectOfType<VoxelGrid>();
         if (grid == null)
         {
@@ -2718,6 +2740,29 @@ public class SilkWorldBootstrap
 
     public static void Build()
     {
+        /* 【幂等守卫】必须放在最前面。
+         *
+         * 根因：RuntimeInitializeOnLoadMethod(BeforeSceneLoad) 在
+         * **每次场景加载前**都会执行。原先只有 AutoBuild 里有
+         * FindObjectOfType 检查，而 Tools 菜单的 BuildFromMenu 完全没有，
+         * 且 Build() 本身不做任何检查 —— 于是可能并存**两个 SilkBuilder**：
+         *
+         *   · silkLines 各数各的        -> [NewLine]「总数」一直增长
+         *   · lineKeys 各清各的         -> 去重完全失效，同对锚点各建一条线
+         *   · 两者的 Update 都响应左键   -> 一次点击触发两次建线入口
+         *
+         * 这完美解释了「只建了一条线却出现两条、且总数持续增长」。
+         * 在 Build() 内部守卫，任何入口（自动/ 菜单 / 代码）都受保护，
+         * 比在每个调用点各写一遍检查更可靠。*/
+        var existing = Object.FindObjectOfType<SilkBuilder>();
+        if (existing != null)
+        {
+            Debug.LogWarning("[Bootstrap] 已存在 SilkBuilder(" +
+                existing.gameObject.name + ")，跳过重复构建。" +
+                " 重复实例会导致去重表各自独立，同一锚点对被建多次。");
+            return;
+        }
+
         var world = new GameObject("SilkWorld");
         var grid = world.AddComponent<VoxelGrid>();
         grid.size = 100; grid.cellSize = 1f;
@@ -3330,11 +3375,64 @@ public class SilkParkourController : MonoBehaviour
     void LateUpdate()
     {
         if (mode == SilkControlMode.Parkour) FollowCamera();
+        ScanHealth();
         ScanRenderers();
         ScanDuplicates();
     }
 
     float lastScan = -99f;
+
+    /// <summary>实例体检：诊断「同一对锚点被建两次」的**根本原因**。
+    ///
+    /// 【为什么必须查实例数】实测日志显示：
+    ///   [NewLine] 总数 1  去重表size=0
+    ///   [Dup] 同一锚点对却有 2 个段、2 个不同父线
+    /// 「总数 1」说明这个 SilkBuilder 只建了 1 条线，那第2 条来自**别处**。
+    ///
+    /// 若场景里有**两个 SilkBuilder** 实例（Bootstrap 的
+    /// RuntimeInitializeOnLoadMethod 每次场景加载都执行）：
+    ///   · silkLines 各数各的-> 「总数」一直增长
+    ///   · lineKeys 各清各的     -> 去重完全失效，同对锚点各建一条
+    ///   · anchorLayer 各自一份  -> 两个 builder 的 Update 都响应同一次点击
+    /// 这完美解释了「只建一条线却出现两条」且「总数持续增长」。
+    ///
+    /// 每5 秒打一次，让趋势一目了然。*/
+    float lastHealth = -99f;
+
+    void ScanHealth()
+    {
+        if (Time.time - lastHealth < 5f) return;
+        lastHealth = Time.time;
+
+        var builders = FindObjectsOfType<SilkBuilder>();
+        var ctrl = FindObjectsOfType<SilkParkourController>();
+        var grids = FindObjectsOfType<VoxelGrid>();
+        var allSeg = FindObjectsOfType<SilkSegment>();
+        var allAnchor = FindObjectsOfType<AnchorPoint>();
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("[Health] ===== 场景体检 =====");
+        sb.AppendLine("  SilkBuilder 实例=" + builders.Length +
+                      "  SilkParkourController=" + ctrl.Length +
+                      "  VoxelGrid=" + grids.Length);
+        sb.AppendLine("  SilkSegment=" + allSeg.Length +
+                      "  AnchorPoint=" + allAnchor.Length +
+                      "  SilkChain=" + FindObjectsOfType<SilkChain>().Length);
+        foreach (var b in builders)
+        {
+            if (b == null) continue;
+            sb.AppendLine("  · SilkBuilder '" + b.gameObject.name +
+                          "' 线=" + b.Lines.Count +
+                          " 根节点=" + (b.transform.parent != null
+                                       ? b.transform.parent.name : "无") +
+                          " 世界坐标=" + b.transform.position);
+        }
+        sb.AppendLine("  >>> SilkBuilder>1 就是本bug 的根因：两份去重表互不干扰");
+
+        /*统计每个 builder 各自建了多少段—— 若某个段的 parentLine
+         * 不属于任何 builder 的 silkLines，说明它是孤儿（残留段）。*/
+        Debug.Log(sb.ToString());
+    }
 
     /// <summary>全面扫描：列出场景里所有约束链与所有可见丝线段。
     /// 重影问题需要知道「到底有几个渲染源」才能定位，
