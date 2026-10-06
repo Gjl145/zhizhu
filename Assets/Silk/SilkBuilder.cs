@@ -3420,8 +3420,15 @@ public class SilkParkourController : MonoBehaviour
                               " to 世界坐标=" + seg.to.WorldPosition +
                               "\n       父线=" + (seg.parentLine != null
                                        ? seg.parentLine.life.ToString() : "无") +
-                              " 实例ID=" + (seg.parentLine != null
-                                       ? seg.parentLine.GetInstanceID() : 0));
+                              // SilkLine 是普通 C# 类（不是 MonoBehaviour），
+                              // 没有 GetInstanceID。用引用地址 + 父线两端点
+                              // 代替，足以判断「是不是同一个 SilkLine 对象」。
+                              " 父线引用=" + (seg.parentLine != null
+                                       ? seg.parentLine.GetHashCode().ToString() : "无") +
+                              " 父线两端=" + (seg.parentLine != null
+                                       ? seg.parentLine.rootFrom.position + "->" +
+                                         seg.parentLine.rootTo.position
+                                       : "无"));
             }
             // 两段的 from/to 是否是同一个 AnchorPoint 对象？
             var a0 = kv.Value[0];
