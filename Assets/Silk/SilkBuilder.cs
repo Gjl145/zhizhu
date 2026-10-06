@@ -3419,7 +3419,6 @@ public class SilkParkourController : MonoBehaviour
                   "\n  本线段数 = " + (line.segments.Count) +
                   "\n  本线两端 = " + line.rootFrom.position + " ↔ " + line.rootTo.position);
     }
-    }
 
     /// <summary>
     /// 自己这个「锚点」。Parkour 世界的丝线起点。
