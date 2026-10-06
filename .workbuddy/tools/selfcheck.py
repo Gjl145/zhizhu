@@ -8,7 +8,7 @@ import re
 import sys
 
 SILK = 'Assets/Silk/SilkBuilder.cs'
-STAGE = 'Assets/Silk/SilkTestLevel.cs'
+STAGE = 'Assets/Silk/SilkParkourStage.cs'
 
 errors = []
 warns = []
@@ -48,7 +48,7 @@ ts = re.sub(r'/\*.*?\*/', '', ts, flags=re.S)
 ts = re.sub(r'"(?:\\.|[^"\\])*"', '""', ts)
 for name, o, c in [('braces', '{', '}'), ('parens', '(', ')')]:
     if ts.count(o) != ts.count(c):
-        err('SilkTestLevel 括号不配平 %s: %d vs %d' % (name, ts.count(o), ts.count(c)))
+        err('SilkParkourStage 括号不配平 %s: %d vs %d' % (name, ts.count(o), ts.count(c)))
 
 # ---------- 3. class 清单 ----------
 classes = re.findall(r'\npublic (?:static )?(?:class|interface) (\w+)', s)
@@ -234,6 +234,35 @@ for i in range(len(basic) - 1):
     if gap > reach:
         err('%s->%s 间隙 %.1f 超过跳跃跨度 %.0f' % (a, b, gap, reach))
 ok('基础区路线可通关（跳跃上限 %.1f 格 / 跨度 %.0f 格）' % (apex, reach))
+
+# ---------- 11. 跨文件类型引用（防 CS0103）----------
+# 改名类时最容易漏：文件里的类叫 A，调用处还写旧名 B -> CS0103。
+# 本项目已犯一次（SilkTestLevel -> SilkParkourStage 改了类名没改调用处）。
+# 注意要包含 enum —— SilkColor / SilkState / SilkControlMode 等都是枚举。
+other = open(STAGE, encoding='utf-8').read()
+type_pat = r'\npublic (?:static )?(?:class|interface|enum|struct) (\w+)'
+stage_types = set(re.findall(type_pat, other))
+all_code = s + other
+all_types = set(re.findall(type_pat, all_code)) | set(re.findall(type_pat, s))
+
+for cls in sorted(stage_types):
+    used = len(re.findall(r'\b' + cls + r'\s*\.', all_code))
+    if used == 0:
+        warn('定义了 %s 但无人调用 —— 可能是死代码' % cls)
+ok('跨文件类型引用：%s 均有调用点' % ', '.join(sorted(stage_types)))
+
+# 反向：SilkBuilder.cs 里用到的外部类型是否都存在
+missing = set()
+for m in re.finditer(r'\b(Silk[A-Z]\w*)\s*\.', s):
+    nm = m.group(1)
+    if nm in all_types:
+        continue
+    missing.add(nm)
+if missing:
+    for nm in sorted(missing):
+        warn('调用了 %s. 但找不到其定义（class/interface/enum/struct 都没匹配）' % nm)
+else:
+    ok('外部类型引用均可解析（class/interface/enum/struct 全覆盖）')
 
 # ---------- 汇总 ----------
 print()

@@ -2,20 +2,28 @@
 using UnityEngine;
 
 /* ============================================================
- *   SilkWebSystem.cs  ——  正方体蛛网（自然掉落版）
+ *   SilkBuilder.cs ——  正方体蛛网（单文件，含两个世界）
  *   X=左右  Y=前后  Z=高度（重力方向）
  *
- *   左键       连丝
- *   右键单击   断丝（1/4~1/2 随机，自然掉落）
- *   右键拖拽   旋转视角
- *   WASD       飞行移动
- *   QE          升降
- *   Shift       加速
- *   滚轮        微移
- *   R           取消
- *   C           清空
- *   G           织网
- *   X           老化
+ *   【本文件含两个世界，键位故意不共享】
+ *
+ *   FreeFly 自由视角（编辑器世界，用于搭建关卡、关注精确操作）
+ *     左键       点选锚点（两次点击连成一条丝线）
+ *     右键拖拽   环绕视角
+ *     右键单击   断最近的线
+ *     WASD/QE    飞行 / 升降      Shift 加速      滚轮微移
+ *     R 取消选中   C 清空   G 织网   X 老化
+ *
+ *   Parkour 第三人称（游戏世界，用于测试跑酷、手感优先）
+ *     WASD/QE    移动 / 升降      左Shift 加速
+ *     空格       地面=跳跃，空中=抓丝线（自动瞄准）
+ *     左键       自动瞄准并抓住最优锚点
+ *     左Shift    抓着丝线时松手
+ *     G          断视线中心的线
+ *     C          固化当前位置为节点（PlayerNode）
+ *     R          回起点
+ *
+ *   跑酷关卡见 SilkParkourStage.cs（4 个基础区段 + 摆荡进阶区）。
  * ============================================================ */
 
 public enum SilkState { Intact, Broken, Fading }
@@ -1892,8 +1900,8 @@ public class SilkBuilder : MonoBehaviour
     [Tooltip("玩家自建节点的世界空间碰撞半径。默认锚点仅 0.06 格，射线打不中，固化时必须放大才能被动态丝线粘住")]
     public float playerNodeRadius = 1.5f;
 
-    [Tooltip("是否生成跑酷测试关卡（3 个平台 + 沟壑）。"
-           + "临时功能，删除 SilkTestLevel.cs 后请把这里也移除")]
+    [Tooltip("是否生成跑酷测试关卡（4 个基础区段+ 摆荡进阶区，见 SilkParkourStage）。"
+           + "临时功能，删除 SilkParkourStage.cs 后请把这里也移除")]
     public bool createTestLevel = true;
 
     /// <summary>第三人称跑酷模式。为 true 时本组件不响应鼠标左键与 R，
@@ -2773,7 +2781,7 @@ public class SilkWorldBootstrap
 
         /* 跑酷测试关卡（临时）—— 属于**游戏世界**，FreeFly 下不该出现。
          * 所以改为在 HandleModeSwitch 里按模式建/清，不在 Build 里无条件创建。
-         * 删除：删掉这两处调用 + SilkTestLevel.cs 整个文件即可。*/
+         * 删除：删掉这两处调用 + SilkParkourStage.cs 整个文件即可。*/
 
         var builderGO = new GameObject("SilkBuilder");
         var builder = builderGO.AddComponent<SilkBuilder>();
@@ -3873,14 +3881,14 @@ public class SilkParkourController : MonoBehaviour
             lookAlignedOnce = false;   // 新世界需重新对齐一次视角
             FollowCamera();       // 立刻摆相机，当帧就能看到球
             // 测试关卡属于游戏世界，FreeFly 下不该存在
-            if (builder != null && builder.createTestLevel) SilkTestLevel.Create(TestLevelHalfSize());
+            if (builder != null && builder.createTestLevel) SilkParkourStage.Create(StageHalfSize());
         }
         else
         {
             /* 回编辑器世界：销毁球与测试关卡，保持画面干净。
              * FreeFly 属于关卡编辑，不该有玩家角色和跑酷台子。*/
             DestroyVisual();
-            SilkTestLevel.Clear();
+            SilkParkourStage.Clear();
             if (cam != null)
             {
                 cam.transform.position = freeFlyCameraPos;
@@ -3892,7 +3900,7 @@ public class SilkParkourController : MonoBehaviour
     }
 
     /// <summary>测试关卡用的立方体半高。从 SilkBuilder 拿，保持与网格一致。</summary>
-    float TestLevelHalfSize()
+    float StageHalfSize()
     {
         var g = builder != null ? builder.grid : null;
         return g != null ? g.GetHalfSize() : 50f;

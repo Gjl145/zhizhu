@@ -4,7 +4,7 @@
 import re
 
 s = open('Assets/Silk/SilkBuilder.cs', encoding='utf-8').read()
-stage = open('Assets/Silk/SilkTestLevel.cs', encoding='utf-8').read()
+stage = open('Assets/Silk/SilkParkourStage.cs', encoding='utf-8').read()
 
 
 def num(x):
