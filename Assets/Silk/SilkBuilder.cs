@@ -2565,6 +2565,17 @@ public class SimpleOrbitCamera : MonoBehaviour
     [Tooltip("按 F 切换拖拽方向")]
     public KeyCode flipKey = KeyCode.F;
 
+    /// <summary>光标是否被锁定。锁定时鼠标移动直接转视角（第一人称手感）。</summary>
+    public static bool cursorLocked = false;
+
+    /// <summary>锁定/解锁光标。Parkour 模式用锁定，FreeFly 用自由光标（要点击操作）。</summary>
+    public static void SetCursorLocked(bool locked)
+    {
+        cursorLocked = locked;
+        Cursor.lockState = locked ? CursorLockMode.Locked : CursorLockMode.None;
+        Cursor.visible = !locked;
+    }
+
     /// <summary>
     /// 相机是否响应输入。Parkour 模式下必须关掉 ——
     /// 否则 WASD/QE/Space 会同时被相机和玩家读取，两边一起动。
@@ -2660,17 +2671,46 @@ public class SimpleOrbitCamera : MonoBehaviour
         yaw = Mathf.Atan2(f.y, f.x) * Mathf.Rad2Deg;
     }
 
-    /// <summary>只响应右键环绕，不响应键盘移动。Parkour 模式下相机跟随玩家。</summary>
+    /// <summary>
+    /// Parkour 模式下的视角控制：**鼠标锁定式**（第一人称手感）。
+    ///
+    /// 与 FreeFly 的关键区别：
+    ///   FreeFly —— 按住右键拖动才转视角（编辑用的精确操作）
+    ///   Parkour —— 鼠标移动直接转视角，**不需要按任何键**（游戏手感）
+    ///
+    /// 这是两个世界需求不同的又一体现 —— 编辑要精确，游戏要顺手。
+    /// </summary>
     void HandleLookOnly()
     {
-        if (!Input.GetMouseButton(1)) return;
-        float signX = dragFollowsMouse ? 1f : -1f;
-        float signY = dragFollowsMouse ? 1f : -1f;
-        yaw += signX * Input.GetAxis("Mouse X") * rotateSpeed;
-        pitch += signY * Input.GetAxis("Mouse Y") * rotateSpeed;
-        pitch = Mathf.Clamp(pitch, -85f, 85f);
-        ApplyRotation();
+        // 鼠标锁定：光标锁在屏幕中心，用 Mouse X/Y 增量直接驱动视角。
+        // Cursor.lockState 让 Input.GetAxis("Mouse X/Y") 持续返回增量值。
+        if (lockCursorForLook)
+        {
+            float mx = Input.GetAxis("Mouse X");
+            float my = Input.GetAxis("Mouse Y");
+            float signX = dragFollowsMouse ? 1f : -1f;
+            float signY = dragFollowsMouse ? 1f : -1f;
+            yaw += signX * mx * lookSensitivity;
+            pitch += signY * my * lookSensitivity;
+            pitch = Mathf.Clamp(pitch, -85f, 85f);
+            ApplyRotation();
+        }
+        else if (Input.GetMouseButton(1))   // 未锁定时的退化方案：右键拖动
+        {
+            float signX = dragFollowsMouse ? 1f : -1f;
+            float signY = dragFollowsMouse ? 1f : -1f;
+            yaw += signX * Input.GetAxis("Mouse X") * rotateSpeed;
+            pitch += signY * Input.GetAxis("Mouse Y") * rotateSpeed;
+            pitch = Mathf.Clamp(pitch, -85f, 85f);
+            ApplyRotation();
+        }
     }
+
+    [Tooltip("Parkour 模式下锁定光标，让鼠标移动直接控制视角（第一人称手感）")]
+    public bool lockCursorForLook = true;
+
+    [Tooltip("光标锁定时的视角灵敏度（度/像素）。右键拖动用rotateSpeed")]
+    public float lookSensitivity = 0.22f;
 
     /// 由 yaw(绕Z) + pitch(仰角) 直接构造朝向，+Z 为上。
     /// 不能用 Quaternion.Euler —— 那是 Y-up 硬编码。
@@ -2787,6 +2827,8 @@ public class SilkParkourController : MonoBehaviour
         camComp = cam != null ? cam.GetComponent<Camera>() : Camera.main;
         transform.position = startPosition;
         CreateVisual();
+        UpdateVisualColor();   // 立即上色+摆朝向，否则第一帧是默认朝向
+        FollowCamera();// 立即摆一次相机，切Tab 当帧就能看到球
     }
 
     /// <summary>自动创建一个可见球体代表「玩家」。
@@ -2901,9 +2943,17 @@ public class SilkParkourController : MonoBehaviour
             }
         }
 
-        /* 相机跟随放在最后：Unity 的 Update 顺序不确定，
-         * 若本帧先跑 FollowCamera 定位、再跑 SimpleOrbitCamera.ApplyRotation，
-         * 旋转会把刚算好的位置带偏。这里确保位置是本帧最后写入的。 */
+        /* 相机跟随已移到 LateUpdate —— Unity 的 Update 顺序不保证，
+         * 在 Update 里写位置会被 SimpleOrbitCamera 后续的 Update 覆盖。*/
+    }
+
+    /// <summary>
+    /// LateUpdate 而非 Update：Unity 保证所有 Update 之后才执行 LateUpdate，
+    /// 此时相机的位置写入不会被自己的旋转逻辑覆盖，球一定在画面里。
+    /// 这也是「看不到球」的真正原因 —— 不是球没创建，是相机被覆盖了。
+    /// </summary>
+    void LateUpdate()
+    {
         if (mode == SilkControlMode.Parkour) FollowCamera();
     }
 
@@ -2920,6 +2970,8 @@ public class SilkParkourController : MonoBehaviour
 
         // Parkour 时关掉相机输入，否则两边同时响应 WASD/QE
         SimpleOrbitCamera.inputEnabled = (mode == SilkControlMode.FreeFly);
+        // Parkour 锁光标（鼠标直接控制视角），FreeFly 放光标（要点击建点）
+        SimpleOrbitCamera.SetCursorLocked(mode == SilkControlMode.Parkour);
 
         // 同步告知 SilkBuilder：跑酷模式下左键/R 归玩家，它别抢
         if (builder != null) builder.parkourMode = (mode == SilkControlMode.Parkour);
