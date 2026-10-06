@@ -182,9 +182,9 @@ public class SilkGrabSignal : ISilkEvent
     public bool startSwing = false;      // 抓住后是否立刻开始摆动
     public SilkLine target = null;       // 指定要抓的线；null = 由处理器自行搜索
 
-    public SilkGrabSignal(Transform point, string name = "物体", bool swing = false)
+    public SilkGrabSignal(Transform point, string label = "物体", bool startSwing = false)
     {
-        attachPoint = point; label = name; startSwing = swing;
+        attachPoint = point; this.label = label; this.startSwing = startSwing;
     }
 
     /// <summary>指定目标线。发布方已找到线时用它，
@@ -240,9 +240,9 @@ public class SilkFireSignal : ISilkEvent
     public Vector3 to;           // 命中点（墙面）
     public bool autoAttach;      // 生成后是否立刻挂上去
 
-    public SilkFireSignal(Vector3 f, Vector3 t, bool attach = true)
+    public SilkFireSignal(Vector3 from, Vector3 to, bool autoAttach = true)
     {
-        from = f; to = t; autoAttach = attach;
+        this.from = from; this.to = to; this.autoAttach = autoAttach;
     }
 
     public void Handle(SilkBuilder handler)
@@ -892,6 +892,14 @@ public class SilkLine
     /// <summary>抓住丝线：末端挂上玩家，链条转为 Anchored。</summary>
     public bool Grab(Transform player, SilkBuilder builder)
         => Attach(player, builder, "玩家");
+
+    /// <summary>挂到已有的锚点上（复用 CreateAnchorAt 建好的点）。
+    /// 避免为了拿一个 Transform 而多建一个重复锚点。</summary>
+    public bool Attach(AnchorPoint anchor, SilkBuilder builder, string label = "锚点")
+    {
+        if (anchor == null) return false;
+        return Attach(anchor.transform, builder, label);
+    }
 
     /// <summary>开始施力摆动。明天按 W/S/A/D 时调用。</summary>
     public bool StartSwing()
@@ -2968,7 +2976,7 @@ public class SilkParkourController : MonoBehaviour
         // 不指定的话 ExecuteGrab 会用它自己的 pickRadius(15) 重新找，
         // 而这里的 grabRange 是 30，两处半径不一致会抓到不同的线，
         // 造成「以为抓住了、实际没挂上」的状态错乱。
-        SilkEventBus.Post(new SilkGrabSignal(transform, "玩家", swing: true).On(best));
+        SilkEventBus.Post(new SilkGrabSignal(transform, "玩家", startSwing: true).On(best));
         grabbed = best;
         isFlying = false;
         Debug.Log("[Parkour] 抓住丝线");
