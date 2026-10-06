@@ -4006,9 +4006,30 @@ public class SilkParkourController : MonoBehaviour
     public bool autoSwingAfterHook = true;
 
     [Header("第三人称相机")]
-    [Tooltip("相机水平跟随距离。球在 z=30、顶棚在 z=50，只有 20 格余量，"
-           + "故 camHeight 不宜超过 15")]
-    public float camDistance = 30f;
+    /* 【换载具时的参数速查】
+     *
+     * 用户规划：后续要把球换成跑动的人 / 飞机 / 汽车。
+     * 这几项**互相耦合**，换载具时必须一起调，只改一个会失衡：
+     *
+     *   项目          尺寸     camDistance   moveSpeed   visualRadius
+     *   跑动的人      高 1.8     4~7         8~12       0.6~0.9
+     *   汽车          长 4.5    11~18        30~50      1.2~1.8
+     *   球(当前)      直径 9     22~36       350~450    4.5
+     *   飞机          翼展 12   30~48        80~150     2~4
+     *
+     * 经验公式：camDistance ≈ 载具长度 × 2.5~4
+     *          moveSpeed   ≈ 载具长度 × 50（跑动的人约 10、汽车约 25）
+     *
+     * ⚠ visualRadius 是「玩家整体尺寸」，同时用于碰撞半径、
+     *   地面吸附高度、场景边界限制 —— 换载具后这项影响最大。
+     * ⚠ 高速时务必检查 StickToGround 的 probe：
+     *   单帧位移（moveSpeed/60）不能超过探测范围，
+     *   现有实现已用 max(容差+半径, 单帧位移×1.5+半径)兜底。*/
+    [Tooltip("相机水平跟随距离（格）。球半径从 6 缩到 4.5 后，"
+           + "若不调近则球在画面里显得比原来小 —— 30 -> 24 正好抵消缩小量。"
+           + "换载具时按「载具尺寸 × 2.5~4」重设（见上方速查表）")]
+    public float camDistance = 24f;
+
     [Tooltip("相机高于球的高度。必须 < 20（球到顶棚的距离），否则相机穿出顶棚")]
     public float camHeight = 10f;
 
@@ -4147,12 +4168,12 @@ public class SilkParkourController : MonoBehaviour
     public LayerMask groundMask = ~0;
 
     [Tooltip("地面加速度（格/秒²）。**约为 moveSpeed 的 5 倍**"
-        + "（即约 0.2 秒到全速）。moveSpeed 从 225 提到 350 后，"
-        + "本值必须同步上调，否则会「滑行」——手速跟不上球")]
-    public float groundAccel = 1750f;
+        + "（即约 0.2 秒到全速）。每次提速都必须同步上调，"
+        + "否则手速跟不上球、表现为「滑行」")]
+    public float groundAccel = 2250f;
 
     [Tooltip("地面减速度（格/秒²）。与加速度同量级，停得干脆")]
-    public float groundDecel = 1600f;
+    public float groundDecel = 2000f;
 
     [Tooltip("按住左Shift 的速度倍率")]
     public float sprintMultiplier = 1.8f;
@@ -4203,9 +4224,10 @@ public class SilkParkourController : MonoBehaviour
     }
 
     [Header("自由移动")]
-    [Tooltip("WASD 移动球的速度（格/秒）。版本历程：35 → 75 → 225 → 350。"
-           + "平台间距 30 格，350 约 0.086 秒跨过，非常急促")]
-    public float moveSpeed = 350f;
+    [Tooltip("WASD 移动速度（格/秒）。历程：35 → 75 → 225 → 350 → 450。"
+           + "平台间距 30 格，450 约 0.067 秒跨过。"
+           + "⚠换载具时要重设：人约 8~12、汽车约 30~50、飞机约 80~150")]
+    public float moveSpeed = 450f;
 
     /* ---------- 挂荡：按输入移动自己，丝线末端跟随 ---------- */
     void UpdateSwing(float dt)
