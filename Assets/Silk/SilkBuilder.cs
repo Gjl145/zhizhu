@@ -2649,6 +2649,17 @@ public class SimpleOrbitCamera : MonoBehaviour
             transform.position += transform.forward * scroll * scrollZoomSpeed;
     }
 
+    /// <summary>按当前 position 重新反解 yaw/pitch 并应用。
+    /// 切回 FreeFly 时用 —— 因为 Parkour 期间 FollowCamera 改了相机位置，
+    /// 但 yaw/pitch 仍是旧值，不重算会导致朝向与位置不一致。</summary>
+    public void ResetOrientation()
+    {
+        Vector3 f = transform.forward;
+        if (f.sqrMagnitude < 0.0001f) return;
+        pitch = Mathf.Asin(Mathf.Clamp(f.z, -1f, 1f)) * Mathf.Rad2Deg;
+        yaw = Mathf.Atan2(f.y, f.x) * Mathf.Rad2Deg;
+    }
+
     /// <summary>只响应右键环绕，不响应键盘移动。Parkour 模式下相机跟随玩家。</summary>
     void HandleLookOnly()
     {
@@ -2736,18 +2747,26 @@ public class SilkParkourController : MonoBehaviour
     public bool autoCreateVisual = true;
     public float visualRadius = 3f;
 
-    [Tooltip("自由飞行时的颜色 / 抓丝时的颜色，便于一眼区分状态")]
+    [Tooltip("状态配色：蓝=自由移动 / 黄=抓着丝线 / 绿=正在建锚点")]
     public Color freeColor = new Color(0.4f, 0.8f, 1f);
     public Color attachedColor = new Color(1f, 0.75f, 0.2f);
+    public Color buildColor = new Color(0.4f, 1f, 0.5f);
+    [Tooltip("朝向指示器的颜色（深红），指向球的正前方")]
+    public Color noseColor = new Color(0.9f, 0.25f, 0.2f);
 
     SilkBuilder builder;
     SilkLine grabbed;                 // 当前抓着哪根线
     Vector3 flightVel;                // 脱手后的飞行速度
     bool isFlying;
     Vector3 bodyVelocity;             // 挂载期间的自身速度（由位置差反推）
-    Transform visual;                 // 可见球体（自动创建）
+    Transform visual;                 // 主角根节点（含身体+朝向指示）
+    MeshRenderer bodyRenderer;        // 身体球（状态配色用）
+    MeshRenderer noseRenderer;        // 朝向前锥
     SimpleOrbitCamera cam;            // 第三人称时由它跟随
     Camera camComp;                   // ScreenPointToRay 等方法在 Camera 上，不在控制器上
+
+    /// <summary>切回 FreeFly 时相机要还原到的位置（立方体中心附近的斜上方）。</summary>
+    Vector3 freeFlyCameraPos = new Vector3(120f, -120f, 85f);
 
     [Header("构建锚点")]
     [Tooltip("需要先发射多少次丝线，才允许在当前位置构建锚点。"
@@ -2777,31 +2796,85 @@ public class SilkParkourController : MonoBehaviour
     {
         if (!autoCreateVisual || visual != null) return;
 
-        var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        go.name = "ParkourBody";
+        /* 主角 = 球体 + 朝向指示器。
+         * 之前只有一个纯球，看不出朝向 —— 操作时无法判断「面朝哪边」，
+         * 也不知道 WASD 往哪个方向走。加入朝向前锥后就直观了。*/
+        var go = new GameObject("ParkourBody");
         go.transform.SetParent(transform);
-        go.transform.localScale = Vector3.one * (visualRadius * 2f);
-        // 去掉碰撞体：位置由本脚本直接控制，物理碰撞会与之打架
-        var col = go.GetComponent<Collider>();
-        if (col != null) Destroy(col);
-
-        var mr = go.GetComponent<MeshRenderer>();
-        if (mr != null)
-        {
-            Shader sh = Shader.Find("Universal Render Pipeline/Lit");
-            if (sh == null) sh = Shader.Find("Standard");
-            if (sh == null) sh = Shader.Find("Sprites/Default");
-            if (sh != null) mr.material = new Material(sh) { color = freeColor };
-        }
+        go.transform.localScale = Vector3.one;
         visual = go.transform;
+
+        // 身体：球
+        var body = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        body.name = "Body";
+        body.transform.SetParent(visual);
+        body.transform.localPosition = Vector3.zero;
+        body.transform.localScale = Vector3.one * visualRadius;
+        var bc = body.GetComponent<Collider>();
+        if (bc != null) Object.Destroy(bc);   // 位置由脚本控制，物理碰撞会打架
+        Paint(body, freeColor);
+        bodyRenderer = body.GetComponent<MeshRenderer>();
+
+        // 朝向指示：一个压扁的球体，放在「前方」提示朝向
+        // 高度轴是 +Z（项目约定），所以前方用相机水平朝向
+        var nose = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        nose.name = "Nose";
+        nose.transform.SetParent(visual);
+        nose.transform.localScale = new Vector3(visualRadius * 0.5f,
+                                                visualRadius * 0.5f,
+                                                visualRadius * 0.9f);
+        var nc = nose.GetComponent<Collider>();
+        if (nc != null) Object.Destroy(nc);
+        Paint(nose, noseColor);
+        noseRenderer = nose.GetComponent<MeshRenderer>();
+
+        UpdateVisualFacing();
     }
 
+    /// <summary>给刚建的物件上色。</summary>
+    static void Paint(GameObject go, Color c)
+    {
+        var mr = go.GetComponent<MeshRenderer>();
+        if (mr == null) return;
+        Shader sh = Shader.Find("Universal Render Pipeline/Lit");
+        if (sh == null) sh = Shader.Find("Standard");
+        if (sh == null) sh = Shader.Find("Sprites/Default");
+        if (sh != null) mr.material = new Material(sh) { color = c };
+    }
+
+    /// <summary>
+    /// 让「鼻尖」指向球的前进方向。
+    /// 优先用运动方向；静止时用相机水平朝向 ——
+    /// 这样即使不动，按 W 也有明确的前进方向。
+    /// </summary>
+    void UpdateVisualFacing()
+    {
+        if (visual == null) return;
+
+        Vector3 f = bodyVelocity;                 // 挂丝线时的运动方向
+        f.z = 0f;
+        if (f.sqrMagnitude < 0.5f) f = camLookFlat; // 否则用相机朝向
+        if (f.sqrMagnitude < 0.0001f) f = Vector3.right;
+
+        visual.rotation = Quaternion.LookRotation(f.normalized, Vector3.forward);
+    }
+
+    /// <summary>
+    /// 主角状态配色：
+    ///   蓝 = 自由移动　黄 = 抓着丝线　绿 = 正在建锚点
+    /// </summary>
     void UpdateVisualColor()
     {
         if (visual == null) return;
-        var mr = visual.GetComponent<MeshRenderer>();
-        if (mr != null && mr.material != null)
-            mr.material.color = isFlying ? freeColor : attachedColor;
+
+        bool building = builder != null && builder.HasPendingNode;
+        Color c = building ? buildColor
+                : (isFlying ? freeColor : attachedColor);
+
+        if (bodyRenderer != null && bodyRenderer.material != null)
+            bodyRenderer.material.color = c;
+
+        UpdateVisualFacing();
     }
 
     void Update()
@@ -2861,6 +2934,18 @@ public class SilkParkourController : MonoBehaviour
             isFlying = true;
             // 立刻摆一次相机 —— 否则要等下一帧才看得到球
             FollowCamera();
+        }
+        else
+        {
+            /* 切回 FreeFly：把相机拉回立方体中心附近。
+             * Parkour 期间 FollowCamera 每帧改写相机位置，
+             * 不还原的话相机会停在球附近（球可能在房间另一头），
+             * 看起来就像「没切回来」。*/
+            if (cam != null)
+            {
+                cam.transform.position = freeFlyCameraPos;
+                cam.ResetOrientation();
+            }
         }
         Debug.Log("[Mode] 切换为 " + mode);
     }
