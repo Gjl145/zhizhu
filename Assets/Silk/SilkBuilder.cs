@@ -599,6 +599,16 @@ public class SilkSegment : MonoBehaviour
         if (lr != null) lr.enabled = OwnsRender;
     }
 
+    /// <summary>解除渲染接管：把自己还给自己画。
+    /// 断裂时必须对**所有**残留段调用 —— 否则被误标chainDriven 的段
+    /// 会永远停在最后一帧的顶点上，变成一根僵死的「残影线」。
+    /// 这正是「断裂后看到两条长度不一的线」的成因。</summary>
+    public void ClearRenderClaim()
+    {
+        chainDriven = false;
+        if (lr != null) lr.enabled = visible;
+    }
+
     // 钟摆物理
     Vector3 freePendulumVel;
     bool freePendulumInited;
@@ -1018,8 +1028,33 @@ public class SilkLine
         chain.maxStrain = 0.25f;
 
         chain.Build(rootFrom, rootTo, this, 1f);
-        // 渲染不再需要「让位」—— SilkChain 只用那一个 SilkSegment 画线，
-        // 形状由物理节点决定，没有第二个渲染源。
+        /* 渲染归属显式指定。
+         *
+         * Build() 不再自动认领 segments[0]（那会误伤别的段），
+         * 所以这里必须明确交给「离玩家最近的那一段」——
+         * 由 SilkSegment 自己算出弧线中点，取离末端最近的那个。
+         * 找不到就干脆不接管渲染（线保持静态弧线，不会重影）。*/
+        var segForRender = PickNearestSegmentTo(rootTo.WorldPosition);
+        if (segForRender != null)
+        {
+            segForRender.noSag = true;      // 弧度交给约束链算，别再叠加中点下垂
+            chain.SetRenderSegment(segForRender);
+        }
+    }
+
+    /// <summary>取离指定世界坐标最近的一段。用于决定约束链接管哪一段的渲染。</summary>
+    SilkSegment PickNearestSegmentTo(Vector3 worldPoint)
+    {
+        SilkSegment best = null;
+        float bestD = float.MaxValue;
+        foreach (var seg in segments)
+        {
+            if (seg == null) continue;
+            float d = PointToSegment(worldPoint,
+                                     seg.from.WorldPosition, seg.to.WorldPosition);
+            if (d < bestD) { bestD = d; best = seg; }
+        }
+        return best;
     }
 
     /// <summary>把丝线恢复到静态状态：销毁约束链、解除渲染接管、
@@ -1030,7 +1065,8 @@ public class SilkLine
         foreach (var seg in segments)
             if (seg != null)
             {
-                seg.chainDriven = false;
+                seg.ClearRenderClaim();
+                seg.noSag = false;        // 静态悬链线要恢复自己的下垂
                 seg.SetVisible(true);
             }
 
@@ -1180,6 +1216,16 @@ public class SilkLine
         node.Setup(bp, grid.WorldToVoxel(bp), AnchorType.SilkNode);
         node.SetColor(Color.white);
 
+        /* 先解除**所有**段的渲染接管。
+         *
+         * 这是「断裂后两条线」的关键修复点。旧实现在这里只对 oldSeg 设
+         * chainDriven = true，但 oldSeg 马上被销毁；而同一根线的其它段
+         * 可能早先被约束链误标过 chainDriven（见 EnsureChain 的历史 bug），
+         * 那些段没人写顶点、自身Update 又已return —— 于是一根根僵死的
+         * 弧线留在屏幕上，长度各不相同，看起来就是「两条长度不一的线」。
+         * 全部ClearRenderClaim() 让它们恢复自绘。*/
+        foreach (var s in segments)
+            if (s != null) s.ClearRenderClaim();
         segments.Remove(oldSeg);
 
         /* 断掉可能存在的旧约束链。
@@ -1198,10 +1244,6 @@ public class SilkLine
         else if (chain != null) Object.Destroy(chain.gameObject);
         chain = null;
         chainGO = null;
-
-        // 旧段的渲染要还给新链：新链会接管 oldSeg 的 LineRenderer，
-        // 所以这里不隐藏 oldSeg，只是不再让segments 保留它。
-        oldSeg.chainDriven = true;
 
         // 上半截：保留为约束链，由 SilkChain 驱动自然摆动
         // 下半截：按需求直接丢弃，不创建任何段
@@ -1476,25 +1518,21 @@ public class SilkChain : MonoBehaviour
         for (int i = 0; i < nodes.Count; i++)
             velocities.Add(Vector3.zero);
 
-        /* 渲染责任：只交给原 SilkSegment 一根线。
+        /* 渲染责任：**不再在这里自动认领任何段**。
          *
-         * 旧实现在这里建了 8 个 ChainSeg_ 当「画笔」，还强制 noSag=true
-         * 把弧度关掉 —— 结果同一根线被 SilkSegment（弧线）和
-         * 8 段 ChainSeg（直线折线）同时渲染，视觉上就是「两条线」。
+         * 旧实现是 `renderSeg = owner.segments[0]`，这有两个致命问题：
+         *   1) segments[0] 未必是被断的那一段。一根 SilkLine 可能有多段，
+         *      断裂时 oldSeg 已从列表移除，segments[0] 变成**另一段完好的丝线**，
+         *      于是它被误标 chainDriven —— 而本组件并不会写它的顶点，
+         *      它就永远僵死在最后一帧的弧线上，变成一根长度不一的「残影线」。
+         *      这就是用户反复看到「断裂后是两条线、长度还不一样」的根因。
+         *   2) 自动认领让「谁渲染」这件事变得不可控。
          *
-         * 正确做法：约束链的 nodes 已经带重力/阻尼/约束，
-         * 位置本身就是物理算出来的弧形。每帧把 nodes 的位置
-         * 写进那一个 SilkSegment 的 LineRenderer 顶点即可 ——
-         * 一根线，形变由物理决定，不需要第二个渲染源。*/
-        if (owner != null && owner.segments.Count > 0)
-        {
-            renderSeg = owner.segments[0];
-            // 交给本组件渲染：设chainDriven 并关掉它自己的 LineRenderer，
-            // 否则两个渲染源同时画 -> 视觉上两条线
-            renderSeg.chainDriven = true;
-            var lr0 = renderSeg.GetComponent<LineRenderer>();
-            if (lr0 != null) lr0.enabled = false;
-        }
+         * 现在统一由调用方显式 SetRenderSegment(段) 指定，
+         * 本组件只负责往那一个段写顶点。*/
+        if (owner != null)
+            foreach (var s in owner.segments)
+                if (s != null) s.ClearRenderClaim();
 
         initialized = true;
     }
@@ -1617,6 +1655,11 @@ public class SilkChain : MonoBehaviour
         var lr = renderSeg.GetComponent<LineRenderer>();
         if (lr == null) return;
 
+        /* 自愈：渲染器必须开着。
+         * 本组件是这一段的唯一渲染来源，若 lr.enabled 被别处置成 false，
+         * 线就会凭空消失。这里每帧兜底保证开启 —— 这类 bug 曾反复出现。*/
+        if (!lr.enabled) lr.enabled = true;
+
         int n = nodes.Count;
         lr.positionCount = n;
         for (int i = 0; i < n; i++)
@@ -1632,11 +1675,22 @@ public class SilkChain : MonoBehaviour
     {
         renderSeg = seg;
         if (seg == null) return;
-        // 被接管的段不再自己渲染，否则又会出现两个渲染源
+        /* 被接管的段不再自己渲染，但要**保持 LineRenderer 开启**。
+         *
+         * 这里原来写的是 lr.enabled = false —— 那是错的：
+         * 本组件正是要往这条LineRenderer 里写顶点（ApplyNodesToRender），
+         * 关掉它等于把唯一的渲染源也关掉了，整根线会消失。
+         *
+         * 「不要两个渲染源」靠的是 chainDriven 标记：
+         * SilkSegment.Update 开头看到 chainDriven 就return，不再自己画弧线。
+         * 渲染器本身必须留着给本组件用。*/
         seg.chainDriven = true;
         var lr = seg.GetComponent<LineRenderer>();
-        if (lr != null) lr.enabled = false;
+        if (lr != null) lr.enabled = true;
     }
+
+    /// <summary>是否已接管渲染（诊断用：重影排查要看渲染源到底有几个）</summary>
+    public bool HasRenderSegment() => renderSeg != null;
 
     /// <summary>末端是否由外部驱动。true 时末端不受重力，由挂载物决定位置。</summary>
     public bool endDriven = false;
@@ -3221,37 +3275,65 @@ public class SilkParkourController : MonoBehaviour
 
     float lastScan = -99f;
 
-    /// <summary>扫描场景里所有 SilkSegment，按「两端点」分组，
-    /// 找出被重复渲染的点对。每 2 秒一次。</summary>
+    /// <summary>全面扫描：列出场景里所有约束链与所有可见丝线段。
+    /// 重影问题需要知道「到底有几个渲染源」才能定位，
+    /// 凭猜测改代码效率太低。每 2 秒一次。</summary>
     void ScanRenderers()
     {
         if (!renderScan) return;
         if (Time.time - lastScan < 2f) return;
         lastScan = Time.time;
 
+        /* 1. 约束链 —— 泄漏的话这里会 >1 */
+        var chains = FindObjectsOfType<SilkChain>();
+        Debug.Log("[Scan] 约束链数量 = " + chains.Length);
+        foreach (var ch in chains)
+        {
+            if (ch == null) continue;
+            Debug.Log("[Scan]   链 " + ch.gameObject.name +
+                      " active=" + ch.gameObject.activeInHierarchy +
+                      " enabled=" + ch.enabled +
+                      " 有渲染段=" + (ch.HasRenderSegment()));
+        }
+
+        /* 2. 可见丝线段 —— 逐段列出两端点，重合的就是重影 */
+        int visible = 0, hidden = 0, ghost = 0;
         var groups = new Dictionary<string, int>();
         foreach (var seg in FindObjectsOfType<SilkSegment>())
         {
             if (seg == null) continue;
             var lr = seg.GetComponent<LineRenderer>();
-            if (lr == null || !lr.enabled) continue;      // 只统计可见的
-            if (seg.from == null || seg.to == null) continue;
+            bool on = lr != null && lr.enabled;
+            if (!on) { hidden++; continue; }
+            visible++;
 
-            // 用体素坐标做 key，与顺序无关
+            /* 残影检测：chainDriven=true 意味着「我不再自己画」，
+             * 顶点应由 SilkChain 每帧写入。若没有任何链接管这一段，
+             * 它就永远停在最后一帧的顶点上 —— 这就是那根
+             * 「长度不一样、僵在屏幕上的第二条线」。*/
+            if (seg.chainDriven)
+            {
+                ghost++;
+                Debug.Log("[Scan] !! 残影段 " + seg.gameObject.name +
+                          " 被标记 chainDriven 但顶点无人写入，会僵死" +
+                          " from=" + seg.from.position + " to=" + seg.to.position);
+            }
+
+            if (seg.from == null || seg.to == null) continue;
             var pa = seg.from.position; var pb = seg.to.position;
             string key = (pa.x < pb.x || (pa.x == pb.x && pa.y < pb.y))
                 ? pa + "|" + pb : pb + "|" + pa;
             if (!groups.ContainsKey(key)) groups[key] = 0;
             groups[key]++;
         }
-
-        int dup = 0;
         foreach (var kv in groups)
-            if (kv.Value > 1) { dup++; Debug.Log("[Scan] 重复渲染 " + kv.Value + " 层: " + kv.Key); }
-        Debug.Log("[Scan] 可见 SilkSegment 点对数 = " + groups.Count + "，其中重复 " + dup);
+            if (kv.Value > 1)
+                Debug.Log("[Scan] !! 同端点被渲染 " + kv.Value + " 层: " + kv.Key);
+        Debug.Log("[Scan] SilkSegment 可见 " + visible + " / 隐藏 " + hidden +
+                  " / 残影 " + ghost + "，可见点对 " + groups.Count);
     }
 
-    [Tooltip("扫描场景里被重复渲染的丝线（排查重影）")]
+[Tooltip("扫描场景里被重复渲染的丝线（排查重影）")]
     public bool renderScan = true;
 
     SilkControlMode mode = SilkControlMode.FreeFly;
