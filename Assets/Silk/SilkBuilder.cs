@@ -2349,7 +2349,20 @@ public class SilkWorldBootstrap
             if (sh == null) sh = Shader.Find("Sprites/Default");
             mr.material = new Material(sh) { color = new Color(0.15f, 0.15f, 0.2f, 0.3f) };
             mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+
+            /* 关键：CreatePrimitive 只有 Cube/Sphere/Capsule/Cylinder 会自动加
+             * Collider，**Quad 不会** —— 所以墙是没有实体的，球能直接穿过去。
+             * 这里手动加 BoxCollider 做实体阻挡：
+             *   -厚 1 格的薄盒，正好贴在墙面位置
+             *   - 尺寸取立方体全宽，保证整面墙都能挡
+             */
+            var box = wall.AddComponent<BoxCollider>();
+            box.size = new Vector3(h * 2f, h * 2f, 1f);
         }
+
+        // 地板与顶板单独处理：Quad 是平面片，BoxCollider 沿它的局部 Z 方向最薄，
+        // 而上面已经把局部 Z 对齐到法线，故 Top/Bottom 的薄方向是正确的。
+        // 但左右前后四壁的 Quad 同样适用（局部 Z = 墙面法线）。
     }
 
     /* ============ 锚点：底面满网格 / 左右面 3/4~1 高区 / 顶面中心一点 ============
@@ -2448,6 +2461,23 @@ public class SimpleOrbitCamera : MonoBehaviour
     public static bool inputEnabled = true;
 
     float yaw, pitch;   // yaw 绕 Z，pitch 仰角
+
+    /// <summary>当前 yaw。第三人称相机跟随用它算「后方」。</summary>
+    public float Yaw => yaw;
+
+    /// <summary>视线方向的水平单位向量。
+    /// 用它而不是 transform.forward 算相机位置 ——
+    /// 后者会被 FollowCamera 的位置写入与 ApplyRotation 的旋转写入互相拉扯，
+    /// 表现为画面抖动。</summary>
+    public Vector3 LookDirFlat
+    {
+        get
+        {
+            Vector3 d = new Vector3(Mathf.Cos(yaw * Mathf.Deg2Rad),
+                                   Mathf.Sin(yaw * Mathf.Deg2Rad), 0f);
+            return d.sqrMagnitude < 0.0001f ? Vector3.right : d.normalized;
+        }
+    }
 
     void Start()
     {
@@ -2668,8 +2698,12 @@ public class SilkParkourController : MonoBehaviour
             else UpdateSwing(dt);
             HandleKeys();
             UpdateVisualColor();
-            FollowCamera();
         }
+
+        /* 相机跟随放在最后：Unity 的 Update 顺序不确定，
+         * 若本帧先跑 FollowCamera 定位、再跑 SimpleOrbitCamera.ApplyRotation，
+         * 旋转会把刚算好的位置带偏。这里确保位置是本帧最后写入的。 */
+        if (mode == SilkControlMode.Parkour) FollowCamera();
     }
 
     SilkControlMode mode = SilkControlMode.FreeFly;
@@ -2703,24 +2737,34 @@ public class SilkParkourController : MonoBehaviour
         Debug.Log("[Mode] 切换为 " + mode);
     }
 
-    /// <summary>第三人称跟随：相机固定在球的后上方，并始终看向球。
-    /// 高度方向是 +Z（项目约定 Z 为高度轴）。</summary>
+    /// <summary>
+    /// 第三人称跟随：**只跟随位置，不接管朝向**。
+    ///
+    /// 之前每帧写 cam.transform.rotation = LookRotation(球-相机)，
+    /// 结果把右键环绕（SimpleOrbitCamera 维护的 yaw/pitch）覆盖掉了 ——
+    /// 表现为「视角固定，转不动」。
+    ///
+    /// 现在改为：位置跟随球，朝向交给 SimpleOrbitCamera 自己管。
+    /// 因为 Parkour 模式下 inputEnabled=false（关掉键盘），
+    /// 但 HandleLookOnly() 仍然响应右键环绕 —— 两者不冲突。
+    /// </summary>
     void FollowCamera()
     {
         if (cam == null) return;
-        // 后方取「相机当前朝向的水平分量」，这样右键环绕后视角仍连贯
-        Vector3 back = cam.transform.forward;
-        back.z = 0f;
-        if (back.sqrMagnitude < 0.0001f) back = Vector3.back;
-        back = back.normalized;
+
+        // 用 cam.LookDirFlat（由 yaw 直接算出）而不是 cam.transform.forward。
+        // 原因：transform.forward 会被本方法的位置写入与相机自身的旋转写入
+        // 互相拉扯 —— 位置跟随读 forward、旋转又改 forward，下一帧位置就偏了，
+        // 表现为画面抖动。
+        Vector3 look = cam.LookDirFlat;
+        if (look.sqrMagnitude < 0.0001f) look = Vector3.back;
 
         cam.transform.position = transform.position
-                               - back * camDistance
+                               - look * camDistance
                                + new Vector3(0f, 0f, camHeight);
         cam.transform.up = Vector3.forward;
-        // 必须 LookAt，否则相机朝向停留在Bootstrap 时的旧值，球移出会跑出画面
-        cam.transform.rotation = Quaternion.LookRotation(
-            (transform.position - cam.transform.position).normalized, Vector3.forward);
+        // 不写 rotation —— 交给 SimpleOrbitCamera 的 ApplyRotation，
+        // 否则会覆盖右键环绕的结果
     }
 
     [Header("蜘蛛侠式发射")]
@@ -2735,18 +2779,47 @@ public class SilkParkourController : MonoBehaviour
     public bool autoSwingAfterHook = true;
 
     [Header("第三人称相机")]
-    [Tooltip("相机跟随距离。原 40 太远 —— 配合半径 2 的球只有 10% 视角占比，"
-           + "几乎看不见。25+ 半径 3 约 24%，清晰可见")]
-    public float camDistance = 25f;
+    [Tooltip("相机水平跟随距离。球在 z=30、顶棚在 z=50，只有 20 格余量，"
+           + "故 camHeight 不宜超过 15")]
+    public float camDistance = 40f;
+    [Tooltip("相机高于球的高度。必须 < 20（球到顶棚的距离），否则相机穿出顶棚")]
     public float camHeight = 8f;
 
-    /* ---------- 脱手飞行：纯重力 + 阻尼 ---------- */
+    /* ---------- 脱手飞行：纯重力 + 阻尼 + 撞墙反弹 ---------- */
     void UpdateFlight(float dt)
     {
         flightVel += new Vector3(0, 0, -15f * flightGravityScale) * dt;
         flightVel *= Mathf.Pow(flightDamping, dt * 60f);
-        transform.position += flightVel * dt;
+
+        // 撞墙反弹：直接积分会穿墙（加 Collider 只是让射线能命中，
+        // 不会自动阻止 transform 被移过去）。
+        // 做法：位移后若已越过墙面（|坐标| > 半高 - 球半径），
+        // 退回墙面内侧并把该轴速度取反 —— 相当于「弹一下」。
+        Vector3 next = transform.position + flightVel * dt;
+        float h = builder != null ? builder.grid.GetHalfSize() : 50f;
+        float limit = h - visualRadius;
+
+        if (Mathf.Abs(next.x) > limit)
+        {
+            next.x = Mathf.Sign(next.x) * limit;
+            flightVel.x = -flightVel.x * wallBounce;
+        }
+        if (Mathf.Abs(next.y) > limit)
+        {
+            next.y = Mathf.Sign(next.y) * limit;
+            flightVel.y = -flightVel.y * wallBounce;
+        }
+        if (Mathf.Abs(next.z) > limit)
+        {
+            next.z = Mathf.Sign(next.z) * limit;
+            flightVel.z = -flightVel.z * wallBounce;
+        }
+
+        transform.position = next;
     }
+
+    [Tooltip("撞墙后的速度保留比例。0=完全弹停，1=原速反弹，<1 有能量损失")]
+    [Range(0f, 1f)] public float wallBounce = 0.4f;
 
     /* ---------- 挂载摆动：按输入移动自己，丝线末端跟随 ---------- */
     void UpdateSwing(float dt)
