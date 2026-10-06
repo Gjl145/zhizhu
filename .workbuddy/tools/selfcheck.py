@@ -30,6 +30,21 @@ def ok(m):
 s = open(SILK, encoding='utf-8').read()
 stage = open(STAGE, encoding='utf-8').read()
 
+# ---------- 提前解析关卡平台（第 9、10 项都要用）----------
+# 原先在第 9 项内部解析，第 10 项依赖它 —— 变量作用域太脆弱，
+# 一旦调整顺序就NameError。改为在顶层解析一次，两处共用。
+_body = stage[stage.index('public static void Create'):stage.index('public static void Clear')]
+calls = re.findall(r'Plat\("([^"]+)"', _body)
+_vecs = re.findall(r'new Vector3\(\s*(-?[\d.]+)f,\s*(-?[\d.]+)f,\s*(-?[\d.]+)f\s*\)', _body)
+plats = []
+for _i, _n in enumerate(calls):
+    _c = tuple(float(x) for x in _vecs[_i * 2])
+    _s = tuple(float(x) for x in _vecs[_i * 2 + 1])
+    plats.append((_n, _c, _s))
+B = {}
+for _n, _c, _s in plats:
+    B[_n] = [(_c[i] - _s[i] / 2, _c[i] + _s[i] / 2) for i in range(3)]
+
 # ---------- 1. 括号配平 ----------
 t = re.sub(r'//[^\n]*', '', s)
 t = re.sub(r'/\*.*?\*/', '', t, flags=re.S)
@@ -152,8 +167,21 @@ pk = s.index('class SilkParkourController')
 
 
 def grab_float(key):
-    m = re.search(r'public float ' + key + r'\s*=\s*([\d.]+)f?;', s[pk:])
-    return float(m.group(1)) if m else None
+    """在 SilkParkourController 里抓字段的数值。
+    要兼容两种写法：
+      public float gravity = 50f;                     字面量
+      public float gravity = SilkPhysics.Gravity;      引用常量
+    后者无法静态求值，改为回退读取 SilkPhysics.Gravity 的定义。"""
+    m = re.search(r'public float ' + key + r'\s*=\s*([^;]+);', s[pk:])
+    if not m:
+        return None
+    expr = m.group(1).strip()
+    mm = re.match(r'^(-?[\d.]+)f?$', expr)
+    if mm:
+        return float(mm.group(1))
+    # 形如 SilkPhysics.Gravity -> 去 SilkPhysics 里查常量的值
+    mc = re.search(r'const float ' + expr.split('.')[-1] + r'\s*=\s*(-?[\d.]+)f?;', s)
+    return float(mc.group(1)) if mc else None
 
 
 g = grab_float('gravity')
@@ -183,12 +211,9 @@ if None not in (g, jv, sp):
     # 起点高度
     m = re.search(r'public Vector3 startPosition = new Vector3\(([-\d.]+)f,\s*([-\d.]+)f,\s*([-\d.]+)f\)', s)
     sx, sy, sz = (float(m.group(i)) for i in (1, 2, 3))
-    body = stage[stage.index('public static void Create'):stage.index('public static void Clear')]
-    calls = re.findall(r'Plat\("([^"]+)"', body)
-    vecs = re.findall(r'new Vector3\(\s*(-?[\d.]+)f,\s*(-?[\d.]+)f,\s*(-?[\d.]+)f\s*\)', body)
     p0 = calls[0]
-    c0 = tuple(float(x) for x in vecs[0])
-    sz0 = tuple(float(x) for x in vecs[1])
+    c0 = tuple(float(x) for x in _vecs[0])
+    sz0 = tuple(float(x) for x in _vecs[1])
     top = c0[2] + sz0[2] / 2
     want = top + rad
     if abs(sz - want) > 1.0:
@@ -200,15 +225,7 @@ if None not in (g, jv, sp):
         err('起点 x=%.1f 不在平台 %s 的 x 范围内' % (sx, p0))
 
 # ---------- 10. 关卡几何 ----------
-plats = []
-for i, n in enumerate(calls):
-    c = tuple(float(x) for x in vecs[i * 2])
-    sz_ = tuple(float(x) for x in vecs[i * 2 + 1])
-    plats.append((n, c, sz_))
-B = {}
-for n, c, sz_ in plats:
-    B[n] = [(c[i] - sz_[i] / 2, c[i] + sz_[i] / 2) for i in range(3)]
-
+# plats / B 已在文件顶部统一解析，此处直接使用。
 for n, b in B.items():
     out = ['XYZ'[i] for i in range(3) if b[i][0] < -50 or b[i][1] > 50]
     if out:

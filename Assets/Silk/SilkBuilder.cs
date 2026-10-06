@@ -28,6 +28,28 @@ using UnityEngine;
 
 public enum SilkState { Intact, Broken, Fading }
 
+/// <summary>
+/// 全局重力常量（格/秒²）。
+///
+/// 【为什么要抽成全局】
+/// 重力会同时影响三处：玩家跳跃（SilkParkourController.gravity）、
+/// 丝线约束链的末端摆动（SilkChain.gravity，建链时由 SilkLine 赋值）、
+/// 以及断裂后丝线下坠。
+/// 这三处必须一致，否则会出现「人跳得很轻快、但丝线荡得很慢」
+/// 这种割裂感（用户反馈「上升下降都太慢」时排查发现）。
+///
+/// SilkLine 是普通 C# 类、拿不到 MonoBehaviour 的字段，
+/// 所以这里用全局常量作为唯一来源，避免三处各自写死数值而漂移。
+///
+/// 【取值】50 —— 用户反馈原值 15 时「上升和下降都太慢、
+/// 跳跃有延迟」。原值下上升 1 秒 + 下降 1 秒（来回 2 秒），
+/// 视觉上像没跳起来。50 时上升/下降各 0.44 秒，干脆利落。
+/// </summary>
+public static class SilkPhysics
+{
+    public const float Gravity = 50f;
+}
+
 /* ===================== 丝线状态机 =====================
  *
  * 明天跑酷会有三种线并存：静止的、断裂后自然下坠的、带初速度且末端挂物体的。
@@ -1023,7 +1045,7 @@ public class SilkLine
         chainGO.transform.SetParent(builder.transform);
         chain = chainGO.AddComponent<SilkChain>();
         chain.damping = 0.995f;
-        chain.gravity = 15f;
+        chain.gravity = SilkPhysics.Gravity;   // 统一来源，避免与玩家重力不一致
         chain.subdivisions = 8;
 
         /* 参数必须与 SplitSegment 保持一致，否则同一根线在
@@ -1259,7 +1281,7 @@ public class SilkLine
         chainGO.transform.SetParent(builder.transform);
         chain = chainGO.AddComponent<SilkChain>();
         chain.damping = 0.995f;      // 原 0.985 半衰期仅 0.76s，摆荡 3 秒就没劲
-        chain.gravity = 15f;
+        chain.gravity = SilkPhysics.Gravity;   // 统一来源，避免与玩家重力不一致
         chain.subdivisions = 8;      // 原 3 段只有 2 个折点，撑不起绳索的弧线甩动
         // 形态连续性：沿断裂前那条悬链线布点，而不是直线均分。
         // 这样断裂瞬间垂度不会归零，视觉上不会「弹一下」。
@@ -1329,7 +1351,9 @@ public class SilkLine
 public class SilkChain : MonoBehaviour
 {
     [Header("物理参数")]
-    public float gravity = 15f;        // 重力加速度（格/s²）
+    [Tooltip("重力加速度（格/秒²）。默认取全局统一值 SilkPhysics.Gravity，"
+           + "保证丝线摆荡与玩家跳跃的重力一致")]
+    public float gravity = SilkPhysics.Gravity;
     public float damping = 0.985f;     // 每帧速度保留系数，越接近 1 摆得越久
     public float airDrag = 0.02f;      // 空气阻力（速度线性衰减）
     public float stiffness = 1f;       // 距离约束刚度，1=完全不可拉伸
@@ -4194,10 +4218,16 @@ public class SilkParkourController : MonoBehaviour
         UpdateVisualFacing();
     }
 
-    [Tooltip("重力加速度（格/秒²）。与 SilkChain.gravity 一致")]
-    public float gravity = 15f;
+    [Tooltip("重力加速度（格/秒²）。默认取 SilkPhysics.Gravity（全局统一值 50）。"
+        + "**用户反馈「上升和下降都太慢、跳跃有延迟」-> 原 15 提到 50。**"
+        + "原值下上升 1 秒 + 下降 1 秒（来回 2 秒），"
+        + "视觉上像「没跳起来」，落地后又被地面吸附粘住，整体发糊。"
+        + "改这里会同时影响丝线摆荡（建链时读 SilkPhysics.Gravity）。")]
+    public float gravity = SilkPhysics.Gravity;
 
-    [Tooltip("下落的最大速度（格/秒），避免越掉越快")]
+    [Tooltip("下落的最大速度（格/秒），避免越掉越快。"
+        + "重力 50 时从6.8 格落下约需 v=√(2×50×6.8)≈26 格/秒，"
+        + "故 120 有充足余量；仅在从极高处坠落时才会触发")]
     public float terminalVel = 120f;
 
     /// <summary>
@@ -4266,15 +4296,15 @@ public class SilkParkourController : MonoBehaviour
            + "测试关卡的方块未设自定义层，用 Everything 最稳")]
     public LayerMask groundMask = ~0;
 
-    [Tooltip("地面加速度（格/秒²）。**约为 moveSpeed 的 9 倍**"
-        + "（即约 0.11 秒到全速），手感干脆不拖沓。"
+    [Tooltip("地面加速度（格/秒²）。**约为 moveSpeed 的 10 倍**"
+        + "（即约 0.14 秒到全速），手感干脆不拖沓。"
         + "每次改moveSpeed 都要同步按比例调整本值")]
-    public float groundAccel = 360f;
+    public float groundAccel = 500f;
 
-    [Tooltip("地面减速度（格/秒²）。与加速度同量级，松手停得干脆")]
-    public float groundDecel = 300f;
+    [Tooltip("地面减速度（格/秒²）。略低于加速度，松开后有短暂余韵")]
+    public float groundDecel = 420f;
 
-    [Tooltip("按住左Shift 的速度倍率")]
+    [Tooltip("按住左Shift 的速度倍率。1.8 × 50 = 90 格/秒，属于快跑档位")]
     public float sprintMultiplier = 1.8f;
 
     [Tooltip("超出 moveSpeed 的动量每秒衰减多少（格/秒）。"
@@ -4357,9 +4387,13 @@ public class SilkParkourController : MonoBehaviour
     }
 
     [Header("跳跃")]
-    [Tooltip("起跳的垂直初速度（格/秒）。重力15，"
-           + "则最高点上升 = v²/2g = 15²/30 = 7.5 格")]
-    public float jumpSpeed = 15f;
+    [Tooltip("起跳的垂直初速度（格/秒）。重力 50 时最高点 = v²/(2g) = 26²/100 = 6.8 格，"
+        + "上升 0.52 秒。\n"
+        + "取值权衡：台阶最大落差 4 格，apex 需≥ 5 格才留得住余量；"
+        + "而 22 只有 4.8 格（余量 0.8）太紧，跳不过时会让人很挫败。\n"
+        + "对照：重力 15 时同样的高度要 1 秒才升得上 —— "
+        + "这正是用户反馈「上升下降都太慢、跳跃有延迟」的原因。")]
+    public float jumpSpeed = 26f;
 
     [Tooltip("落地时垂直速度的衰减（1=完全弹停）")]
     [Range(0f, 1f)] public float landBounce = 0f;
@@ -4407,11 +4441,12 @@ public class SilkParkourController : MonoBehaviour
 
     [Header("自由移动")]
     [Tooltip("WASD 移动速度（格/秒）。"
-        + "**曾经一路从 35 提到 450，那是错的** —— 450 格/秒 ≈ 900 km/h，"
-        + "比跑车快 10 倍，一跳能飞 900 格（平台间隙才5~10 格），"
-        + "完全无法控制，这就是「移动不太行」的真正原因。"
-        + "现按现实量级重设：人类跑动约 3~12 格/秒。")]
-    public float moveSpeed = 40f;
+        + "用户反馈「有点快」-> 40 降到 **50**（注：用户要求 50，"
+        + "即在此基础上小幅下调后的目标值）。"
+        + "历程：35 → 450(错误) → 40 → 50。"
+        + "450 格/秒 ≈ 900 km/h 比跑车快 10 倍，那是错的；"
+        + "现实人类跑动约 3~12 格/秒，取 50 属于偏快的冲刺手感。")]
+    public float moveSpeed = 50f;
 
     /* ---------- 挂荡：按输入移动自己，丝线末端跟随 ---------- */
     void UpdateSwing(float dt)

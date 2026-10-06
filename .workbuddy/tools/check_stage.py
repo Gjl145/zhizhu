@@ -12,9 +12,21 @@ def num(x):
 
 
 def grab(key):
+    """读取 SilkParkourController 的 float 字段。
+    要兼容两种写法：
+      public float moveSpeed = 50f;字面量
+      public float gravity = SilkPhysics.Gravity;引用常量
+    后者无法静态求值，回退去 SilkPhysics 里查该常量的值。"""
     i = s.index('class SilkParkourController')
     m = re.search(r'public float ' + key + r'\s*=\s*([^;]+);', s[i:])
-    return num(m.group(1))
+    if not m:
+        return None
+    expr = m.group(1).strip()
+    mm = re.match(r'^(-?[\d.]+)f?$', expr)
+    if mm:
+        return float(mm.group(1))
+    mc = re.search(r'const float ' + expr.split('.')[-1] + r'\s*=\s*(-?[\d.]+)f?;', s)
+    return float(mc.group(1)) if mc else None
 
 
 g = grab('gravity')
