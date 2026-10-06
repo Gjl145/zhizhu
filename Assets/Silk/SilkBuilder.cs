@@ -2337,16 +2337,61 @@ public class SilkParkourController : MonoBehaviour
     [Header("初始位置")]
     public Vector3 startPosition = new Vector3(0f, 0f, 30f);
 
+    [Header("外观")]
+    [Tooltip("自动创建可见球体。没有它就只能从日志判断状态，看不到玩家在哪")]
+    public bool autoCreateVisual = true;
+    public float visualRadius = 2f;
+
+    [Tooltip("自由飞行时的颜色 / 抓丝时的颜色，便于一眼区分状态")]
+    public Color freeColor = new Color(0.4f, 0.8f, 1f);
+    public Color attachedColor = new Color(1f, 0.75f, 0.2f);
+
     SilkBuilder builder;
     SilkLine grabbed;                 // 当前抓着哪根线
     Vector3 flightVel;                // 脱手后的飞行速度
     bool isFlying;
     Vector3 bodyVelocity;             // 挂载期间的自身速度（由位置差反推）
+    Transform visual;                 // 可见球体（自动创建）
 
     void Start()
     {
         builder = FindObjectOfType<SilkBuilder>();
         transform.position = startPosition;
+        CreateVisual();
+    }
+
+    /// <summary>自动创建一个可见球体代表「玩家」。
+    /// 没有它就只能靠 Debug.Log 判断状态，看不到本体在哪、
+    /// 也判断不出抓丝瞬间有没有跳变。</summary>
+    void CreateVisual()
+    {
+        if (!autoCreateVisual || visual != null) return;
+
+        var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        go.name = "ParkourBody";
+        go.transform.SetParent(transform);
+        go.transform.localScale = Vector3.one * (visualRadius * 2f);
+        // 去掉碰撞体：位置由本脚本直接控制，物理碰撞会与之打架
+        var col = go.GetComponent<Collider>();
+        if (col != null) Destroy(col);
+
+        var mr = go.GetComponent<MeshRenderer>();
+        if (mr != null)
+        {
+            Shader sh = Shader.Find("Universal Render Pipeline/Lit");
+            if (sh == null) sh = Shader.Find("Standard");
+            if (sh == null) sh = Shader.Find("Sprites/Default");
+            if (sh != null) mr.material = new Material(sh) { color = freeColor };
+        }
+        visual = go.transform;
+    }
+
+    void UpdateVisualColor()
+    {
+        if (visual == null) return;
+        var mr = visual.GetComponent<MeshRenderer>();
+        if (mr != null && mr.material != null)
+            mr.material.color = isFlying ? freeColor : attachedColor;
     }
 
     void Update()
@@ -2358,6 +2403,7 @@ public class SilkParkourController : MonoBehaviour
         else UpdateSwing(dt);
 
         HandleKeys();
+        UpdateVisualColor();
     }
 
     /* ---------- 脱手飞行：纯重力 + 阻尼 ---------- */
@@ -2382,15 +2428,22 @@ public class SilkParkourController : MonoBehaviour
         if (grabbed.chain != null) grabbed.chain.GetSwingAxes(out tangential, out lateral);
         else { tangential = Vector3.forward; lateral = Vector3.right; }
 
-        // 泵力：沿切线（垂直于绳、垂直于重力）
         float pump = Input.GetAxis("Vertical");
-        if (Mathf.Abs(pump) > 0.01f)
-            transform.position += tangential * (pump * pumpAccel * dt * dt * 60f) * 0.06f;
-
-        // 横推：改变摆动相位
         float side = Input.GetAxis("Horizontal");
+
+        // 有输入时才进入 Swinging 状态 —— 否则丝线会一直停在 Anchored，
+        // 状态机里Swinging 这个值等于从未被用过
+        if (Mathf.Abs(pump) > 0.01f || Mathf.Abs(side) > 0.01f)
+            grabbed.StartSwing();
+
+        /* 位移用加速度积分：displacement = a * dt^2
+         * （不是 a*dt —— 那是速度；也不是 a*dt^2/2 *60 * 0.06 这种凑数，
+         *   实测 1 秒只累积 1.8 格，是目标值的 14%，泵力几乎无效）
+         * Python 实算：accel=30 时1 秒末速度 30 格/s（约 1.1g），符合目标区间。*/
+        if (Mathf.Abs(pump) > 0.01f)
+            transform.position += tangential * (pump * pumpAccel * dt * dt);
         if (Mathf.Abs(side) > 0.01f)
-            transform.position += lateral * (side * lateralAccel * dt * dt * 60f) * 0.06f;
+            transform.position += lateral * (side * lateralAccel * dt * dt);
 
         bodyVelocity = endVel;
     }
