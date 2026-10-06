@@ -3204,8 +3204,9 @@ public class SimpleOrbitCamera : MonoBehaviour
         + "调到 6.0 后约 27 像素即可转完，接近主流第三人称手感")]
     public float lookSensitivity = 6f;
 
-    [Tooltip("每 0.5 秒输出一次视角诊断（排查「视角不动」时开启）")]
-    public bool verboseLookLog = true;
+    [Tooltip("每 0.5 秒输出一次视角诊断（排查「视角不动」时临时开启）。"
+           + "**默认关闭** —— 排查完记得关掉，否则会刷满 Console")]
+    public bool verboseLookLog = false;
 
     float lookDiagTimer;
 
@@ -3799,8 +3800,9 @@ public class SilkParkourController : MonoBehaviour
         }
     }
 
-    [Tooltip("扫描场景里被重复渲染的丝线（排查重影）")]
-    public bool renderScan = true;
+    [Tooltip("扫描场景里被重复渲染的丝线（排查重影）。**默认关闭** —— "
+           + "排查重影时临时开启，每2 秒一次输出，排查完记得关掉")]
+    public bool renderScan = false;
 
     SilkControlMode mode = SilkControlMode.FreeFly;
 
@@ -3983,8 +3985,8 @@ public class SilkParkourController : MonoBehaviour
     /// <summary>是否已完成过一次初始对齐（避免每帧干预玩家视角）。</summary>
     bool lookAlignedOnce = false;
 
-    [Tooltip("每帧输出相机跟随诊断（排查「看不到球」时开启）")]
-    public bool verboseFollowLog = true;
+    [Tooltip("输出相机跟随诊断（排查「看不到球」时临时开启）。**默认关闭**")]
+    public bool verboseFollowLog = false;
 
     bool warnedNoCam = false;
 
