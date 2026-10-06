@@ -1926,11 +1926,9 @@ public class SilkBuilder : MonoBehaviour
         // 命中点若已有锚点就复用，否则新建一个（CreateAnchorAt 内含 5 格去重）
         var anchor = CreateAnchorAt(signal.to);
 
-        // 发射点一侧：优先用已选中的锚点（玩家抓着的线），
-        // 没有就以 from 为点新建一个。
-        var fromAnchor = firstAnchor;
-        if (fromAnchor == null)
-            fromAnchor = CreateAnchorAt(signal.from);
+        // 起点**永远**是from（蓝球当前位置），不依赖 firstAnchor ——
+        // 那个字段属于 FreeFly 的连丝选中态，混进来会让丝线凭空出现在别处
+        var fromAnchor = CreateAnchorAt(signal.from);
 
         if (fromAnchor == null || anchor == null) return;
         if (fromAnchor == anchor) return;
@@ -2705,6 +2703,14 @@ public class SilkParkourController : MonoBehaviour
     Transform visual;                 // 可见球体（自动创建）
     SimpleOrbitCamera cam;            // 第三人称时由它跟随
 
+    [Header("构建锚点")]
+    [Tooltip("需要先发射多少次丝线，才允许在当前位置构建锚点。"
+           + "0=立刻可建，1=先射一次，2=先射两次")]
+    [Range(0, 5)] public int shotsToPin = 2;
+
+    /// <summary>已发射次数（不管有没有命中）。达到 shotsToPin 才能就地建锚点。</summary>
+    public int shotsFired = 0;
+
     /// <summary>自己发射出去的丝线。只能断这些，不能断系统生成的网。</summary>
     public List<SilkLine> firedLines = new();
 
@@ -3022,27 +3028,29 @@ public class SilkParkourController : MonoBehaviour
     }
 
     /// <summary>
-    /// 左键：放一个节点（固化当前位置的命中点），不自动连线。
-    /// 第一次点选为起点，第二次点才连线 —— 流程可见、可控。
+    /// 左键：**在蓝球当前位置构建一个锚点**（不是点击射线的命中点）。
+    ///
+    /// 这是「自己构建地形」的核心 —— 丝线只从玩家这里出现，
+    /// 锚点也只在玩家经过的地方生成，不会凭空出现在别处。
+    ///
+    /// 门槛：必须先发射过 shotsToPin 次（默认 2）才会真的固化。
+    /// 这样第一次左键是「甩丝线粘墙」，第二次才「就地固化」，
+    /// 符合蜘蛛侠的节奏感。
     /// </summary>
     void PlaceNode()
     {
         if (builder == null) return;
-        if (cam == null) cam = FindObjectOfType<SimpleOrbitCamera>();
-        if (cam == null) return;
 
-        Vector3 origin = transform.position;
-        // 用相机的水平朝向作为射线方向（视线方向），而不是斜上发射方向
-        Vector3 dir = cam.transform.forward;
-        if (!Physics.Raycast(origin, dir, out RaycastHit hit, fireRange, fireMask))
+        if (shotsFired < shotsToPin)
         {
-            Debug.Log("[Node] 未命中任何表面");
+            Debug.Log("[Node] 还需发射 " + (shotsToPin - shotsFired) +
+                      " 次才能在当前位置构建锚点（当前 " + shotsFired + "/" + shotsToPin + "）");
             return;
         }
-        if (Vector3.Distance(origin, hit.point) < minFireLength) return;
 
-        // 只固化节点，绝不建线
-        SilkEventBus.Post(new SilkPinNodeSignal(hit.point, selectAsStart: true));
+        // 关键：锚点建在**玩家当前位置**，不是射线命中点
+        Vector3 here = transform.position;
+        SilkEventBus.Post(new SilkPinNodeSignal(here, selectAsStart: true));
     }
 
     /// <summary>
@@ -3073,7 +3081,9 @@ public class SilkParkourController : MonoBehaviour
 
         if (!Physics.Raycast(origin, dir, out RaycastHit hit, fireRange, fireMask))
         {
-            Debug.Log("[Parkour] 发射未命中（射程 " + fireRange + "）");
+            shotsFired++;
+            Debug.Log("[Parkour] 发射未命中（射程 " + fireRange + "），计数 " +
+                      shotsFired + "/" + shotsToPin);
             return;
         }
         if (Vector3.Distance(origin, hit.point) < minFireLength) return;
@@ -3091,6 +3101,7 @@ public class SilkParkourController : MonoBehaviour
         if (autoSwingAfterHook) line.StartSwing();
         isFlying = false;
         grabbed = line;
+        shotsFired++;   // 计数达到 shotsToPin 后才允许就地建锚点
         Debug.Log("[Parkour] 勾住 " + hit.point + " 距离 " +
                   Vector3.Distance(origin, hit.point).ToString("F1"));
     }
@@ -3140,38 +3151,6 @@ public class SilkParkourController : MonoBehaviour
     /// <summary>取场景中所有锚点（供结网筛选 PlayerNode）。</summary>
     System.Collections.Generic.List<AnchorPoint> AllAnchors()
         => new System.Collections.Generic.List<AnchorPoint>(FindObjectsOfType<AnchorPoint>());
-
-    /// <summary>
-    /// 发射丝线：从球心沿当前朝向做射线检测，命中点生成一条静态丝线。
-    /// 这是 SpiderShot 的基础，后续「结网」也走这条路径。
-    /// </summary>
-    void TryFire()
-    {
-        if (builder == null) return;
-        if (cam == null) cam = FindObjectOfType<SimpleOrbitCamera>();
-        if (cam == null) return;
-
-        Vector3 origin = transform.position;
-        Vector3 dir = cam.transform.forward;
-        if (Physics.Raycast(origin, dir, out RaycastHit hit, fireRange, fireMask))
-        {
-            if (Vector3.Distance(origin, hit.point) < minFireLength) return;
-
-            // 走事件总线：外部只需知道「发一条线」，不碰 SilkBuilder 内部
-            SilkEventBus.Post(new SilkFireSignal(origin, hit.point, autoAttach: true));
-
-            // 记录已发射的线，供后续「自己断开」用
-            if (builder.Lines.Count > 0)
-            {
-                var last = builder.Lines[builder.Lines.Count - 1];
-                if (!firedLines.Contains(last)) firedLines.Add(last);
-            }
-        }
-        else
-        {
-            Debug.Log("[Parkour] 发射未命中任何表面");
-        }
-    }
 
     /// <summary>断开自己发射的第一根丝线。系统生成的网不能断。</summary>
     void CutFirstFiredLine()
