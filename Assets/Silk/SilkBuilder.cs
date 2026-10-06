@@ -3005,9 +3005,15 @@ public class SimpleOrbitCamera : MonoBehaviour
 
     void Start()
     {
+        // Z-up 世界约定：up = +Z。**只在 Start 设一次**——
+        // 每帧写transform.up 会让 Transform 重算 rotation，
+        // 与ApplyRotation 的 LookRotation 打架，导致视角锁死。
+        transform.up = Vector3.forward;
+
         // 从当前朝向反解 yaw/pitch，保证 Start 后画面不跳变
         Vector3 f = transform.forward;
         pitch = Mathf.Asin(Mathf.Clamp(f.z, -1f, 1f)) * Mathf.Rad2Deg;
+        pitch = Mathf.Clamp(pitch, pitchMin, pitchMax);
         yaw = Mathf.Atan2(f.y, f.x) * Mathf.Rad2Deg;
     }
 
@@ -3148,16 +3154,33 @@ public class SimpleOrbitCamera : MonoBehaviour
         if (verboseLookLog && lookDiagTimer > 0.5f)
         {
             lookDiagTimer = 0f;
+            /* 【诊断增强】增加「实际朝向 vs 期望朝向」对比。
+             *
+             * 实测教训：上一版日志只打camFwd，导致我误判为「输入没进来」，
+             * 实际真正的问题是 camFwd 被 transform.up 覆盖 —— 
+             * yaw/pitch 在变、朝向不变，但因为没打「期望值」看不出矛盾。
+             *
+             * 现在直接算出期望朝向并与实际对比：
+             *   一致 -> ApplyRotation 正常生效
+             *   不一致 -> 有别的东西在覆盖 rotation（定位覆盖者）
+             * 另外打camUp，因为 transform.up 正是被覆盖的元凶。*/
+            Vector3 wantFwd = LookDir;
+            Vector3 realFwd = transform.forward;
+            float diff = Vector3.Angle(wantFwd, realFwd);
+
             Debug.Log("[Look] mx=" + mx.ToString("F3") +
                       " my=" + my.ToString("F3") +
-                      " | lockState=" + Cursor.lockState +
+                      " | lock=" + Cursor.lockState +
                       " 光标可见=" + Cursor.visible +
-                      " | lockCursorForLook=" + lockCursorForLook +
-                      " 灵敏度=" + lookSensitivity +
                       " | yaw=" + yaw.ToString("F1") +
                       " pitch=" + pitch.ToString("F1") +
-                      " | camFwd=" + transform.forward.ToString("F2") +
-                      " | camPos=" + transform.position.ToString("F1"));
+                      " 灵敏度=" + lookSensitivity +
+                      "\n       期望朝向=" + wantFwd.ToString("F2") +
+                      " 实际朝向=" + realFwd.ToString("F2") +
+                      " 偏差=" + diff.ToString("F1") + "度" +
+                      (diff > 1f ? "  <<< 朝向被覆盖！" : "  (正常)") +
+                      "\n       camUp=" + transform.up.ToString("F2") +
+                      " camPos=" + transform.position.ToString("F1"));
         }
 
         if (Mathf.Abs(mx) < 0.0001f && Mathf.Abs(my) < 0.0001f) return;
@@ -3889,8 +3912,18 @@ public class SilkParkourController : MonoBehaviour
         }
 
         /*环绕定位：相机摆在「当前朝 向的背后」。
-         * 朝向由鼠标控制，这里只用它算位置 —— 两边职责清晰，互不覆盖。*/
-        cam.transform.up = Vector3.forward;   // Z-up 世界约定
+         * 朝向由鼠标控制，这里只用它算位置 —— 两边职责清晰，互不覆盖。
+         *
+         * 【删除了 cam.transform.up = Vector3.forward】
+         * 这行是我上轮加的，看似无害，实则每帧改写 transform 的up，
+         * 而 Transform 会据此**重算 rotation** —— 与 ApplyRotation 写入的
+         * 朝向打架。实测日志证据：
+         *   pitch=-17.6 时camFwd 恒为 (0,-1,0)，而按公式应为 (+0.93,+0.21,-0.30)
+         * 说明 ApplyRotation 的结果被覆盖了 -> 画面永远朝一个方向，
+         * 正是「视角锁死」的直接原因。
+         *
+         * up 只在 Start 里设置一次即可（Z-up 世界约定），
+         * 之后交给ApplyRotation 的 LookRotation(dir, Vector3.forward)。*/
         cam.OrbitAround(transform.position, camDistance, camHeight);
 
         /* 【已移除】BallOffScreen() -> AlignCameraToBall() 的「安全网」。
