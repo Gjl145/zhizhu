@@ -1752,6 +1752,15 @@ public class SilkBuilder : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// 左键：只**选中已有锚点**，不创建。
+    ///
+    /// 原实现在射线打空时调CreateAnchorAt(hit.point) 凭空在墙面上造点 ——
+    /// 这违反了「两个世界都不允许凭空创建锚点」的规则：
+    ///   FreeFly 应该只连已布好的锚点（关卡编辑）
+    ///   Parkour 应该用自身位置建点（由 PlaceNode 负责），不靠鼠标点击
+    /// 打空时直接忽略：既不选中也不创建。
+    /// </summary>
     void TryPickOrCreateAnchor()
     {
         Ray ray = mainCam.ScreenPointToRay(Input.mousePosition);
@@ -1760,11 +1769,7 @@ public class SilkBuilder : MonoBehaviour
             var a = hit.collider.GetComponent<AnchorPoint>();
             if (a != null) { OnAnchorPicked(a); return; }
         }
-        if (Physics.Raycast(ray, out hit, 2000f, wallLayer))
-        {
-            var a = CreateAnchorAt(hit.point);
-            OnAnchorPicked(a);
-        }
+        // 打空：什么都不做 —— 不凭空建点
     }
 
     void OnAnchorPicked(AnchorPoint a)
@@ -3127,6 +3132,10 @@ public class SilkParkourController : MonoBehaviour
     [Tooltip("勾住目标时的搜索半径。从玩家位置向运动前方找可挂点")]
     public float seekRadius = 60f;
 
+    [Tooltip("左键「以自身为锚点」的吸附半径。身边这个距离内已有可挂点才生效，"
+           + "**不会凭空创建锚点**")]
+    public float selfSnapRange = 25f;
+
     [Tooltip("勾住后是否自动进入摆动（否则只是挂着）")]
     public bool autoSwingAfterHook = true;
 
@@ -3268,9 +3277,11 @@ public class SilkParkourController : MonoBehaviour
             else DoRelease();
         }
 
-        // 左键：**只放一个节点**，不连线。
-        // 第一次点= 选为连线起点，第二次点 = 连线（之后自动清空，可继续下一组）
-        if (Input.GetMouseButtonDown(0)) PlaceNode();
+        /* 左键：**以自身当前所在的点为锚点** —— 勾住脚下/身旁的挂点。
+         * 不是「鼠标点击建点」—— 两个世界都不允许凭空建点。
+         * 玩家能连的只有已经存在的点：墙面锚点、自己固化过的节点、
+         * 或者自己此刻悬停的那个点。*/
+        if (Input.GetMouseButtonDown(0)) AttachToNearestExisting();
 
         // B：蜘蛛侠式发射（斜上勾住并摆荡）—— 走另一条路径
         if (Input.GetKeyDown(KeyCode.B)) TryFireAndHook();
@@ -3314,21 +3325,58 @@ public class SilkParkourController : MonoBehaviour
     /// 这样第一次左键是「甩丝线粘墙」，第二次才「就地固化」，
     /// 符合蜘蛛侠的节奏感。
     /// </summary>
-    void PlaceNode()
+    /// <summary>
+    /// 左键：**挂到身边已存在的点上**（以自身为锚点）。
+    ///
+    /// 绝不允许凭空建点。候选只有两类：
+    ///   1) 自己用 C 键固化过的 PlayerNode
+    ///   2) 玩家此刻正好悬停在某个已有锚点上（距离小于 selfSnapRange）
+    /// 两类都没有就什么都不做 —— 不产生新锚点、不产生新丝线。
+    /// </summary>
+    void AttachToNearestExisting()
     {
         if (builder == null) return;
 
-        if (shotsFired < shotsToPin)
+        // 找身边最近的可挂点：优先 PlayerNode，其次任何 AnchorPoint
+        AnchorPoint best = null;
+        float bestD = selfSnapRange;
+
+        foreach (var a in FindObjectsOfType<AnchorPoint>())
         {
-            Debug.Log("[Node] 还需发射 " + (shotsToPin - shotsFired) +
-                      " 次才能在当前位置构建锚点（当前 " + shotsFired + "/" + shotsToPin + "）");
+            if (a == null || a.type == AnchorType.SilkNode) continue;  // 断点不作为挂点
+            float d = Vector3.Distance(transform.position, a.WorldPosition);
+            if (d < bestD) { bestD = d; best = a; }
+        }
+
+        if (best == null)
+        {
+            Debug.Log("[Attach] 身边 " + selfSnapRange + " 格内没有可挂的点。" +
+                      "玩家节点请用 C 键在当前位置固化。");
             return;
         }
 
-        // 关键：锚点建在**玩家当前位置**，不是射线命中点
-        Vector3 here = transform.position;
-        SilkEventBus.Post(new SilkPinNodeSignal(here, selectAsStart: true));
+        // 找到可挂点：建一条从该点到玩家位置的线，并挂上去
+        var line = CreateLineFromAnchorToSelf(best);
+        if (line != null)
+        {
+            grabbed = line;
+            isFlying = false;
+            Debug.Log("[Attach] 挂到 " + best.type + " " + best.position);
+        }
     }
+
+    /// <summary>从指定锚点建一条连到玩家当前位置的线（不新建锚点）。
+    /// 走事件总线，外部不碰 SilkBuilder 内部。</summary>
+    SilkLine CreateLineFromAnchorToSelf(AnchorPoint anchor)
+    {
+        if (builder == null || anchor == null) return null;
+
+        var self = builder.CreateAnchorAt(transform.position);
+        if (self == null || self == anchor) return null;
+
+        return builder.CreateSilkLine(anchor, self, SilkColor.White, BreakMode.Middle);
+    }
+
 
     /// <summary>
     /// 蜘蛛侠式发射：沿「运动前方 + 上抬」方向发射，命中后自动勾住并进入摆动。
