@@ -3362,11 +3362,17 @@ public class SilkParkourController : MonoBehaviour
     public float minFireLength = 5f;
 
     [Header("初始位置")]
-    /// <summary>初始位置：落在测试平台 A 顶面。
-    /// 平台 A 中心 (-30,0,-34) 尺寸 30x50x12 -> 顶面 z = -34+6 = -28
-    /// 球半径 6 -> 球心 z = -28 + 6 = -22
-    /// 之前放在 (0,0,30)，悬在平台上方 58 格，会一直往下掉。</summary>
-    public Vector3 startPosition = new Vector3(-30f, 0f, -25f);
+    /// <summary>初始位置：落在「区0 平地」的顶面上。
+    ///
+    /// 平地：中心 (-30, 0, -38)，尺寸 30×44×8 -> 顶面 z = -38 + 4 = -34。
+    /// 球半径 4.5 -> **球心 z = -34 + 4.5 = -29.5**。
+    ///
+    /// 【必须严格等于顶面 + 半径】否则会出现两种问题：
+    ///   · 偏高 -> 开局先掉一段，玩家以为「控制不了」
+    ///   · 偏低 -> 开局卡在地面里，射线检测异常
+    /// 这一条已用 Python 核算：z=-25 会悬空 4.5 格（正好一个半径），
+    /// 明显不对，现改为 -29.5。</summary>
+    public Vector3 startPosition = new Vector3(-30f, 0f, -29.5f);
 
     [Header("外观")]
     [Tooltip("自动创建可见球体。没有它就只能从日志判断状态，看不到玩家在哪")]
@@ -4053,7 +4059,7 @@ public class SilkParkourController : MonoBehaviour
     [Tooltip("相机水平跟随距离（格）。球半径从 6 缩到 4.5 后，"
            + "若不调近则球在画面里显得比原来小 —— 30 -> 24 正好抵消缩小量。"
            + "换载具时按「载具尺寸 × 2.5~4」重设（见上方速查表）")]
-    public float camDistance = 24f;
+    public float camDistance = 20f;
 
     [Tooltip("相机高于球的高度。必须 < 20（球到顶棚的距离），否则相机穿出顶棚")]
     public float camHeight = 10f;
@@ -4255,13 +4261,13 @@ public class SilkParkourController : MonoBehaviour
            + "测试关卡的方块未设自定义层，用 Everything 最稳")]
     public LayerMask groundMask = ~0;
 
-    [Tooltip("地面加速度（格/秒²）。**约为 moveSpeed 的 5 倍**"
-        + "（即约 0.2 秒到全速）。每次提速都必须同步上调，"
-        + "否则手速跟不上球、表现为「滑行」")]
-    public float groundAccel = 2250f;
+    [Tooltip("地面加速度（格/秒²）。**约为 moveSpeed 的 9 倍**"
+        + "（即约 0.11 秒到全速），手感干脆不拖沓。"
+        + "每次改moveSpeed 都要同步按比例调整本值")]
+    public float groundAccel = 360f;
 
-    [Tooltip("地面减速度（格/秒²）。与加速度同量级，停得干脆")]
-    public float groundDecel = 2000f;
+    [Tooltip("地面减速度（格/秒²）。与加速度同量级，松手停得干脆")]
+    public float groundDecel = 300f;
 
     [Tooltip("按住左Shift 的速度倍率")]
     public float sprintMultiplier = 1.8f;
@@ -4395,10 +4401,12 @@ public class SilkParkourController : MonoBehaviour
     }
 
     [Header("自由移动")]
-    [Tooltip("WASD 移动速度（格/秒）。历程：35 → 75 → 225 → 350 → 450。"
-           + "平台间距 30 格，450 约 0.067 秒跨过。"
-           + "⚠换载具时要重设：人约 8~12、汽车约 30~50、飞机约 80~150")]
-    public float moveSpeed = 450f;
+    [Tooltip("WASD 移动速度（格/秒）。"
+        + "**曾经一路从 35 提到 450，那是错的** —— 450 格/秒 ≈ 900 km/h，"
+        + "比跑车快 10 倍，一跳能飞 900 格（平台间隙才5~10 格），"
+        + "完全无法控制，这就是「移动不太行」的真正原因。"
+        + "现按现实量级重设：人类跑动约 3~12 格/秒。")]
+    public float moveSpeed = 40f;
 
     /* ---------- 挂荡：按输入移动自己，丝线末端跟随 ---------- */
     void UpdateSwing(float dt)
