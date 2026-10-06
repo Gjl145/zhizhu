@@ -2425,15 +2425,30 @@ public class SilkBuilder : MonoBehaviour
 
     public SilkLine CreateSilkLine(AnchorPoint a, AnchorPoint b, SilkColor color, BreakMode mode = BreakMode.Middle)
     {
-        /* 每根线的创建都留痕。
-         * 「屏幕上多出线」这类问题的第一手证据就是这些日志 ——
-         * 若一次点击打出两条 [NewLine]，说明建线入口被触发多次；
-         * 若只一条但端点不是你点的那个，说明选中态被污染。*/
+        /* 每根线的创建都留痕（含调用栈）。
+         *
+         * 【为什么要打栈】实测发现同一对锚点被建了两次，且两次都走的是
+         * 本方法（来源=正常建线）、端点是同一批 AnchorPoint 对象，
+         * 但父线是两个不同的 SilkLine。按去重逻辑第二次必被Contains
+         * 挡住，所以「两次都成功」只可能是 lineKeys 被清过。
+         * 光看现象无法判断是谁清的 —— 直接把调用栈打出来，
+         * 由Unity 告诉我们调用来源，不靠推测。
+         *
+         * 判读：
+         *   - 栈里出现 CreateSilkLine 两次且路径不同 -> 入口被触发多次
+         *   - 第二次紧跟 ClearAll/GenerateWeb-> 清空后重建（设计如此）
+         *   - 两次调用路径完全一样 -> 是状态/时序问题，不是入口问题*/
         Debug.Log("[NewLine] " + a.position + " -> " + b.position +
-                  " 总数 " + (silkLines.Count + 1));
+                  " 总数 " + (silkLines.Count + 1) +
+                  " 去重表size=" + lineKeys.Count +
+                  "\n" + System.Environment.StackTrace);
 
         // 去重：key 基于体素坐标，与对象生命周期解耦
-        if (lineKeys.Contains(GetPairKey(a, b))) return null;
+        if (lineKeys.Contains(GetPairKey(a, b)))
+        {
+            Debug.Log("[NewLine]被去重挡下: " + a.position + " -> " + b.position);
+            return null;
+        }
         lineKeys.Add(GetPairKey(a, b));
 
         var line = new SilkLine(a, b, color, mode);
@@ -2488,6 +2503,13 @@ public class SilkBuilder : MonoBehaviour
 
     public void ClearAll()
     {
+        /* 清空去重表是「允许重新建线」的关键动作，必须留痕。
+         * 若日志里出现「两次 [NewLine] 都成功」而中间夹着这条，
+         * 就证明重复建线是清空时序造成的，而不是入口被点多次。*/
+        Debug.Log("[ClearAll] 清空去重表(" + lineKeys.Count + " 项)" +
+                  " 线(" + silkLines.Count + " 根)\n" +
+                  System.Environment.StackTrace);
+
         foreach (var line in silkLines)
         {
             foreach (var seg in line.segments)
