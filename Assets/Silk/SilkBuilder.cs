@@ -519,6 +519,10 @@ public class AnchorPoint : MonoBehaviour
 
     public void SetHighlight(bool on)
         => SetColor(on ? Color.green : new Color(0.9f, 0.75f, 0.2f));
+
+    /// <summary>锚点是否仍然存活（未被销毁）。Unity 的 C# null 判定
+    /// 对已Destroy 的 UnityEngine.Object 仍返回 true，需用此属性判断。</summary>
+    public bool AnchorAlive => this != null;
 }
 
 /* ===================== 丝线段 ===================== */
@@ -1644,6 +1648,10 @@ public class SilkBuilder : MonoBehaviour
     public bool parkourMode = false;
 
     AnchorPoint firstAnchor;
+
+    /// <summary>最近一次由「选中-连线」流程创建的丝线。
+    /// Parkour 世界的发射用它接管摆荡。</summary>
+    public SilkLine lastCreatedLine = null;
     bool isFirstSelected;
     LineRenderer previewLine;
     GameObject previewGO;
@@ -1772,6 +1780,17 @@ public class SilkBuilder : MonoBehaviour
         // 打空：什么都不做 —— 不凭空建点
     }
 
+    /// <summary>
+    /// Parkour 世界用：把某个锚点送进「选中-连线」流程。
+    /// 与 FreeFly 的OnAnchorPicked 完全同一套逻辑 ——
+    /// 区别只是 Parkour 第一个点由「自己」提供，所以只需连点两次。
+    /// </summary>
+    public void SelectAnchorForPlayer(AnchorPoint a)
+    {
+        if (a == null) return;
+        OnAnchorPicked(a);
+    }
+
     void OnAnchorPicked(AnchorPoint a)
     {
         if (!isFirstSelected)
@@ -1785,9 +1804,12 @@ public class SilkBuilder : MonoBehaviour
             if (a != firstAnchor)
             {
                 if (VoxelDistance(firstAnchor.position, a.position) >= 5)
-                    CreateSilkLine(firstAnchor, a, defaultColor, BreakMode.Middle);
-                else
-                    Debug.Log("[SilkBuilder] 锚点太近（<5格），拒绝连线");
+                {
+                    // 记下这条线：Parkour 世界的「发射」要拿到它才能进入摆荡
+                    lastCreatedLine = CreateSilkLine(firstAnchor, a,
+                                                     defaultColor, BreakMode.Middle);
+                }
+                else Debug.Log("[SilkBuilder] 锚点太近（<5格），拒绝连线");
             }
             ResetSelection();
         }
@@ -3281,7 +3303,7 @@ public class SilkParkourController : MonoBehaviour
          * 不是「鼠标点击建点」—— 两个世界都不允许凭空建点。
          * 玩家能连的只有已经存在的点：墙面锚点、自己固化过的节点、
          * 或者自己此刻悬停的那个点。*/
-        if (Input.GetMouseButtonDown(0)) AttachToNearestExisting();
+        if (Input.GetMouseButtonDown(0)) FireAtAnchor();
 
         // B：蜘蛛侠式发射（斜上勾住并摆荡）—— 走另一条路径
         if (Input.GetKeyDown(KeyCode.B)) TryFireAndHook();
@@ -3294,11 +3316,10 @@ public class SilkParkourController : MonoBehaviour
         // G = 断「视线指向」的丝线（Parkour 世界的划断操作）
         if (Input.GetKeyDown(KeyCode.G)) CutLineUnderCrosshair();
 
-        // C：把当前位置固化成可粘附节点（自己构建地形）
-        if (Input.GetKeyDown(KeyCode.C)) PinHere();
-
-        // V：在两个已固化节点之间结网（静态结网）
-        if (Input.GetKeyDown(KeyCode.V)) TrySpanNodes();
+        /* C（固化当前位置为节点）与 V（节点间结网）暂不实现。
+         * 用户明确：「固化当前位置为节点这个先不用实现，
+         * 之后我再详细说明，和你现在做的不太一样」。
+         * 相关方法保留但不接线，等需求明确后再启用。*/
 
         if (Input.GetKeyDown(KeyCode.R))
         {
@@ -3333,49 +3354,72 @@ public class SilkParkourController : MonoBehaviour
     ///   2) 玩家此刻正好悬停在某个已有锚点上（距离小于 selfSnapRange）
     /// 两类都没有就什么都不做 —— 不产生新锚点、不产生新丝线。
     /// </summary>
-    void AttachToNearestExisting()
+    /// <summary>
+    /// Parkour 的左键：**一键把「自己」和「刚选中的锚点」连起来**。
+    ///
+    /// 与 FreeFly 的关系（不是两套机制，是同一套）：
+    ///   FreeFly  左键 = 选中一个锚点作为丝线的一端，再点另一个完成连线
+    ///   Parkour  左键 = 默认已选中「自己」，点一下目标锚点即完成连线
+    ///
+    /// 所以 Parkour 只多了「默认选中自己」这一步，
+    /// 丝线的建立/校验/去重全部复用 SilkBuilder 既有的 OnAnchorPicked 流程。
+    /// </summary>
+    void FireAtAnchor()
     {
         if (builder == null) return;
 
-        // 找身边最近的可挂点：优先 PlayerNode，其次任何 AnchorPoint
-        AnchorPoint best = null;
-        float bestD = selfSnapRange;
+        // 射线找目标锚点（不命中就什么都不做 —— 不凭空建点）
+        Ray ray = camComp != null
+            ? camComp.ScreenPointToRay(Input.mousePosition)
+            : mainCam.ScreenPointToRay(Input.mousePosition);
 
-        foreach (var a in FindObjectsOfType<AnchorPoint>())
-        {
-            if (a == null || a.type == AnchorType.SilkNode) continue;  // 断点不作为挂点
-            float d = Vector3.Distance(transform.position, a.WorldPosition);
-            if (d < bestD) { bestD = d; best = a; }
-        }
+        AnchorPoint target = null;
+        if (Physics.Raycast(ray, out RaycastHit hit, 2000f, builder.anchorLayer))
+            target = hit.collider.GetComponent<AnchorPoint>();
 
-        if (best == null)
+        if (target == null)
         {
-            Debug.Log("[Attach] 身边 " + selfSnapRange + " 格内没有可挂的点。" +
-                      "玩家节点请用 C 键在当前位置固化。");
+            Debug.Log("[Fire] 视线里没有可连接的锚点");
             return;
         }
 
-        // 找到可挂点：建一条从该点到玩家位置的线，并挂上去
-        var line = CreateLineFromAnchorToSelf(best);
-        if (line != null)
+        // 复用 SilkBuilder 的选中-连线流程：自己是起点，目标是终点。
+        // 与 FreeFly 完全同一套逻辑，只是第一个点由「自己」提供。
+        builder.lastCreatedLine = null;
+        SilkBuilder.SelectAnchorForPlayer(selfNode);
+        SilkBuilder.SelectAnchorForPlayer(target);
+
+        var line = builder.lastCreatedLine;
+        if (line == null)
         {
-            grabbed = line;
-            isFlying = false;
-            Debug.Log("[Attach] 挂到 " + best.type + " " + best.position);
+            Debug.Log("[Fire]连线未成立（太近或重复）");
+            return;
+        }
+        if (!firedLines.Contains(line)) firedLines.Add(line);
+
+        // 末端挂到目标点 -> 进入摆荡（后续补发射动画）
+        line.Attach(target, builder, "命中点");
+        line.StartSwing();
+        grabbed = line;
+        isFlying = false;
+        Debug.Log("[Fire] 已连接自己 → " + target.position);
+    }
+
+    /// <summary>
+    /// 自己这个「锚点」。Parkour 世界的丝线起点。
+    /// 随玩家移动 —— 每次发射时重新取当前位置对应/新建的锚点。
+    /// </summary>
+    AnchorPoint selfNode
+    {
+        get
+        {
+            if (_selfNode != null && _selfNode.AnchorAlive) return _selfNode;
+            if (builder == null) return null;
+            _selfNode = builder.CreateAnchorAt(transform.position);
+            return _selfNode;
         }
     }
-
-    /// <summary>从指定锚点建一条连到玩家当前位置的线（不新建锚点）。
-    /// 走事件总线，外部不碰 SilkBuilder 内部。</summary>
-    SilkLine CreateLineFromAnchorToSelf(AnchorPoint anchor)
-    {
-        if (builder == null || anchor == null) return null;
-
-        var self = builder.CreateAnchorAt(transform.position);
-        if (self == null || self == anchor) return null;
-
-        return builder.CreateSilkLine(anchor, self, SilkColor.White, BreakMode.Middle);
-    }
+    AnchorPoint _selfNode;
 
 
     /// <summary>
