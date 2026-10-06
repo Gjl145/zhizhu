@@ -2593,7 +2593,7 @@ public class SilkParkourController : MonoBehaviour
     [Header("外观")]
     [Tooltip("自动创建可见球体。没有它就只能从日志判断状态，看不到玩家在哪")]
     public bool autoCreateVisual = true;
-    public float visualRadius = 2f;
+    public float visualRadius = 3f;
 
     [Tooltip("自由飞行时的颜色 / 抓丝时的颜色，便于一眼区分状态")]
     public Color freeColor = new Color(0.4f, 0.8f, 1f);
@@ -2691,25 +2691,36 @@ public class SilkParkourController : MonoBehaviour
 
         if (mode == SilkControlMode.Parkour)
         {
-            // 从相机当前位置接手，玩家不会瞬移
-            transform.position = cam != null ? cam.transform.position : startPosition;
+            // 不要把球传到相机位置 —— 相机在 (120,-120,85)，
+            // 那是立方体外很远的角落，球会直接跑出画面导致「看不到球」。
+            // 球保持在 startPosition（立方体中心偏上），相机改为跟随它。
+            transform.position = startPosition;
             flightVel = Vector3.zero;
             isFlying = true;
+            // 立刻摆一次相机 —— 否则要等下一帧才看得到球
+            FollowCamera();
         }
         Debug.Log("[Mode] 切换为 " + mode);
     }
 
-    /// <summary>第三人称：相机跟在玩家身后，保持固定距离与朝向。</summary>
+    /// <summary>第三人称跟随：相机固定在球的后上方，并始终看向球。
+    /// 高度方向是 +Z（项目约定 Z 为高度轴）。</summary>
     void FollowCamera()
     {
         if (cam == null) return;
-        float dist = camDistance;
-        float height = camHeight;
-        // 相机保持在玩家的「上方 + 后方」，
-        // 高度方向是 +Z（项目约定 Z 为高度轴）
+        // 后方取「相机当前朝向的水平分量」，这样右键环绕后视角仍连贯
+        Vector3 back = cam.transform.forward;
+        back.z = 0f;
+        if (back.sqrMagnitude < 0.0001f) back = Vector3.back;
+        back = back.normalized;
+
         cam.transform.position = transform.position
-                               + new Vector3(0f, -dist * 0.5f, height);
+                               - back * camDistance
+                               + new Vector3(0f, 0f, camHeight);
         cam.transform.up = Vector3.forward;
+        // 必须 LookAt，否则相机朝向停留在Bootstrap 时的旧值，球移出会跑出画面
+        cam.transform.rotation = Quaternion.LookRotation(
+            (transform.position - cam.transform.position).normalized, Vector3.forward);
     }
 
     [Header("蜘蛛侠式发射")]
@@ -2724,8 +2735,10 @@ public class SilkParkourController : MonoBehaviour
     public bool autoSwingAfterHook = true;
 
     [Header("第三人称相机")]
-    public float camDistance = 40f;
-    public float camHeight = 12f;
+    [Tooltip("相机跟随距离。原 40 太远 —— 配合半径 2 的球只有 10% 视角占比，"
+           + "几乎看不见。25+ 半径 3 约 24%，清晰可见")]
+    public float camDistance = 25f;
+    public float camHeight = 8f;
 
     /* ---------- 脱手飞行：纯重力 + 阻尼 ---------- */
     void UpdateFlight(float dt)
