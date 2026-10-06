@@ -69,7 +69,15 @@ public interface SilkAttachable
 
 
 public enum SilkColor { White, Yellow, Red }
-public enum AnchorType { Wall, Internal, SilkNode }
+/// <summary>
+/// 锚点类型。
+///   Wall       Bootstrap 生成的墙面锚点（只读，装饰用）
+///   Internal   玩家点击创建的锚点
+///   SilkNode   断裂产生的断点
+///   PlayerNode **玩家自己构建的可粘附节点** —— 蜘蛛侠玩法核心：
+///               既能作为静态结网的连接点，也能被动态丝线粘住当墙面挂点用
+/// </summary>
+public enum AnchorType { Wall, Internal, SilkNode, PlayerNode }
 public enum BreakMode { Middle, Quarter, ThreeQuarter, SpiderShot }
 
 /* 丝线的结构角色。真实蛛网不是所有丝线都一样：
@@ -255,6 +263,51 @@ public enum SilkControlMode
 }
 
 /// <summary>
+/// 把玩家当前位置固化成一个可粘附节点 —— 蜘蛛侠玩法的核心机制。
+/// 固化后：
+///   · 可作为静态结网的连接点（多道线共���此点）
+///   · 可被动态丝线粘住，当作墙面上的挂点使用
+///   · 玩家自己荡过去也可以粘上去
+/// </summary>
+public class SilkPinNodeSignal : ISilkEvent
+{
+    public Vector3 position;      // 要固化的位置（通常是玩家当前位置）
+
+    public SilkPinNodeSignal(Vector3 pos)
+    {
+        position = pos;
+    }
+
+    public void Handle(SilkBuilder handler)
+    {
+        if (handler == null) return;
+        handler.ExecutePinNode(this);
+    }
+}
+
+/// <summary>
+/// 静态结网：在两个已有节点之间生成一条线。
+/// 用于「同时发射多道丝线，让自己成为两处丝线的共同节点」。
+/// </summary>
+public class SilkSpanSignal : ISilkEvent
+{
+    public Vector3 from;
+    public Vector3 to;
+
+    public SilkSpanSignal(Vector3 f, Vector3 t)
+    {
+        from = f; to = t;
+    }
+
+    public void Handle(SilkBuilder handler)
+    {
+        if (handler == null) return;
+        handler.ExecuteSpan(this);
+    }
+}
+
+
+/// <summary>
 /// 全局事件总线 —— 统一控制不同事件。
 ///
 /// 为什么不用 C# 的 event 直接订阅：
@@ -399,6 +452,31 @@ public class AnchorPoint : MonoBehaviour
         mr.sharedMaterial = BaseMat;   // 先共享，用到改色时再克隆
         gameObject.AddComponent<SphereCollider>().radius = 0.3f;
         transform.localScale = Vector3.one * 0.2f;
+    }
+
+    /// <summary>
+    /// 把这个锚点标记为「可被玩家构建」，并放大碰撞体。
+    ///
+    /// 为什么需要：默认锚点半径 0.3 × localScale 0.2 = 实际仅 0.06 格，
+    /// 射线几乎打不中 —— 玩家自己构建的节点就无法作为挂点被动态丝线粘住。
+    /// 这里把碰撞体恢复到世界空间 1.5 格，让玩家节点真正可粘。
+    /// </summary>
+    public void MarkAsPlayerNode(float worldRadius = 1.5f)
+    {
+        type = AnchorType.PlayerNode;
+        var col = GetComponent<SphereCollider>();
+        if (col != null)
+        {
+            // 父级缩放会影响实际半径，这里按localScale 反算，
+            // 保证世界空间半径就是 worldRadius
+            float s = transform.lossyScale.x;
+            if (s < 0.0001f) s = 1f;
+            col.radius = worldRadius / s;
+        }
+        // 玩家节点用醒目颜色，一眼能看出哪些是自己建的
+        SetColor(new Color(0.4f, 1f, 0.5f));
+        transform.localScale = Vector3.one;   // 恢复原尺寸，让碰撞半径直观
+        gameObject.name = "PlayerNode_" + position;
     }
 
     public void SetColor(Color c)
@@ -1518,6 +1596,9 @@ public class SilkBuilder : MonoBehaviour
 
     SilkSpatialHash spatialHash;
 
+    [Tooltip("玩家自建节点的世界空间碰撞半径。默认锚点仅 0.06 格，射线打不中，固化时必须放大才能被动态丝线粘住")]
+    public float playerNodeRadius = 1.5f;
+
     /// <summary>第三人称跑酷模式。为 true 时本组件不响应鼠标左键与 R，
     /// 避免与玩家的「发射丝线」「重置」冲突。由控制器在切模式时设置。</summary>
     public bool parkourMode = false;
@@ -1552,6 +1633,8 @@ public class SilkBuilder : MonoBehaviour
         SilkEventBus.Register<SilkReleaseSignal>(this);
         SilkEventBus.Register<SilkForceSignal>(this);
         SilkEventBus.Register<SilkFireSignal>(this);
+        SilkEventBus.Register<SilkPinNodeSignal>(this);
+        SilkEventBus.Register<SilkSpanSignal>(this);
 
         previewGO = new GameObject("PreviewLine");
         previewGO.transform.SetParent(transform);
@@ -1670,6 +1753,8 @@ public class SilkBuilder : MonoBehaviour
         SilkEventBus.Unregister<SilkReleaseSignal>(this);
         SilkEventBus.Unregister<SilkForceSignal>(this);
         SilkEventBus.Unregister<SilkFireSignal>(this);
+        SilkEventBus.Unregister<SilkPinNodeSignal>(this);
+        SilkEventBus.Unregister<SilkSpanSignal>(this);
     }
 
     /* ============ 事件执行器（由 SilkEventBus 统一调用） ============ */
@@ -1707,6 +1792,47 @@ public class SilkBuilder : MonoBehaviour
             Debug.Log("[Event] 断裂 " + signal.cause + " × " + count +
                       (signal.target != null ? "（指定线）" : "（广播）"));
         }
+    }
+
+    /// <summary>
+    /// 执行固化：把某点变成玩家自建的可粘附节点。
+    /// 同一位置重复调用会复用已有节点（靠 5 格去重），
+    /// 因此多道线可以共��同一个节点 —— 这正是「结网」需要的。
+    /// </summary>
+    public AnchorPoint ExecutePinNode(SilkPinNodeSignal signal)
+    {
+        if (signal == null) return null;
+
+        var anchor = CreateAnchorAt(signal.position);
+        if (anchor == null) return null;
+
+        // 只在首次创建时标记；复用的节点已经是 PlayerNode
+        if (anchor.type != AnchorType.PlayerNode)
+        {
+            anchor.MarkAsPlayerNode(playerNodeRadius);
+            Debug.Log("[Node] 固化玩家节点 " + anchor.position);
+        }
+        return anchor;
+    }
+
+    /// <summary>
+    /// 执行结网：在两个点之间生成静态丝线。
+    /// 两端都走 CreateAnchorAt，所以若玩家先前已在这些位置固化过节点，
+    /// 就会自动复用 —— 实现「多线共节点」。
+    /// </summary>
+    public void ExecuteSpan(SilkSpanSignal signal)
+    {
+        if (signal == null) return;
+        float len = Vector3.Distance(signal.from, signal.to);
+        if (len < 1f) return;
+
+        var a = CreateAnchorAt(signal.from);
+        var b = CreateAnchorAt(signal.to);
+        if (a == null || b == null || a == b) return;
+
+        CreateSilkLine(a, b, defaultColor, BreakMode.Middle);
+        Debug.Log("[Span] 结网 " + a.position + " ↔ " + b.position +
+                  " 长度 " + len.ToString("F1"));
     }
 
     /// <summary>
@@ -2573,6 +2699,17 @@ public class SilkParkourController : MonoBehaviour
         cam.transform.up = Vector3.forward;
     }
 
+    [Header("蜘蛛侠式发射")]
+    [Tooltip("发射方向的向上抬升角（度）。0=水平前，45=斜上 45 度。"
+           + "蜘蛛侠荡过沟壑时是斜向上方发射")]
+    [Range(0f, 80f)] public float fireElevation = 35f;
+
+    [Tooltip("勾住目标时的搜索半径。从玩家位置向运动前方找可挂点")]
+    public float seekRadius = 60f;
+
+    [Tooltip("勾住后是否自动进入摆动（否则只是挂着）")]
+    public bool autoSwingAfterHook = true;
+
     [Header("第三人称相机")]
     public float camDistance = 40f;
     public float camHeight = 12f;
@@ -2629,11 +2766,17 @@ public class SilkParkourController : MonoBehaviour
             else DoRelease();
         }
 
-        // 左键：发射丝线（自己发射的才能自己断开）
-        if (Input.GetMouseButtonDown(0)) TryFire();
+        // 左键：蜘蛛侠式发射 —— 斜向上前方发射并自动勾住
+        if (Input.GetMouseButtonDown(0)) TryFireAndHook();
 
         // X：断开自己发射的第一根丝线
         if (Input.GetKeyDown(KeyCode.X)) CutFirstFiredLine();
+
+        // C：把当前位置固化成可粘附节点（自己构建地形）
+        if (Input.GetKeyDown(KeyCode.C)) PinHere();
+
+        // V：在两个已固化节点之间结网（静态结网）
+        if (Input.GetKeyDown(KeyCode.V)) TrySpanNodes();
 
         if (Input.GetKeyDown(KeyCode.R))
         {
@@ -2643,6 +2786,102 @@ public class SilkParkourController : MonoBehaviour
             isFlying = true;
         }
     }
+
+    /// <summary>
+    /// 蜘蛛侠式发射：沿「运动前方 + 上抬」方向发射，命中后自动勾住并进入摆动。
+    ///
+    /// 与水平发射的关键差别：方向是斜上方的。Python 实算（爬升 35 度）：
+    ///   射程 61 格 -> 水平 50 格 + 上升 35 格，正好跨过 50 格的沟壑。
+    /// 所以射程要开大（fireRange 默认 200），才能跳过大沟。
+    /// </summary>
+    void TryFireAndHook()
+    {
+        if (builder == null) return;
+        if (cam == null) cam = FindObjectOfType<SimpleOrbitCamera>();
+        if (cam == null) return;
+
+        Vector3 origin = transform.position;
+
+        // 基准方向：有速度时沿运动方向（真正的「前进」），否则用相机朝向
+        Vector3 flat = bodyVelocity.sqrMagnitude > 1f
+            ? new Vector3(bodyVelocity.x, bodyVelocity.y, 0f)
+            : new Vector3(cam.transform.forward.x, cam.transform.forward.y, 0f);
+        if (flat.sqrMagnitude < 0.0001f) flat = Vector3.forward;
+        flat = flat.normalized;
+
+        // 按爬升角抬起（Z 为高度轴）
+        float e = fireElevation * Mathf.Deg2Rad;
+        Vector3 dir = (flat * Mathf.Cos(e) + Vector3.forward * Mathf.Sin(e)).normalized;
+
+        if (!Physics.Raycast(origin, dir, out RaycastHit hit, fireRange, fireMask))
+        {
+            Debug.Log("[Parkour] 发射未命中（射程 " + fireRange + "）");
+            return;
+        }
+        if (Vector3.Distance(origin, hit.point) < minFireLength) return;
+
+        // 生成丝线
+        SilkEventBus.Post(new SilkFireSignal(origin, hit.point, autoAttach: false));
+        var line = LastFiredLine();
+        if (line == null) return;
+        if (!firedLines.Contains(line)) firedLines.Add(line);
+
+        // 把末端挂到命中点 -> 进入摆荡
+        var tip = builder.CreateAnchorAt(hit.point);
+        if (tip == null) return;
+        line.Attach(tip, builder, "命中点");
+        if (autoSwingAfterHook) line.StartSwing();
+        isFlying = false;
+        grabbed = line;
+        Debug.Log("[Parkour] 勾住 " + hit.point + " 距离 " +
+                  Vector3.Distance(origin, hit.point).ToString("F1"));
+    }
+
+    /// <summary>取最近一根自己发射的线（刚生成的在列表末尾）。</summary>
+    SilkLine LastFiredLine()
+    {
+        if (builder == null || builder.Lines.Count == 0) return null;
+        return builder.Lines[builder.Lines.Count - 1];
+    }
+
+    /// <summary>把当前位置固化成可粘附节点。
+    /// 之后它可以：被动态丝线粘住 / 作为结网的连接点 / 当墙面挂点使用。</summary>
+    void PinHere()
+    {
+        SilkEventBus.Post(new SilkPinNodeSignal(transform.position));
+        Debug.Log("[Parkour] 固化当前位置为节点");
+    }
+
+    /// <summary>静态结网：把自己固化过的节点两两连起来。
+    /// 先固化几个点再按 V，就能在空中构建出自己的挂点网络。</summary>
+    void TrySpanNodes()
+    {
+        if (builder == null) return;
+
+        var nodes = new List<AnchorPoint>();
+        foreach (var a in builder.Lines.Count > 0 ? AllAnchors() : new List<AnchorPoint>())
+            if (a != null && a.type == AnchorType.PlayerNode) nodes.Add(a);
+
+        if (nodes.Count < 2)
+        {
+            Debug.Log("[Parkour] 至少需要 2 个已固化的节点（当前 " + nodes.Count + " 个）。先按 C 固化。");
+            return;
+        }
+
+        // 依次把相邻的节点连起来，形成网络
+        int made = 0;
+        for (int i = 0; i + 1 < nodes.Count; i++)
+        {
+            SilkEventBus.Post(new SilkSpanSignal(nodes[i].WorldPosition,
+                                              nodes[i + 1].WorldPosition));
+            made++;
+        }
+        Debug.Log("[Parkour] 结网 " + made + " 条（" + nodes.Count + " 个节点）");
+    }
+
+    /// <summary>取场景中所有锚点（供结网筛选 PlayerNode）。</summary>
+    System.Collections.Generic.List<AnchorPoint> AllAnchors()
+        => new System.Collections.Generic.List<AnchorPoint>(FindObjectsOfType<AnchorPoint>());
 
     /// <summary>
     /// 发射丝线：从球心沿当前朝向做射线检测，命中点生成一条静态丝线。
