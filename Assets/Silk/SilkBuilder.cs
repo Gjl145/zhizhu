@@ -1280,6 +1280,15 @@ public class SilkChain : MonoBehaviour
     [Tooltip("形变上限：绳索最多能拉伸的比例，超过就绷直不再伸长。"
            + "真实蛛丝断裂伸长率约 20~30%")]
     [Range(0f, 0.5f)] public float maxStrain = 0.25f;
+
+    /* 形变与断裂是**两件独立的事**（用户明确要求）：
+     *   形变 —— 受力导致，受 maxStrain 限制，永远不会自己断
+     *   断裂 —— 只由按键 / 信号触发（右键、断视线线、断自己发的线）
+     *
+     * 真实蛛丝拉过头会断，但本作断裂是**玩法控制**——
+     * 如果做成「力太大就自己断」，玩家摆荡时会莫名断线，手感全毁。*/
+    [Tooltip("拉到形变上限时是否自动断裂。本作=false：断裂只由按键/信号触发")]
+    public bool breakOnOverstretch = false;
     readonly List<float> restLengths = new();
     readonly List<Vector3> velocities = new();   // 显式速度（格/秒）
 
@@ -1505,24 +1514,25 @@ public class SilkChain : MonoBehaviour
                 float len = d.magnitude;
                 if (len < 0.0001f) continue;
 
-                /* 弹性绳索（单向拉伸，类似真实蛛丝）。
+                float rest = restLengths[i];
+
+                /* 弹性绳索：只会被拉长，不会被压短。
                  *
-                 * rest = 该段的「自然长度」。允许被拉伸到 rest*(1+maxStrain)：
+                 * rest = 该段的自然长度，允许拉伸到 rest*(1+maxStrain)：
                  *   len < rest        -> 松弛，不修正（重力让它自然下垂）
-                 *   rest <= len <= max -> 正常拉伸，不修正（形变在弹性范围内）
-                 *   len > max         -> 拉回到 max（绷直，不再伸长）
+                 *   rest <= len <= max -> 正常拉伸，不修正（弹性范围内）
+                 *   len > max         -> 拉回 max（绷直，不再伸长）
                  *
-                 * 上一版写成 restNow = len>maxLen ? maxLen : rest，
-                 * 导致「压缩时也强行拉回rest」—— 绳索永远绷直，
-                 * 因为 rest 已slackScale 放大 15%。
-                 * 弹性绳只能被拉长，不能被压短，所以压缩时不修正。*/
+                 * 注意：形变到极限也**不会断裂** —— 断裂是独立机制，
+                 * 由按键/信号触发（BreakAtPresetPoint），不由物理触发。
+                 * 真实蛛丝被拉到极限会断，但本作的断裂是玩法控制，
+                 * 不做成「力太大就自己断」，否则玩家会在摆荡中莫名断线。
+                 */
                 float maxLen = rest * (1f + maxStrain);
                 float diff = 0f;
                 if (len > maxLen)
                     diff = ((len - maxLen) / len) * stiffness;
-                if (diff > 1f) diff = 1f;
-                else if (diff < 0f) diff = 0f;
-                if (diff == 0f) continue;      // 松弛或正常拉伸，无需修正
+                if (diff <= 0f) continue;      // 松弛或正常拉伸，无需修正
 
                 if (i == 0)
                 {
