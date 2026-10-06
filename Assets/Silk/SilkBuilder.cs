@@ -2388,7 +2388,7 @@ public class SilkWorldBootstrap
 
         /* 跑酷测试关卡（临时）。
          * 删除：删掉这一行 + SilkTestLevel.cs 整个文件即可。*/
-        if (createTestLevel) SilkTestLevel.Create(grid.GetHalfSize());
+        if (SilkBuilder.createTestLevel) SilkTestLevel.Create(grid.GetHalfSize());
 
         var builderGO = new GameObject("SilkBuilder");
         var builder = builderGO.AddComponent<SilkBuilder>();
