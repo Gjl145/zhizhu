@@ -281,6 +281,33 @@ if missing:
 else:
     ok('外部类型引用均可解析（class/interface/enum/struct 全覆盖）')
 
+# ---------- 12. 设计文档与实现一致性 ----------
+# SilkParkourDesign.cs 里列了「已实现机制」与「缺口清单」。
+# 若代码里新增/删除了这些机制，文档不会自动更新 -> 会误导后来者。
+# 这里做一次粗粒度对照：文档声称已实现的，必须能在代码里找到对应符号。
+DESIGN = 'Assets/Silk/SilkParkourDesign.cs'
+if os.path.exists(DESIGN):
+    d = open(DESIGN, encoding='utf-8').read()
+    # 从 Implemented 常量里抽出标识符
+    m = re.search(r'Implemented\s*=\s*(.*?);', d, re.S)
+    if m:
+        blob = m.group(1)
+        ids = set(re.findall(r'[A-Za-z_]\w{3,}', blob))
+        # 过滤掉说明性文字里的常见词
+        skip = {'以及', 'the', 'and', '或者', '并行'}
+        missing_doc = []
+        for ident in sorted(ids):
+            if ident in skip:
+                continue
+            # 在代码里找定义或调用
+            if not re.search(r'\b' + re.escape(ident) + r'\b', s):
+                missing_doc.append(ident)
+        if missing_doc:
+            for i in missing_doc:
+                warn('设计文档称已实现「%s」，但代码里找不到（文档可能过期）' % i)
+        else:
+            ok('设计文档声称已实现的 %d 项机制在代码中均存在' % len(ids))
+
 # ---------- 汇总 ----------
 print()
 print('=' * 60)
