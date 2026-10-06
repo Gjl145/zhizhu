@@ -3092,14 +3092,24 @@ public class SimpleOrbitCamera : MonoBehaviour
             transform.position += transform.forward * scroll * scrollZoomSpeed;
     }
 
-    /// <summary>按当前 position 重新反解 yaw/pitch 并应用。
-    /// 切回 FreeFly 时用 —— 因为 Parkour 期间 FollowCamera 改了相机位置，
-    /// 但 yaw/pitch 仍是旧值，不重算会导致朝向与位置不一致。</summary>
+    /// <summary>按当前 rotation 反解 yaw/pitch。
+    ///
+    /// 【关键：必须 clamp，否则会锁死俯仰】
+    /// 若不夹紧，相机接近正上方/正下方时反解出的 pitch 会逼近 ±90，
+    /// 而 pitch=±90 时 LookRotation(dir=(0,0,∓1), up=(0,0,1)) 因dir 与 up
+    /// 反向而**退化**，朝向变成垃圾值 -> 球离屏 -> 再次 ResetOrientation，
+    /// 形成死循环，把视角锁死在「正上方俯视」。
+    /// 用户实测症状：只能在正向/侧向之间徘徊 + 永远俯视着球。
+    ///
+    /// clamp 到±(pitchMax) 留余量，与 HandleLookOnly 用同一组上下限。
+    /// </summary>
     public void ResetOrientation()
     {
         Vector3 f = transform.forward;
         if (f.sqrMagnitude < 0.0001f) return;
         pitch = Mathf.Asin(Mathf.Clamp(f.z, -1f, 1f)) * Mathf.Rad2Deg;
+        // 关键：夹紧。留 1 度余量，绝不允许到 ±90（LookRotation 会退化）
+        pitch = Mathf.Clamp(pitch, pitchMin, pitchMax);
         yaw = Mathf.Atan2(f.y, f.x) * Mathf.Rad2Deg;
     }
 
@@ -3166,19 +3176,24 @@ public class SimpleOrbitCamera : MonoBehaviour
     [Tooltip("Parkour 模式下锁定光标，让鼠标移动直接控制视角（第一人称手感）")]
     public bool lockCursorForLook = true;
 
-    [Tooltip("光标锁定时的视角灵敏度（度/像素）。右键拖动用rotateSpeed")]
-    public float lookSensitivity = 2.2f;
+    [Tooltip("光标锁定时的视角灵敏度（度/像素）。右键拖动用rotateSpeed。"
+        + "2.2偏慢：跨越 160 度的完整俯仰范围需要约 70 像素移动，"
+        + "调到 6.0 后约 27 像素即可转完，接近主流第三人称手感")]
+    public float lookSensitivity = 6f;
 
     [Tooltip("每 0.5 秒输出一次视角诊断（排查「视角不动」时开启）")]
     public bool verboseLookLog = true;
 
     float lookDiagTimer;
 
-    [Tooltip("俯仰角下限（度）。负值= 看向下方")]
-    public float pitchMin = -70f;
+    [Tooltip("俯仰角下限（度）。负值 = 相机升到高处俯视。"
+           + "**不要达到 -90**：LookRotation 在 ±90 时因 dir 与 up 反向而退化，"
+           + "朝向会变成垃圾值。-80 已足够俯视")]
+    public float pitchMin = -80f;
 
-    [Tooltip("俯仰角上限（度）。正值 = 看向上方")]
-    public float pitchMax = 70f;
+    [Tooltip("俯仰角上限（度）。正值 = 相机降到低处仰视。"
+           + "同样不要达到 +90。80 已足够仰视")]
+    public float pitchMax = 80f;
 
     /// 由 yaw(绕Z) + pitch(仰角) 直接构造朝向，+Z 为上。
     /// 不能用 Quaternion.Euler —— 那是 Y-up 硬编码。
@@ -3186,12 +3201,34 @@ public class SimpleOrbitCamera : MonoBehaviour
     /// 实测朝向误差 1.67（几乎反向），画面会转到看不到立方体的地方。
     void ApplyRotation()
     {
+        /* 【必须在函数内部夹紧】注释一直写着「先夹紧 pitch」，
+         * 但代码从未夹过 —— 又一次注释与实现不一致。
+         *
+         * 为什么必须在这里（而不是只在 HandleLookOnly）夹：
+         * pitch 有多个写入源（HandleLookOnly / ResetOrientation /
+         * 外部直接赋值），任何一处漏夹都可能传到 ±90。
+         * 而 pitch = ±90 时 cos(p) ≈ 0 -> dir ≈ (0,0,±1)，
+         * 与 up=(0,0,1) 反向 -> LookRotation **退化**，
+         * 朝向变成不可预测的垃圾值。
+         *
+         * 实测症状：视角在正向/侧向之间反复跳 + 永远俯视着球
+         *（ResetOrientation 反复反解出接近 ±90 的 pitch 所致）。
+         *
+         * 留 5 度余量：即使用外部绕过 clamp，也退化不了。
+         */
+        pitch = Mathf.Clamp(pitch, pitchMin, pitchMax);
+
         float p = pitch * Mathf.Deg2Rad;
+        float y = yaw * Mathf.Deg2Rad;
         Vector3 dir = new Vector3(
-            Mathf.Cos(p) * Mathf.Cos(yaw * Mathf.Deg2Rad),
-            Mathf.Cos(p) * Mathf.Sin(yaw * Mathf.Deg2Rad),
+            Mathf.Cos(p) * Mathf.Cos(y),
+            Mathf.Cos(p) * Mathf.Sin(y),
             Mathf.Sin(p));
-        // 第二参数为 up 参考轴：与 dir 接近平行时 LookRotation 会退化，故先夹紧 pitch
+
+        // 兜底：dir 退化（长度≈0）时直接返回，保持上一帧有效朝向
+        if (dir.sqrMagnitude < 0.0001f) return;
+
+        // 第二参数为 up 参考轴：与 dir 接近平行时 LookRotation 会退化（已由上面 clamp 保证）
         transform.rotation = Quaternion.LookRotation(dir, Vector3.forward);
     }
 
@@ -3856,10 +3893,22 @@ public class SilkParkourController : MonoBehaviour
         cam.transform.up = Vector3.forward;   // Z-up 世界约定
         cam.OrbitAround(transform.position, camDistance, camHeight);
 
-        /* 安全网：万一球还是跑出了画面（例如相机避障把相机推到墙里、
-         * 或玩家把 pitch 转到极限），重新对准一次。
-         * OrbionAround 正常情况下保证球在画面内，所以这是兜底而非常规路径。*/
-        if (lookAlignedOnce && BallOffScreen()) AlignCameraToBall();
+        /* 【已移除】BallOffScreen() -> AlignCameraToBall() 的「安全网」。
+         *
+         * 它原本是想兜住「球跑出画面」，但实测它本身就是**病根**：
+         *   OrbitAround 依据 pitch 把相机摆高-> 球可能短暂离屏
+         *   -> AlignCameraToBall 调 ResetOrientation 反解 pitch
+         *   -> 反解出的 pitch 逼近 ±90（未clamp）
+         *   -> LookRotation 因 dir 与 up 反向而退化，朝向变垃圾
+         *   -> 球更离屏 -> 再次 AlignCameraToBall -> **死循环**
+         *
+         * 用户症状正是这个循环的结果：视角在正向/侧向之间徘徊，
+         * 且永远只能俯视着球。
+         *
+         * 现在修正顺序：ResetOrientation 已加 clamp（根本解决），
+         * 且 OrbitAround 由朝向推导位置，天然保证球在画面内，
+         * 不需要这个「安全网」。它反而破坏了玩家的视角控制。
+         */
 
         /* 诊断：确认相机在球外且球在画面内。
          * 用户报告「变成第一人称」—— 若相机在球内（距离 < 球半径），
@@ -3878,23 +3927,10 @@ public class SilkParkourController : MonoBehaviour
         }
     }
 
-    /// <summary>球是否在相机视野内。
-    /// 用 Viewport 归一化坐标判断：超出 [0,1] 即在画面外。
-    /// 比用角度阈值更准，也不依赖 FOV 假设。</summary>
-    bool BallOffScreen()
-    {
-        if (camComp == null) return false;
-        Camera c = camComp;
-        Vector3 vp = c.WorldToViewportPoint(transform.position);
-        if (vp.z <= 0f) return true;
-        const float m = 0.12f;   // 留一点余量，贴边也算在视野内
-        return vp.x < -m || vp.x > 1f + m ||
-               vp.y < -m || vp.y > 1f + m;
-    }
-
     /// <summary>把相机对准球，并同步 yaw/pitch。
-    /// 用 ResetOrientation 让SimpleOrbitCamera 的内部状态与新朝向一致，
-    /// 否则它下���帧又会用旧 yaw/pitch 把朝向转回去。</summary>
+    /// 用 ResetOrientation 让 SimpleOrbitCamera 的内部状态与新朝向一致，
+    /// 否则它下一帧又会用旧 yaw/pitch 把朝向转回去。
+    /// 仅在切进 Parkour 的第一帧调用，之后完全交给玩家。</summary>
     void AlignCameraToBall()
     {
         Vector3 toBall = transform.position - cam.transform.position;
