@@ -1635,9 +1635,11 @@ public class SilkBuilder : MonoBehaviour
     [Tooltip("玩家自建节点的世界空间碰撞半径。默认锚点仅 0.06 格，射线打不中，固化时必须放大才能被动态丝线粘住")]
     public float playerNodeRadius = 1.5f;
 
+    /* 注意：必须是 static —— Build() 在 SilkWorldBootstrap 里是静态方法，
+     * 拿不到 MonoBehaviour 的实例字段。 */
     [Tooltip("是否生成跑酷测试关卡（3 个平台 + 沟壑）。"
            + "临时功能，删除 SilkTestLevel.cs 后请把这里也移除")]
-    public bool createTestLevel = true;
+    public static bool createTestLevel = true;
 
     /// <summary>第三人称跑酷模式。为 true 时本组件不响应鼠标左键与 R，
     /// 避免与玩家的「发射丝线」「重置」冲突。由控制器在切模式时设置。</summary>
@@ -2745,6 +2747,7 @@ public class SilkParkourController : MonoBehaviour
     Vector3 bodyVelocity;             // 挂载期间的自身速度（由位置差反推）
     Transform visual;                 // 可见球体（自动创建）
     SimpleOrbitCamera cam;            // 第三人称时由它跟随
+    Camera camComp;                   // ScreenPointToRay 等方法在 Camera 上，不在控制器上
 
     [Header("构建锚点")]
     [Tooltip("需要先发射多少次丝线，才允许在当前位置构建锚点。"
@@ -2761,6 +2764,8 @@ public class SilkParkourController : MonoBehaviour
     {
         builder = FindObjectOfType<SilkBuilder>();
         cam = FindObjectOfType<SimpleOrbitCamera>();
+        // ScreenPointToRay 定义在 Camera 上，必须单独取
+        camComp = cam != null ? cam.GetComponent<Camera>() : Camera.main;
         transform.position = startPosition;
         CreateVisual();
     }
@@ -3163,8 +3168,12 @@ public class SilkParkourController : MonoBehaviour
         if (cam == null) cam = FindObjectOfType<SimpleOrbitCamera>();
         if (cam == null) return;
 
-        // 从相机中心发射线，用最近中点判定命中
-        Ray ray = cam.ScreenPointToRay(new Vector3(Screen.width * 0.5f, Screen.height * 0.5f, 0f));
+        // 从相机中心发射线，用最近中点判定命中。
+        // ScreenPointToRay 在 Camera 组件上，SimpleOrbitCamera 没有这个方法。
+        if (camComp == null) camComp = cam.GetComponent<Camera>();
+        if (camComp == null) return;
+        Ray ray = camComp.ScreenPointToRay(
+            new Vector3(Screen.width * 0.5f, Screen.height * 0.5f, 0f));
         SilkLine best = null;
         float bestD = 20f;   // 视线附近20 格内算命中
         foreach (var line in builder.Lines)
