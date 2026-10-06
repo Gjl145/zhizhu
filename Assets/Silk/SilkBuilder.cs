@@ -3612,6 +3612,7 @@ public class SilkParkourController : MonoBehaviour
         if (mode == SilkControlMode.Parkour)
         {
             HandleKeys();
+            TickDashCooldown(dt);   // 冲刺冷却与物理同频递减
 
             /* 【调度重构】移动不再依赖 isFlying。
              *
@@ -3898,6 +3899,7 @@ public class SilkParkourController : MonoBehaviour
             flatVel = Vector3.zero;   // 地面速度也要清，否则带着上一世界的惯性
             vertVel = 0f;         // 垂直速度同理，否则切回来时悬空或卡在跳跃中
             grounded = false;
+            ResetDashState();
             isFlying = true;
             CreateVisual();       // 幂等：已存在则直接返回
             UpdateVisualColor();
@@ -4275,6 +4277,8 @@ public class SilkParkourController : MonoBehaviour
                 // 落地：垂直速度按 landBounce 衰减（默认 0 = 完全弹停）
                 vertVel *= landBounce;
                 grounded = true;
+                // 落地时解除「本次滞空只能用一次冲刺」的限制
+                ResetDashOnLanding();
                 if (verboseFireLog && Mathf.Abs(vertVel) > 1f)
                     Debug.Log("[Jump] 落地，保留垂直速度 " + vertVel.ToString("F1"));
             }
@@ -4335,6 +4339,109 @@ public class SilkParkourController : MonoBehaviour
         // 清掉已并入的飞行速度，避免 UpdateFlight 重复积分
         flightVel = Vector3.zero;
     }
+
+    /* ---------- 冲刺（Dash）---------- */
+
+    /// <summary>冲刺冷却计时（剩余秒数）。<= 0 表示可用。</summary>
+    float dashCooldown = 0f;
+
+    /// <summary>本帧是否刚用掉冲刺 —— 用于落地/切换时重置冷却计数。</summary>
+    bool dashUsedThisAirborne = false;
+
+    /// <summary>
+    /// 冲刺：沿视线方向施加**瞬时速度冲量**，地面与空中都能用。
+    ///
+    /// 【为什么需要它 —— 摆荡的节奏全靠「松手那一瞬的速度」】
+    /// 没有冲刺时，玩家只能靠「一直按住方向键」这种笨办法调速度；
+    /// 有了冲刺就有了**主动控制节奏**的手段。
+    /// 这正是《幽灵行者》冲刺/滑铲/跑墙被当作「动量累积器」的意义。
+    ///
+    /// 【设计取舍（对标三款标杆游戏）】
+    /// · 幽灵行者：空中按住 Dash = 时间减速，松手 = 从新位置冲出。
+    ///   本作不做时间减速（那是第一人称视角的设计），
+    ///   只保留「瞬时冲量」这一半 —— 因为摆荡游戏的核心是速度，不是时间操控。
+    /// · 消逝之光2：钩爪是「真实的绳子」而非传送。
+    ///   同理，冲刺**只是加速**而不是「瞬移」——
+    ///   它给球一个速度增量，位置仍然靠速度积分推进，保持物理连续性。
+    ///
+    /// 【关键：不能覆盖已有速度】
+    /// 冲刺是**叠加**在当前速度之上的增量，不是设为固定值。
+    /// 若直接赋值，就破坏了「动量是核心资产」这条铁律
+    /// （本项目在 flatVel 上已经踩过一次这个坑）。
+    /// </summary>
+    void DoDash()
+    {
+        if (dashCooldown > 0f) return;
+
+        /* 空中每次滞空只允许一次冲刺（《幽灵行者》的规则）。
+         *
+         * 【为什么需要这条限制】
+         * 没有限制时玩家会在空中连按冲刺，速度无上限地累积，
+         * 摆荡的「节奏感」就没了 —— 变成一路加速直到撞墙。
+         * 限制成「一次滞空一次」后，冲刺变成**决策**：
+         * 「现在冲，还是留着等下一次摆荡？」
+         * 这正是幽灵行者冲刺玩法的核心张力。
+         * 地面不限制（滑行/地面加速可自由叠加）。*/
+        if (!grounded && dashUsedThisAirborne) return;
+
+        // 方向：优先沿视线水平方向；按住 W 时沿当前速度方向
+        //（两者一致时冲量收益最大 —— 因为速度是矢量，方向一致才能真正提速）
+        Vector3 dir = MoveForward;
+        if (flatVel.sqrMagnitude > 0.0001f && Input.GetKey(KeyCode.W))
+            dir = new Vector3(flatVel.x, flatVel.y, 0f).normalized;
+
+        // 叠加水平冲量
+        Vector3 boost = dir * dashImpulse;
+        flatVel += new Vector3(boost.x, boost.y, 0f);
+
+        // 空中冲刺额外给一点上升 —— 让冲刺能接续跳跃，
+        // 做出「跳 -> 冲刺 -> 拉高 -> 再摆」的节奏（消逝之光的做法）
+        if (!grounded) vertVel += dashLift;
+
+        dashCooldown = dashCooldownTime;
+        dashUsedThisAirborne = true;
+
+        if (verboseFireLog)
+            Debug.Log("[Dash] 冲刺！水平速度 -> " + flatVel.magnitude.ToString("F0") +
+                      "，垂直 -> " + vertVel.ToString("F0"));
+    }
+
+    /// <summary>冲刺冷却递减。在 Update 的 Parkour 分支里调用。</summary>
+    void TickDashCooldown(float dt)
+    {
+        if (dashCooldown > 0f) dashCooldown -= dt;
+    }
+
+    /// <summary>着地时调用：解除「本次滞空只能用一次冲刺」的限制。</summary>
+    void ResetDashOnLanding()
+    {
+        dashUsedThisAirborne = false;
+    }
+
+    /// <summary>切模式 / R 重置 / 松手时清空冲刺状态。
+    ///
+    /// 【为什么必须清】与 vertVel / grounded 同理 ——
+    /// 这些状态若残留，会出现「刚切进游戏world就处于冲刺冷却」
+    /// 「落地后仍不能冲刺」等怪现象。状态机的每个进入点都要清全。</summary>
+    void ResetDashState()
+    {
+        dashCooldown = 0f;
+        dashUsedThisAirborne = false;
+    }
+
+    [Header("冲刺")]
+    [Tooltip("冲刺的瞬时速度增量（格/秒）。**叠加**在当前速度上，不是设为固定值 —— "
+           + "覆盖速度会破坏「动量是核心资产」这条铁律")]
+    public float dashImpulse = 42f;
+
+    [Tooltip("空中冲刺额外附加的上升速度（格/秒）。"
+        + "让冲刺能接续跳跃，做出「跳→冲刺→拉高→再摆」的节奏。\n"
+        + "注意：额外高度 = v²/(2g) = 14²/100 ≈ **1.96 格** —— "
+        + "设 6 时只有 0.36 格，几乎感觉不到，达不到「拉高再松手」的效果")]
+    public float dashLift = 14f;
+
+    [Tooltip("冲刺冷却（秒）。0.3 秒左右既不打断节奏，又能防止连按刷速度")]
+    public float dashCooldownTime = 0.3f;
 
     /// <summary>水平移动速度（XZ 平面），已做插值。
     /// 独立于 flightVel（那是空中惯性），两者互不干扰。</summary>
@@ -4508,6 +4615,18 @@ public class SilkParkourController : MonoBehaviour
             DoRelease();
         }
 
+        /* 右 Shift：冲刺（Dash）—— 瞬时速度冲量，地面/空中都能用。
+         *
+         * 【为什么用右 Shift 而不是左 Shift】
+         * 左 Shift 已经是「加速跑」+「抓着丝线时松手」两用。
+         * 若冲刺也用它，一个按键会有三种语义，逻辑上互相打架。
+         * 左右手分离是《蜘蛛侠2》等动作游戏的惯例，也更符合直觉。
+         *
+         * 【空中冲刺的额外价值】
+         * 摆荡时想「拉高一点再松手」就需要上冲的��量 ——
+         * 只给水平冲量是不够的，故空中会额外附加 dashLift 的上升速度。*/
+        if (Input.GetKeyDown(KeyCode.RightShift)) DoDash();
+
         /* 左键：**自动瞄准**并抓住最优锚点（不再需要玩家点选）。
          * 详见 FireAtAnchor / PickBestAnchor 的注释 ——
          * 手动点击在 100³ 网格 + 高速移动下几乎不可用。*/
@@ -4551,6 +4670,7 @@ public class SilkParkourController : MonoBehaviour
             flatVel = Vector3.zero;   // 地面速度也要清，否则带着上一世界的惯性
             vertVel = 0f;         // 垂直速度同理
             grounded = false;
+            ResetDashState();
             isFlying = true;
             if (builder != null) builder.CancelPendingNode();
             FollowCamera();
@@ -4980,6 +5100,7 @@ public class SilkParkourController : MonoBehaviour
          * 统一收敛到「空中、无垂直速度」的一致状态。*/
         vertVel = 0f;
         grounded = false;
+        ResetDashState();
 
         // 只在真的松过手时才打 —— DoRelease 由空格触发，频率低，
         // 但玩家若连按会刷屏，故加个开关。默认不输出。
