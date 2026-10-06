@@ -2996,10 +2996,24 @@ public class SimpleOrbitCamera : MonoBehaviour
 
     void Update()
     {
-        /* Parkour 模式：相机完全交出控制权。
-         * 视角锁死在球上（固定在球后方 + 始终 LookAt 球），
-         * 由 SilkParkourController.FollowCamera 负责。此处不响应任何输入。*/
-        if (!inputEnabled) return;
+        /* Parkour 模式：只保留**视角**控制，键盘移动交给玩家控制器。
+         *
+         * 【曾经的 bug】原来这里是 `if (!inputEnabled) return;` 一刀切，
+         * 而 inputEnabled 在 Parkour 下为 false —— 结果连
+         * HandleLookOnly() 都没被调用过，**鼠标视角完全不生效**。
+         * 方法上方的注释写着「HandleLookOnly 仍响应右键环绕」，
+         * 但它根本没有调用点，注释与实现矛盾（同类问题见FollowCamera）。
+         *
+         * 现在的分工：
+         *   视角（鼠标）-> 本类负责，两个世界各自的习惯不同
+         *   移动（WASD）-> 只有 FreeFly 由本类负责；
+         *Parkour 交给 SilkParkourController（两个世界键位故意不共享）
+         */
+        if (!inputEnabled)
+        {
+            HandleLookOnly();   // Parkour：鼠标控制视角
+            return;
+        }
 
         if (Input.GetKeyDown(flipKey))
         {
@@ -3066,33 +3080,34 @@ public class SimpleOrbitCamera : MonoBehaviour
     {
         // 鼠标锁定：光标锁在屏幕中心，用 Mouse X/Y 增量直接驱动视角。
         // Cursor.lockState 让 Input.GetAxis("Mouse X/Y") 持续返回增量值。
-        if (lockCursorForLook)
-        {
-            float mx = Input.GetAxis("Mouse X");
-            float my = Input.GetAxis("Mouse Y");
-            float signX = dragFollowsMouse ? 1f : -1f;
-            float signY = dragFollowsMouse ? 1f : -1f;
-            yaw += signX * mx * lookSensitivity;
-            pitch += signY * my * lookSensitivity;
-            pitch = Mathf.Clamp(pitch, -85f, 85f);
-            ApplyRotation();
-        }
-        else if (Input.GetMouseButton(1))   // 未锁定时的退化方案：右键拖动
-        {
-            float signX = dragFollowsMouse ? 1f : -1f;
-            float signY = dragFollowsMouse ? 1f : -1f;
-            yaw += signX * Input.GetAxis("Mouse X") * rotateSpeed;
-            pitch += signY * Input.GetAxis("Mouse Y") * rotateSpeed;
-            pitch = Mathf.Clamp(pitch, -85f, 85f);
-            ApplyRotation();
-        }
+        if (!lockCursorForLook && !Input.GetMouseButton(1)) return;
+
+        float mx = Input.GetAxis("Mouse X");
+        float my = Input.GetAxis("Mouse Y");
+        if (Mathf.Abs(mx) < 0.0001f && Mathf.Abs(my) < 0.0001f) return;
+
+        float rate = lockCursorForLook ? lookSensitivity : rotateSpeed;
+        // Y 为负：鼠标向上推 -> pitch 增大 -> 视线抬高
+        // （sign 沿用 dragFollowsMouse，与 FreeFly 已实测的方向一致）
+        float signX = dragFollowsMouse ? 1f : -1f;
+        float signY = dragFollowsMouse ? 1f : -1f;
+        yaw += signX * mx * rate;
+        pitch = Mathf.Clamp(pitch + signY * my * rate, pitchMin, pitchMax);
+
+        ApplyRotation();
     }
 
     [Tooltip("Parkour 模式下锁定光标，让鼠标移动直接控制视角（第一人称手感）")]
     public bool lockCursorForLook = true;
 
     [Tooltip("光标锁定时的视角灵敏度（度/像素）。右键拖动用rotateSpeed")]
-    public float lookSensitivity = 0.22f;
+    public float lookSensitivity = 2.2f;
+
+    [Tooltip("俯仰角下限（度）。负值= 看向下方")]
+    public float pitchMin = -70f;
+
+    [Tooltip("俯仰角上限（度）。正值 = 看向上方")]
+    public float pitchMax = 70f;
 
     /// 由 yaw(绕Z) + pitch(仰角) 直接构造朝向，+Z 为上。
     /// 不能用 Quaternion.Euler —— 那是 Y-up 硬编码。
@@ -3108,6 +3123,48 @@ public class SimpleOrbitCamera : MonoBehaviour
         // 第二参数为 up 参考轴：与 dir 接近平行时 LookRotation 会退化，故先夹紧 pitch
         transform.rotation = Quaternion.LookRotation(dir, Vector3.forward);
     }
+
+    /* ---------- Parkour 环绕定位 ---------- */
+
+    /// <summary>
+    /// 按当前 yaw/pitch 把相机摆到目标点**背后**，形成第三人称环绕。
+    ///
+    /// 【为什么必须由朝向推导位置，而不是固定摆位】
+    /// 旧实现每帧写 `cam.position = 球 + (0,-dist,h)` + LookAt(球)，
+    /// 那是「固定机位 + 强制朝向球」—— 视角被钉死，鼠标完全没用。
+    ///
+    /// 正确做法（Unity 官方 / 社区共识）：
+    ///   1. 鼠标增量 -> yaw/pitch
+    ///   2. 相机朝向 = 由 yaw/pitch 构造（ApplyRotation）
+    ///   3. **相机位置 = 焦点 - (相机朝向 × 距离)**
+    /// 位置由朝向推导，转视角时相机自然绕着目标转，目标始终在画面里。
+    ///
+    /// 【不要把相机 parent 到目标上】会引入依赖循环（移动相对相机、
+    /// 相机又相对目标），造成抖动/ 卡顿，官方明确不建议。
+    /// </summary>
+    public void OrbitAround(Vector3 targetPos, float distance, float height)
+    {
+        Vector3 focus = targetPos + Vector3.forward * height;
+        // 反向偏移：相机在焦点后方= -forward * distance
+        Vector3 back = -transform.forward * distance;
+
+        // 防止穿进场景：从焦点往相机方向探，撞到就贴到命中点前
+        RaycastHit hit;
+        if (Physics.SphereCast(focus, orbitProbeRadius, back.normalized,
+                               out hit, distance, orbitMask,
+                               QueryTriggerInteraction.Ignore))
+        {
+            back = back.normalized * Mathf.Max(hit.distance, 0.5f);
+        }
+
+        transform.position = focus + back;
+    }
+
+    [Tooltip("环绕时的相机探测球半径（避免相机穿进墙壁）")]
+    public float orbitProbeRadius = 2f;
+
+    [Tooltip("相机避障检测层")]
+    public LayerMask orbitMask = ~0;
 }
 /* ===================== 跑酷挂点控制器 =====================
  *
@@ -3677,15 +3734,19 @@ public class SilkParkourController : MonoBehaviour
     }
 
     /// <summary>
-    /// 第三人称跟随：**只跟随位置，不接管朝向**。
+    /// 第三人称跟随：**位置由相机朝向环绕推导，绝不写rotation**。
     ///
-    /// 之前每帧写 cam.transform.rotation = LookRotation(球-相机)，
-    /// 结果把右键环绕（SimpleOrbitCamera 维护的 yaw/pitch）覆盖掉了 ——
-    /// 表现为「视角固定，转不动」。
+    /// 【三轮修复的教训】
+    ///   第1 轮：每帧 LookAt(球)      -> 覆盖 yaw/pitch，视角锁死
+    ///   第 2 轮：只写 position       -> 位置固定在 -Y 侧，转视角时球飘出画面
+    ///   第 3 轮（本轮）：OrbitAround -> 位置由朝向推导，转视角相机自然绕球
     ///
-    /// 现在改为：位置跟随球，朝向交给 SimpleOrbitCamera 自己管。
-    /// 因为 Parkour 模式下 inputEnabled=false（关掉键盘），
-    /// 但 HandleLookOnly() 仍然响应右键环绕 —— 两者不冲突。
+    /// 关键：**不要写 rotation**。朝向由 SimpleOrbitCamera 的
+    /// yaw/pitch + ApplyRotation 决定（Parkour 下走 HandleLookOnly）。
+    /// 本方法只负责把相机摆到「当前朝 向的背后」。
+    ///
+    /// 另：切模式时做一次初始对齐 —— 此时 yaw/pitch 还是 FreeFly
+    /// 留下的旧值，需要先对准球，之后玩家就能自由转视角了。
     /// </summary>
     void FollowCamera()
     {
@@ -3699,24 +3760,23 @@ public class SilkParkourController : MonoBehaviour
             return;
         }
 
-        /* 只跟随位置，**不接管朝向**。
-         *
-         * 相机摆在球的 -Y 侧偏上，朝向交给 SimpleOrbitCamera 的
-         * yaw/pitch —— 它在 Parkour 下走 HandleLookOnly()（鼠标锁定式），
-         * 每帧自己 ApplyRotation()。这里若再写 LookAt 就会覆盖它，
-         * 表现为「视角锁死、转不动」。
-         *
-         * 【但必须做一次初始对齐】刚切进 Parkour 时，相机的 yaw/pitch
-         * 还是 FreeFly 留下的旧值，而位置已经跳到球后方 ——
-         * 结果球可能在画面外看不到。所以只在「球不在视野内」时补一次
-         * LookAt（ResetOrientation 让yaw/pitch 与新朝向同步，
-         * 之后玩家转视角就正常了）。玩家一旦自己动过视角，就不再干预。*/
-        cam.transform.position = transform.position
-                               + new Vector3(0f, -camDistance, camHeight);
-        cam.transform.up = Vector3.forward;
+        // 切进Parkour 的第一帧：把相机对准球，之后不再干预玩家视角
+        if (!lookAlignedOnce)
+        {
+            lookAlignedOnce = true;
+            AlignCameraToBall();
+            if (camComp == null) camComp = cam.GetComponent<Camera>();
+        }
 
+        /*环绕定位：相机摆在「当前朝 向的背后」。
+         * 朝向由鼠标控制，这里只用它算位置 —— 两边职责清晰，互不覆盖。*/
+        cam.transform.up = Vector3.forward;   // Z-up 世界约定
+        cam.OrbitAround(transform.position, camDistance, camHeight);
+
+        /* 安全网：万一球还是跑出了画面（例如相机避障把相机推到墙里、
+         * 或玩家把 pitch 转到极限），重新对准一次。
+         * OrbionAround 正常情况下保证球在画面内，所以这是兜底而非常规路径。*/
         if (lookAlignedOnce && BallOffScreen()) AlignCameraToBall();
-        lookAlignedOnce = true;
 
         /* 诊断：确认相机在球外且球在画面内。
          * 用户报告「变成第一人称」—— 若相机在球内（距离 < 球半径），
@@ -3743,10 +3803,7 @@ public class SilkParkourController : MonoBehaviour
         if (camComp == null) return false;
         Camera c = camComp;
         Vector3 vp = c.WorldToViewportPoint(transform.position);
-
-        // z <= 0 表示在相机背后（Unity 的 WorldToViewportPoint 会返回负 z）
         if (vp.z <= 0f) return true;
-
         const float m = 0.12f;   // 留一点余量，贴边也算在视野内
         return vp.x < -m || vp.x > 1f + m ||
                vp.y < -m || vp.y > 1f + m;
@@ -3920,11 +3977,12 @@ public class SilkParkourController : MonoBehaviour
            + "测试关卡的方块未设自定义层，用 Everything 最稳")]
     public LayerMask groundMask = ~0;
 
-    [Tooltip("地面加速度（格/秒²）。越大越「立刻响应」")]
-    public float groundAccel = 260f;
+    [Tooltip("地面加速度（格/秒²）。越大越「立刻响应」。"
+        + "约为 moveSpeed 的 3~4 倍：即约 0.3 秒达到全速")]
+    public float groundAccel = 320f;
 
     [Tooltip("地面减速度（格/秒²）。松手后减速，越大停得越快")]
-    public float groundDecel = 190f;
+    public float groundDecel = 300f;
 
     [Tooltip("按住左Shift 的速度倍率")]
     public float sprintMultiplier = 1.8f;
@@ -3983,8 +4041,9 @@ public class SilkParkourController : MonoBehaviour
     Vector3 camLookFlatPerp => MoveRight;
 
     [Header("自由移动")]
-    [Tooltip("WASD 移动球的速度")]
-    public float moveSpeed = 35f;
+    [Tooltip("WASD 移动球的速度（格/秒）。球半径 6 格、平台间距 30 格，"
+           + "35 太慢（跨一个平台要近 1 秒）；75 约 0.4 秒跨过，节奏更接近跑酷")]
+    public float moveSpeed = 75f;
 
     /* ---------- 挂荡：按输入移动自己，丝线末端跟随 ---------- */
     void UpdateSwing(float dt)
