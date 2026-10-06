@@ -2779,7 +2779,7 @@ public class SilkParkourController : MonoBehaviour
     /// 平台 A 中心 (-30,0,-34) 尺寸 30x50x12 -> 顶面 z = -34+6 = -28
     /// 球半径 6 -> 球心 z = -28 + 6 = -22
     /// 之前放在 (0,0,30)，悬在平台上方 58 格，会一直往下掉。</summary>
-    public Vector3 startPosition = new Vector3(-30f, 0f, -22f);
+    public Vector3 startPosition = new Vector3(-30f, 0f, -25f);
 
     [Header("外观")]
     [Tooltip("自动创建可见球体。没有它就只能从日志判断状态，看不到玩家在哪")]
@@ -2849,14 +2849,21 @@ public class SilkParkourController : MonoBehaviour
          * 之前只有一个纯球，看不出朝向 —— 操作时无法判断「面朝哪边」，
          * 也不知道 WASD 往哪个方向走。加入朝向前锥后就直观了。*/
         var go = new GameObject("ParkourBody");
-        go.transform.SetParent(transform);
+        /* worldPositionStays:false —— 关键！
+         * 默认 true 会让 go 保持新建时的世界位置 (0,0,0)不变，
+         * 球就被建在了世界原点而不是父物体所在的 (-30,0,-22)，
+         * 结果球在画面外（相机跟着父物体走，够不到原点）。
+         * 传false 才是「local 归零、世界位置跟随父物体」。*/
+        go.transform.SetParent(transform, false);
+        go.transform.localPosition = Vector3.zero;
+        go.transform.localRotation = Quaternion.identity;
         go.transform.localScale = Vector3.one;
         visual = go.transform;
 
         // 身体：球
         var body = GameObject.CreatePrimitive(PrimitiveType.Sphere);
         body.name = "Body";
-        body.transform.SetParent(visual);
+        body.transform.SetParent(visual, false);   // 同上：不能保持世界位置
         body.transform.localPosition = Vector3.zero;
         body.transform.localScale = Vector3.one * visualRadius;
         var bc = body.GetComponent<Collider>();
@@ -2868,7 +2875,8 @@ public class SilkParkourController : MonoBehaviour
         // 高度轴是 +Z（项目约定），所以前方用相机水平朝向
         var nose = GameObject.CreatePrimitive(PrimitiveType.Sphere);
         nose.name = "Nose";
-        nose.transform.SetParent(visual);
+        nose.transform.SetParent(visual, false);   // 同上
+        nose.transform.localPosition = Vector3.zero;
         nose.transform.localScale = new Vector3(visualRadius * 0.5f,
                                                 visualRadius * 0.5f,
                                                 visualRadius * 0.9f);
