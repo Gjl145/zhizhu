@@ -518,6 +518,16 @@ public class AnchorPoint : MonoBehaviour
 
         var col = gameObject.AddComponent<SphereCollider>();
         col.radius = HitRadius / Mathf.Max(transform.lossyScale.x, 0.0001f);
+
+        /* 远距离可见性（参考《消逝的光芒2》）
+         *
+         * 消光2 的可钩点在远处就有明显的黄色高亮，玩家能提前规划路线。
+         * 我们原本是不发光的黄色小球，在 100³ 网格里远处几乎看不见 ->
+         * 玩家不知道「哪个能钩」，只能靠自动瞄准黑箱式地选点。
+         *
+         * 在此处统一设置，而非在三处创建点各写一遍 —— 避免新增锚点路径时漏掉。
+         * 只给 Wall 类型（可钩点）加，ChainNode 等内部节点不需要。*/
+        if (t == AnchorType.Wall) SetEmissive(new Color(0.85f, 0.62f, 0.12f));
     }
 
     /// <summary>锚点视觉缩放（相对原生球半径 0.5）。
@@ -568,6 +578,47 @@ public class AnchorPoint : MonoBehaviour
 
     public void SetHighlight(bool on)
         => SetColor(on ? Color.green : new Color(0.9f, 0.75f, 0.2f));
+
+    /// <summary>
+    /// 让锚点在**远处也看得见**（自发光材质）。
+    ///
+    /// 【为什么需要】参考《消逝的光芒2》：它的可钩点在远处就有明显的
+    /// **黄色高亮**，玩家能提前规划路线。我们原本的锚点是不发光的黄色小球，
+    /// 在 100³网格里远处几乎看不见 -> 玩家不知道「那个能钩」，
+    /// 只能靠自动瞄准黑箱式地选点。
+    ///
+    /// 这与参考笔记里「地标要可见」「功能可供性」是同一类问题：
+    /// 可交互物必须**看起来可交互**。
+    ///
+    /// 用 Emission 而非改BaseColor：自发光不受场景光照影响，
+    /// 在暗处/远处依然醒目，且不会影响本体颜色的辨识。
+    /// </summary>
+    public void SetEmissive(Color c)
+    {
+        var mr = GetComponent<MeshRenderer>();
+        if (!mr) return;
+
+        // 共享材质时先克隆，避免把颜色传染给所有锚点
+        if (mr.sharedMaterial == BaseMat)
+            mr.material = new Material(BaseMat);
+
+        var mat = mr.material;
+        if (mat == null) return;
+
+        // URP 用 _EmissionColor，标准管线用 _Emission
+        if (mat.HasProperty("_EmissionColor"))
+        {
+            mat.EnableKeyword("_EMISSION");
+            mat.SetColor("_EmissionColor", c);
+            // 同时开启发光关键字，否则 URP 下设置了也不生效
+            mat.globalIlluminationFlags = MaterialGlobalIlluminationFlags.RealtimeEmissive;
+        }
+        else if (mat.HasProperty("_Emission"))
+        {
+            mat.EnableKeyword("_EMISSION");
+            mat.SetColor("_Emission", c);
+        }
+    }
 
     /// <summary>锚点是否仍然存活（未被销毁）。Unity 的 C# null 判定
     /// 对已Destroy 的 UnityEngine.Object 仍返回 true，需用此属性判断。</summary>
@@ -4660,11 +4711,23 @@ public class SilkParkourController : MonoBehaviour
 
         /* 左键：**自动瞄准**并抓住最优锚点（不再需要玩家点选）。
          * 详见 FireAtAnchor / PickBestAnchor 的注释 ——
-         * 手动点击在 100³ 网格 + 高速移动下几乎不可用。*/
-        if (Input.GetMouseButtonDown(0)) FireAtAnchor();
+         * 手动点击在 100³ 网格 + 高速移动下几乎不可用。
+         *
+         * 【必须在空中才能发射 —— 参考《消逝的光芒2》的操作契约】
+         * 官方操作说明原文：「**在跳跃过程中**按 L2/LT 释放抓钩，
+         * 将其作为绳索摆动」。
+         *
+         * 为什么这条约束重要：它让每次发射都对应一次**主动的跳跃决策**。
+         * 若允许站在平台上手指发射，玩家就会退化成「站在原地按左键」，
+         * 摆荡的节奏感（起跳→勾住→摆→松手→再起跳）完全消失 ——
+         * 那正是消光2 与我们当前最大的体感差别。*/
+        if (Input.GetMouseButtonDown(0) && RequireAirborne("左键"))
+            FireAtAnchor();
 
         // B：蜘蛛侠式发射（斜上勾住并摆荡）—— 走另一条路径
-        if (Input.GetKeyDown(KeyCode.B)) TryFireAndHook();
+        // 同样遵守「空中才能发射」的契约（见 RequireAirborne）
+        if (Input.GetKeyDown(KeyCode.B) && RequireAirborne("B 键斜上发射"))
+            TryFireAndHook();
 
         // X：断开自己发射的第一根丝线
         // X = 断自己发射的线（Parkour 世界专属；
@@ -4743,6 +4806,31 @@ public class SilkParkourController : MonoBehaviour
         UpdateVisualColor();   // 让球的颜色反映新状态
         Debug.Log("[Parkour] 已固化节点 " + node.position +
                   "（当前线 " + builder.Lines.Count + " 条）");
+    }
+
+    /// <summary>
+    /// 要求玩家当前处于「空中」才允许发射钩爪。
+    ///
+    /// 【依据】《消逝的光芒2》的官方操作说明：
+    /// 「**在跳跃过程中**按 L2/LT 释放抓钩，将其作为绳索摆动」。
+    ///
+    /// 【为什么必须加这条约束】
+    /// 允许站在平台上随手发射，会让摆荡退化成「站在原地按左键」——
+    /// 起跳→勾住→摆→松手→再起跳 这个节奏循环消失，
+    /// 而那正是蜘蛛侠/消光2 移动手感的核心。
+    ///
+    /// 【为什么地面要给出提示而不是静默忽略】
+    /// 静默忽略会让玩家以为按键坏了。明确告知「需要先跳起来」
+    /// 才能把规则讲清楚 —— 对应参考视频里强调的引导原则。
+    /// </summary>
+    bool RequireAirborne(string action)
+    {
+        if (!grounded && vertVel > 0.01f) return true;
+
+        if (verboseFireLog)
+            Debug.Log("[Airborne] " + action + " 需要先跳起来 —— " +
+                      "钩爪只能在空中发射（参考消逝之光2 的操作契约）");
+        return false;
     }
 
     /// <summary>
@@ -4898,7 +4986,11 @@ public class SilkParkourController : MonoBehaviour
         bool shouldShow = mode == SilkControlMode.Parkour
                        && grabbed == null          // 摆荡中不显示
                        && !isFlying               // 空中惯性飞行时不显示
-                       && !dashUsedThisAirborne; // 刚冲刺过就不显示，避免干扰
+                       && !dashUsedThisAirborne   // 刚冲刺过就不显示，避免干扰
+                       /* 【新增】只有在「空中」才显示。
+                        * 因为钩爪现在必须空中才能发射（RequireAirborne），
+                        * 地面显示指示器会误导玩家「按左键就能勾住」。*/
+                       && !grounded;
 
         if (!shouldShow)
         {
