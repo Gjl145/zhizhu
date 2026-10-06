@@ -576,6 +576,15 @@ public class SilkSegment : MonoBehaviour
 
     LineRenderer lr;
     float fadeTimer;
+    bool visible = true;      // 被 SilkChain 接管渲染时置 false
+
+    /// <summary>显示/隐藏本段的渲染。同一根线只能有一个渲染来源，
+    /// 否则会看到「一条悬链线 + 一条折线」的重影。</summary>
+    public void SetVisible(bool on)
+    {
+        visible = on;
+        if (lr != null) lr.enabled = on;
+    }
 
     // 钟摆物理
     Vector3 freePendulumVel;
@@ -653,6 +662,8 @@ public class SilkSegment : MonoBehaviour
     {
         if (from == null || to == null) { Object.Destroy(gameObject); return; }
         if (lr == null) { Object.Destroy(gameObject); return; }
+        // 渲染已交给 SilkChain 时，本段完全不做事（不写顶点、不跑物理）
+        if (!visible) return;
 
         // 自由端：纯重力自然掉落（Z 轴负方向）+ 绳长约束
         if (isFreeEnd && state == SilkState.Intact)
@@ -986,6 +997,26 @@ public class SilkLine
         chain.catenarySag = 0f;      // 抓住时链条按直线起步，不再带悬链线弧度
         chain.slackScale = 1.0f;
         chain.Build(rootFrom, rootTo, this, 1f);
+
+        /* 关键：链条已接管本线的运动，隐藏原来的静态悬链线渲染段。
+         *
+         * 不隐藏的话，同一根线会被画两次：
+         *   1) SilkSegment 的悬链线（7 点采样，带下垂弧度）
+         *   2) ChainSeg_0..7 的直线段（串成折线）
+         * 断裂时也一样：SplitSegment 销毁了 SilkSegment，
+         * 但 ChainSeg 还在 -> 依然看到两条线。
+         *
+         * 渲染责任必须唯一：动态时归 ChainSeg，静态时归 SilkSegment。
+         */
+        foreach (var seg in segments)
+            if (seg != null) seg.SetVisible(false);
+    }
+
+    /// <summary>让静态悬链线重新可见（链条销毁时用）。</summary>
+    public void RestoreStaticRender()
+    {
+        foreach (var seg in segments)
+            if (seg != null) seg.SetVisible(true);
     }
 
     void ComputeBreakPoint()
@@ -2224,6 +2255,8 @@ public class SilkBuilder : MonoBehaviour
             if (line.chain != null) Object.Destroy(line.chain.gameObject);
             line.chain = null;
             line.chainGO = null;
+            // 链条销毁后渲染责任回到静态悬链线，否则线会不可见
+            line.RestoreStaticRender();
         }
         silkLines.Clear();
         // 去重集合必须同步清空，否则重新织网会被上一轮的记录挡住
