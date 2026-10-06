@@ -172,10 +172,19 @@ public class SilkGrabSignal : ISilkEvent
     public Transform attachPoint;
     public string label = "物体";
     public bool startSwing = false;      // 抓住后是否立刻开始摆动
+    public SilkLine target = null;       // 指定要抓的线；null = 由处理器自行搜索
 
     public SilkGrabSignal(Transform point, string name = "物体", bool swing = false)
     {
         attachPoint = point; label = name; startSwing = swing;
+    }
+
+    /// <summary>指定目标线。发布方已找到线时用它，
+    /// 可避免处理器用自己的搜索半径重新找一遍导致抓到不同的线。</summary>
+    public SilkGrabSignal On(SilkLine line)
+    {
+        target = line;
+        return this;
     }
 
     public void Handle(SilkBuilder handler)
@@ -1299,7 +1308,22 @@ public class SilkChain : MonoBehaviour
     }
 
     /// <summary>
-    /// 对整条链施加一次力（明天跑酷的施力入口）。
+    /// 读取末端当前速度（格/秒）。松手时用它给玩家初速度 ——
+    /// 这是「甩出去」手感的来源：玩家离线的瞬间速度就是丝线末端的速度。
+    /// </summary>
+    public Vector3 GetEndVelocity()
+    {
+        if (nodes.Count < 2) return Vector3.zero;
+        if (endDriven && endTarget != null)
+        {
+            // 被驱动时 drivenVelocity 由位置反馈算出，即末端真实速度
+            return drivenVelocity;
+        }
+        return velocities[nodes.Count - 1];
+    }
+
+    /// <summary>
+    /// 对整条链施加一次力（跑酷的施力入口）。
     /// 沿 root→末端线性衰减注入，末端受力最大（符合甩鞭的受力分布）。
     /// 泵力（沿绳）传 force = 切线方向；横推传垂直方向。
     /// </summary>
@@ -1310,7 +1334,9 @@ public class SilkChain : MonoBehaviour
 
         if (endDriven)
         {
-            // 末端被驱动时，玩家输入直接改变末端速度（明天跑酷手感的关键）
+            // 末端被驱动时，玩家输入直接改变末端速度。
+            // 但玩家本身是位置控制（有速度上限），所以这里只轻微加成，
+            // 主要加速度仍来自玩家 transform 的移动。
             drivenVelocity += force * dt;
             return;
         }
@@ -1322,6 +1348,33 @@ public class SilkChain : MonoBehaviour
             float t = i / (float)last;
             velocities[i] += force * Mathf.Lerp(1f, tipBoost, t) * dt;
         }
+    }
+
+    /// <summary>
+    /// 沿绳方向的切向单位向量（泵力用）与水平垂直方向（横推用）。
+    /// 供跑酷控制器计算输入方向，外部不必自己算。
+    /// </summary>
+    public void GetSwingAxes(out Vector3 tangential, out Vector3 lateral)
+    {
+        tangential = Vector3.forward;
+        lateral = Vector3.right;
+        if (nodes.Count < 2) return;
+
+        Vector3 rootPos = nodes[0].WorldPosition;
+        Vector3 endPos = nodes[nodes.Count - 1].WorldPosition;
+        Vector3 toEnd = endPos - rootPos;
+        float len = toEnd.magnitude;
+        if (len < 0.0001f) return;
+
+        Vector3 dir = toEnd / len;
+        // 重力沿 -Z（项目约定），取绳方向在水平面内的投影作为横向轴
+        Vector3 gravityDir = new Vector3(0, 0, 1f);
+        Vector3 tangent = Vector3.Cross(gravityDir, dir);
+        if (tangent.sqrMagnitude < 0.0001f) tangent = Vector3.right;
+        lateral = tangent.normalized;
+
+        // 切向 = 与 lateral 和 dir 都垂直
+        tangential = Vector3.Cross(dir, lateral).normalized;
     }
 
     /// <summary>把末端节点瞬移到指定位置（挂载瞬间用，避免第一帧跳变）。</summary>
@@ -1422,6 +1475,10 @@ public class SilkBuilder : MonoBehaviour
 
     readonly List<AnchorPoint> anchors = new();
     readonly List<SilkLine> silkLines = new();
+
+    /// <summary>只读访问所有丝线。跑酷控制器用它找可抓的线。
+    /// 暴露为属性而非 public 字段，外部无法直接改集合。</summary>
+    public IReadOnlyList<SilkLine> Lines => silkLines;
 
     // 丝线去重集合。必须在 ClearAll 里同步清空 ——
     // 否则重新织网时会被上一轮的记录挡住，织不出线。
@@ -1616,15 +1673,28 @@ public class SilkBuilder : MonoBehaviour
     public void ExecuteGrab(SilkGrabSignal signal)
     {
         if (signal == null || signal.attachPoint == null) return;
-        // 抓最近的可挂载线
+
         SilkLine best = null;
-        float bestD = pickRadius;
-        Vector3 p = signal.attachPoint.position;
-        foreach (var line in silkLines)
+
+        // 优先用发布方指定的线 —— 否则两处搜索半径不同
+        // （发布方 grabRange=30 / 本方法 pickRadius=15）会抓到不同的线，
+        // 导致「发布方以为抓住了、实际没挂上」的状态错乱。
+        if (signal.target != null &&
+            signal.target.life == SilkLifeState.Static)
         {
-            if (line == null || line.life != SilkLifeState.Static) continue;
-            float d = Vector3.Distance(p, (line.rootFrom.WorldPosition + line.rootTo.WorldPosition) * 0.5f);
-            if (d < bestD) { bestD = d; best = line; }
+            best = signal.target;
+        }
+        else
+        {
+            // 回退：自行搜索最近的可挂载线
+            float bestD = pickRadius;
+            Vector3 p = signal.attachPoint.position;
+            foreach (var line in silkLines)
+            {
+                if (line == null || line.life != SilkLifeState.Static) continue;
+                float d = Vector3.Distance(p, (line.rootFrom.WorldPosition + line.rootTo.WorldPosition) * 0.5f);
+                if (d < bestD) { bestD = d; best = line; }
+            }
         }
         if (best == null) return;
 
@@ -2221,4 +2291,172 @@ public class SimpleOrbitCamera : MonoBehaviour
         // 第二参数为 up 参考轴：与 dir 接近平行时 LookRotation 会退化，故先夹紧 pitch
         transform.rotation = Quaternion.LookRotation(dir, Vector3.forward);
     }
+}
+/* ===================== 跑酷挂点控制器 =====================
+ *
+ * 演示「末端挂物体 + 玩家施力」的完整闭环，也是明天跑酷的最小可玩版本。
+ *
+ * 【设计要点】
+ * 玩家不是 Rigidbody，而是一个**位置控制的挂点**：
+ * 每帧按输入移动 transform，丝线的末端跟随它。
+ * 这样做的好处是天然带速度上限（不会像施力那样无限加速），
+ * 物理更稳定，且松手时把末端速度直接交给玩家即可获得「甩出」手感。
+ *
+ * 【按键】
+ *   空格      抓住最近的丝线 / 松手
+ *   W/ S      泵力（沿切线加速，荡秋千的「起」与「刹」）
+ *   A / D     横推（改变摆动相位）
+ *   R         回到起始位置
+ *
+ * 【物理量级】(Python 实算)
+ *   gravity=15、跨度 90 时，速度 25 格/s 对应向心加速度 13.9 = 0.93g，
+ *   落在跑酷手感的目标区间 0.5~1.5g 内。故swingSpeed 默认 25。
+ */
+public class SilkParkourController : MonoBehaviour
+{
+    [Header("移动")]
+    [Tooltip("沿绳摆动速度。25 格/s 约 0.9g，是跑酷手感的目标区间")]
+    public float swingSpeed = 25f;
+
+    [Tooltip("泵力加速度（沿切线）。越大越容易「起」起来")]
+    public float pumpAccel = 30f;
+
+    [Tooltip("横推加速度（垂直绳方向）。控制摆动相位")]
+    public float lateralAccel = 18f;
+
+    [Header("脱手飞行")]
+    [Tooltip("松手后自由飞行时施加的重力倍率（1=正常重力）")]
+    public float flightGravityScale = 1f;
+
+    [Tooltip("脱手飞行的水平速度衰减（每秒保留比例）")]
+    public float flightDamping = 0.995f;
+
+    [Header("抓取")]
+    public float grabRange = 30f;
+
+    [Header("初始位置")]
+    public Vector3 startPosition = new Vector3(0f, 0f, 30f);
+
+    SilkBuilder builder;
+    SilkLine grabbed;                 // 当前抓着哪根线
+    Vector3 flightVel;                // 脱手后的飞行速度
+    bool isFlying;
+    Vector3 bodyVelocity;             // 挂载期间的自身速度（由位置差反推）
+
+    void Start()
+    {
+        builder = FindObjectOfType<SilkBuilder>();
+        transform.position = startPosition;
+    }
+
+    void Update()
+    {
+        float dt = Time.deltaTime;
+        if (dt <= 0f) return;
+
+        if (isFlying) UpdateFlight(dt);
+        else UpdateSwing(dt);
+
+        HandleKeys();
+    }
+
+    /* ---------- 脱手飞行：纯重力 + 阻尼 ---------- */
+    void UpdateFlight(float dt)
+    {
+        flightVel += new Vector3(0, 0, -15f * flightGravityScale) * dt;
+        flightVel *= Mathf.Pow(flightDamping, dt * 60f);
+        transform.position += flightVel * dt;
+    }
+
+    /* ---------- 挂载摆动：按输入移动自己，丝线末端跟随 ---------- */
+    void UpdateSwing(float dt)
+    {
+        if (grabbed == null) { isFlying = true; return; }
+
+        // 末端速度即本物体的真实速度（由 SilkChain 从位置差反推）
+        Vector3 endVel = grabbed.chain != null
+            ? grabbed.chain.GetEndVelocity()
+            : Vector3.zero;
+
+        Vector3 tangential, lateral;
+        if (grabbed.chain != null) grabbed.chain.GetSwingAxes(out tangential, out lateral);
+        else { tangential = Vector3.forward; lateral = Vector3.right; }
+
+        // 泵力：沿切线（垂直于绳、垂直于重力）
+        float pump = Input.GetAxis("Vertical");
+        if (Mathf.Abs(pump) > 0.01f)
+            transform.position += tangential * (pump * pumpAccel * dt * dt * 60f) * 0.06f;
+
+        // 横推：改变摆动相位
+        float side = Input.GetAxis("Horizontal");
+        if (Mathf.Abs(side) > 0.01f)
+            transform.position += lateral * (side * lateralAccel * dt * dt * 60f) * 0.06f;
+
+        bodyVelocity = endVel;
+    }
+
+    /* ---------- 按键 ---------- */
+    void HandleKeys()
+    {
+        // 空格：抓住 / 松手
+        if (Input.GetKeyDown(KeyCode.Space))
+        {
+            if (isFlying) TryGrab();
+            else DoRelease();
+        }
+
+        if (Input.GetKeyDown(KeyCode.R))
+        {
+            DoRelease();
+            transform.position = startPosition;
+            flightVel = Vector3.zero;
+            isFlying = true;
+        }
+    }
+
+    /// <summary>抓最近的 Static 状态丝线。</summary>
+    void TryGrab()
+    {
+        if (builder == null) return;
+
+        SilkLine best = null;
+        float bestD = grabRange;
+        Vector3 me = transform.position;
+
+        foreach (var line in builder.Lines)
+        {
+            if (line == null || line.life != SilkLifeState.Static) continue;
+            Vector3 mid = (line.rootFrom.WorldPosition + line.rootTo.WorldPosition) * 0.5f;
+            float d = Vector3.Distance(me, mid);
+            if (d < bestD) { bestD = d; best = line; }
+        }
+
+        if (best == null) return;
+
+        // 通过事件总线发布抓住事件，并**指定目标线** ——
+        // 不指定的话 ExecuteGrab 会用它自己的 pickRadius(15) 重新找，
+        // 而这里的 grabRange 是 30，两处半径不一致会抓到不同的线，
+        // 造成「以为抓住了、实际没挂上」的状态错乱。
+        SilkEventBus.Post(new SilkGrabSignal(transform, "玩家", swing: true).On(best));
+        grabbed = best;
+        isFlying = false;
+        Debug.Log("[Parkour] 抓住丝线");
+    }
+
+    /// <summary>松手：把末端速度交给自身，然后转入脱手飞行。</summary>
+    void DoRelease()
+    {
+        if (grabbed != null)
+        {
+            // 取丝线末端的真实速度作为飞行初速度 —— 「甩出去」手感的来源
+            if (grabbed.chain != null) flightVel = grabbed.chain.GetEndVelocity();
+            grabbed.Release();
+            grabbed = null;
+        }
+        isFlying = true;
+        Debug.Log("[Parkour] 松手，末端速度 " + flightVel.magnitude.ToString("F1"));
+    }
+
+    /// <summary>供 UI 查询：当前是否抓着丝线。</summary>
+    public bool IsSwinging => grabbed != null && !isFlying;
 }
