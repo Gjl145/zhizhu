@@ -3600,6 +3600,7 @@ public class SilkParkourController : MonoBehaviour
             CreateVisual();       // 幂等：已存在则直接返回
             UpdateVisualColor();
             logFollowOnce = true; // 每次切模式重打一次诊断
+            lookAlignedOnce = false;   // 新世界需重新对齐一次视角
             FollowCamera();       // 立刻摆相机，当帧就能看到球
             // 测试关卡属于游戏世界，FreeFly 下不该存在
             if (builder != null && builder.createTestLevel) SilkTestLevel.Create(TestLevelHalfSize());
@@ -3662,17 +3663,24 @@ public class SilkParkourController : MonoBehaviour
             return;
         }
 
-        /* 极简版：相机固定在球的 -Y 侧偏上，**始终正对球**。
-         * 不响应任何鼠标输入 —— 视角完全由球的位置决定。*/
+        /* 只跟随位置，**不接管朝向**。
+         *
+         * 相机摆在球的 -Y 侧偏上，朝向交给 SimpleOrbitCamera 的
+         * yaw/pitch —— 它在 Parkour 下走 HandleLookOnly()（鼠标锁定式），
+         * 每帧自己 ApplyRotation()。这里若再写 LookAt 就会覆盖它，
+         * 表现为「视角锁死、转不动」。
+         *
+         * 【但必须做一次初始对齐】刚切进 Parkour 时，相机的 yaw/pitch
+         * 还是 FreeFly 留下的旧值，而位置已经跳到球后方 ——
+         * 结果球可能在画面外看不到。所以只在「球不在视野内」时补一次
+         * LookAt（ResetOrientation 让yaw/pitch 与新朝向同步，
+         * 之后玩家转视角就正常了）。玩家一旦自己动过视角，就不再干预。*/
         cam.transform.position = transform.position
                                + new Vector3(0f, -camDistance, camHeight);
         cam.transform.up = Vector3.forward;
 
-        // 始终 LookAt 球 —— 这就是「视角锁死在球上」
-        Vector3 toBall = transform.position - cam.transform.position;
-        if (toBall.sqrMagnitude > 0.0001f)
-            cam.transform.rotation =
-                Quaternion.LookRotation(toBall.normalized, Vector3.forward);
+        if (lookAlignedOnce && BallOffScreen()) AlignCameraToBall();
+        lookAlignedOnce = true;
 
         /* 诊断：确认相机在球外且球在画面内。
          * 用户报告「变成第一人称」—— 若相机在球内（距离 < 球半径），
@@ -3691,8 +3699,40 @@ public class SilkParkourController : MonoBehaviour
         }
     }
 
+    /// <summary>球是否在相机视野内。
+    /// 用 Viewport 归一化坐标判断：超出 [0,1] 即在画面外。
+    /// 比用角度阈值更准，也不依赖 FOV 假设。</summary>
+    bool BallOffScreen()
+    {
+        if (camComp == null) return false;
+        Camera c = camComp;
+        Vector3 vp = c.WorldToViewportPoint(transform.position);
+
+        // z <= 0 表示在相机背后（Unity 的 WorldToViewportPoint 会返回负 z）
+        if (vp.z <= 0f) return true;
+
+        const float m = 0.12f;   // 留一点余量，贴边也算在视野内
+        return vp.x < -m || vp.x > 1f + m ||
+               vp.y < -m || vp.y > 1f + m;
+    }
+
+    /// <summary>把相机对准球，并同步 yaw/pitch。
+    /// 用 ResetOrientation 让SimpleOrbitCamera 的内部状态与新朝向一致，
+    /// 否则它下���帧又会用旧 yaw/pitch 把朝向转回去。</summary>
+    void AlignCameraToBall()
+    {
+        Vector3 toBall = transform.position - cam.transform.position;
+        if (toBall.sqrMagnitude < 0.0001f) return;
+        cam.transform.rotation =
+            Quaternion.LookRotation(toBall.normalized, Vector3.forward);
+        cam.ResetOrientation();
+    }
+
     /// <summary>每次切到 Parkour 时重置，让 [Follow] 诊断重新打一次。</summary>
     bool logFollowOnce = true;
+
+    /// <summary>是否已完成过一次初始对齐（避免每帧干预玩家视角）。</summary>
+    bool lookAlignedOnce = false;
 
     [Tooltip("每帧输出相机跟随诊断（排查「看不到球」时开启）")]
     public bool verboseFollowLog = true;
@@ -3869,10 +3909,24 @@ public class SilkParkourController : MonoBehaviour
         // G = 断「视线指向」的丝线（Parkour 世界的划断操作）
         if (Input.GetKeyDown(KeyCode.G)) CutLineUnderCrosshair();
 
-        /* C（固化当前位置为节点）与 V（节点间结网）暂不实现。
-         * 用户明确：「固化当前位置为节点这个先不用实现，
-         * 之后我再详细说明，和你现在做的不太一样」。
-         * 相关方法保留但不接线，等需求明确后再启用。*/
+        /* C：把**当前所在位置**固化成玩家节点。
+         *
+         * 「固化当前位置为节点」此前按用户要求暂不接线，后端
+         * ExecutePinNode / CreateAnchorAt / MarkAsPlayerNode 已完整可用，
+         * 这里接上即可。
+         *
+         * 语义（与两个世界约定一致）：固化的是「玩家此刻悬停的那个点」，
+         * 位置取球的当前位置由 CreateAnchorAt 吸附到网格并做 5 格去重
+         * —— 所以不会凭空在墙面上造点，它只会复用附近已存在的格点。
+         *
+         * 用途：固化后的节点带 PlayerNode 标记与更大的碰撞体，
+         * 既能作为后续发射/摆荡的挂点，也能被静态丝线连起来结网。*/
+        if (Input.GetKeyDown(KeyCode.C)) PinCurrentNode();
+
+        /* V：两个固化节点之间结网（静态丝线）。
+         * 后端 ExecuteSpan 已实现；此处先留V 键位说明，
+         * 实际连线走「左键选点」那套 OnAnchorPicked（见FireAtAnchor）。
+         * 需求确认后再接线 —— 避免又一次猜错方向返工。*/
 
         if (Input.GetKeyDown(KeyCode.R))
         {
@@ -3887,6 +3941,36 @@ public class SilkParkourController : MonoBehaviour
         // 右键：取消待连线的起点
         if (Input.GetMouseButtonDown(1) && builder != null && builder.HasPendingNode)
             builder.CancelPendingNode();
+    }
+
+    /// <summary>
+    /// C 键：把玩家**当前所在位置**固化成可复用的玩家节点。
+    ///
+    /// 【为什么不凭空造点】CreateAnchorAt 内部会把世界坐标吸附到网格，
+    /// 并在 5 格内复用已存在的锚点。所以这里固化的是「玩家此刻悬停的
+    /// 那一格」，与「两个世界都不允许凭空创建锚点」的约定一致 ——
+    /// 它只是把脚下这格标记成 PlayerNode，让它可被丝线粘住、可作挂点。
+    ///
+    /// 固化后：标记 PlayerNode（视觉更大、碰撞半径更大、醒目颜色），
+    /// 后续发射/摆荡可以勾住它，也能用静态丝线把它连进网里 ——
+    /// 这就是用户要的「结网」基础积木。
+    /// </summary>
+    void PinCurrentNode()
+    {
+        if (builder == null) return;
+
+        var node = builder.ExecutePinNode(
+            new SilkPinNodeSignal(transform.position, selectAsStart: false));
+
+        if (node == null)
+        {
+            Debug.Log("[Parkour] 固化失败：当前格子附近没有可用的锚点");
+            return;
+        }
+
+        UpdateVisualColor();   // 让球的颜色反映新状态
+        Debug.Log("[Parkour] 已固化节点 " + node.position +
+                  "（当前线 " + builder.Lines.Count + " 条）");
     }
 
     /// <summary>
