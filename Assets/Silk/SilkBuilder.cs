@@ -239,9 +239,11 @@ public interface ISilkEvent
 /// <summary>事件总线。静态类，任何脚本可Post/Register，无装配顺序依赖。</summary>
 public static class SilkEventBus
 {
-    // Type -> 处理该类型的处理器列表
-    static readonly System.Collections.Generic.Dictionary<Type, List<object>>
-        handlers = new Dictionary<Type, List<object>>();
+    // System.Type -> 处理该类型的处理器列表。
+    // 用全限定名而非 using System：本文件里有 17 处 UnityEngine.Random，
+    // 引入 System 会造成 Random 的歧义。
+    static readonly Dictionary<System.Type, List<object>>
+        handlers = new Dictionary<System.Type, List<object>>();
 
     /// <summary>注册一个能处理 T 类型事件的处理器。</summary>
     public static void Register<T>(object handler) where T : ISilkEvent
