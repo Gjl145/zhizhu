@@ -2986,6 +2986,23 @@ public class SimpleOrbitCamera : MonoBehaviour
         }
     }
 
+    /// <summary>含俯仰角的完整视线方向（yaw + pitch）。
+    /// OrbitAround 用它算相机位置 —— 必须是 3D 的，
+    /// 否则俯仰角会被丢掉，相机只能左右转、不能上下环绕。
+    /// 直接由 yaw/pitch 现算，不依赖 ApplyRotation 的执行顺序。</summary>
+    public Vector3 LookDir
+    {
+        get
+        {
+            float p = pitch * Mathf.Deg2Rad;
+            float y = yaw * Mathf.Deg2Rad;
+            return new Vector3(
+                Mathf.Cos(p) * Mathf.Cos(y),
+                Mathf.Cos(p) * Mathf.Sin(y),
+                Mathf.Sin(p));
+        }
+    }
+
     void Start()
     {
         // 从当前朝向反解 yaw/pitch，保证 Start 后画面不跳变
@@ -3011,6 +3028,25 @@ public class SimpleOrbitCamera : MonoBehaviour
          */
         if (!inputEnabled)
         {
+            /* 【关键】自动修复光标锁定状态。
+             *
+             * Unity 在按 Escape 时会**自动把光标解锁**（lockState -> None），
+             * 但我们本地的 lockCursorForLook 标志仍是 true。
+             * 此时 Input.GetAxis("Mouse X/Y") 在光标未锁定时**恒返回 0** ->
+             * 视角永久失效，且没有任何报错，极难察觉。
+             *
+             * 这很可能就是用户「视角还是不联动」的真凶：
+             * 玩着玩着按了下Escape（或点了编辑器其它面板），
+             * 此后鼠标就再也不转视角了。
+             *
+             * 每帧检查并重新锁定即可自愈，无需玩家手动干预。*/
+            if (lockCursorForLook && Cursor.lockState != CursorLockMode.Locked)
+            {
+                Cursor.lockState = CursorLockMode.Locked;
+                Cursor.visible = false;
+                cursorLocked = true;
+            }
+
             HandleLookOnly();   // Parkour：鼠标控制视角
             return;
         }
@@ -3084,6 +3120,36 @@ public class SimpleOrbitCamera : MonoBehaviour
 
         float mx = Input.GetAxis("Mouse X");
         float my = Input.GetAxis("Mouse Y");
+
+        /* 诊断：直接测出「鼠标到底有没有被读到」。
+         *
+         * 【为什么必须实测】上一轮修了调用点（HandleLookOnly 确实接上了），
+         * 但用户仍报告「视角和鼠标不联动」。可能原因有多个且外部看不出：
+         *   a) Cursor.lockState 没生效 / Game 窗口没焦点 -> 增量恒为 0
+         *   b) Update 顺序导致一帧延迟（仍能动，非全死）
+         *   c) 光标被 Escape 释放后未重新锁定
+         * 光看代码无法区分，必须把原始输入值打出来。
+         *
+         * 判读：
+         *   mx/my 恒为 0 + lockState 不是 Locked -> 鼠标输入根本没进来（情况 a/c）
+         *   mx/my 有值但视角不动-> 旋转写入被覆盖（另查）
+         */
+        lookDiagTimer += Time.deltaTime;
+        if (verboseLookLog && lookDiagTimer > 0.5f)
+        {
+            lookDiagTimer = 0f;
+            Debug.Log("[Look] mx=" + mx.ToString("F3") +
+                      " my=" + my.ToString("F3") +
+                      " | lockState=" + Cursor.lockState +
+                      " 光标可见=" + Cursor.visible +
+                      " | lockCursorForLook=" + lockCursorForLook +
+                      " 灵敏度=" + lookSensitivity +
+                      " | yaw=" + yaw.ToString("F1") +
+                      " pitch=" + pitch.ToString("F1") +
+                      " | camFwd=" + transform.forward.ToString("F2") +
+                      " | camPos=" + transform.position.ToString("F1"));
+        }
+
         if (Mathf.Abs(mx) < 0.0001f && Mathf.Abs(my) < 0.0001f) return;
 
         float rate = lockCursorForLook ? lookSensitivity : rotateSpeed;
@@ -3102,6 +3168,11 @@ public class SimpleOrbitCamera : MonoBehaviour
 
     [Tooltip("光标锁定时的视角灵敏度（度/像素）。右键拖动用rotateSpeed")]
     public float lookSensitivity = 2.2f;
+
+    [Tooltip("每 0.5 秒输出一次视角诊断（排查「视角不动」时开启）")]
+    public bool verboseLookLog = true;
+
+    float lookDiagTimer;
 
     [Tooltip("俯仰角下限（度）。负值= 看向下方")]
     public float pitchMin = -70f;
@@ -3145,8 +3216,19 @@ public class SimpleOrbitCamera : MonoBehaviour
     public void OrbitAround(Vector3 targetPos, float distance, float height)
     {
         Vector3 focus = targetPos + Vector3.forward * height;
-        // 反向偏移：相机在焦点后方= -forward * distance
-        Vector3 back = -transform.forward * distance;
+
+        /* 用 LookDir（由 yaw/pitch 现算）而不是 transform.forward。
+         *
+         * 【为什么】transform.forward 依赖 ApplyRotation 已执行，
+         * 而本组件 Update 与 ParkourController.LateUpdate 的顺序不保证
+         * （Unity 不保证不同组件的 Update 先后）。若LateUpdate 先跑，
+         * 读到的就是**上一帧**的朝向 -> 视角更新有一帧延迟，
+         * 快速转视角时会有明显的「拖影感」。
+         * LookDir（含 pitch）直接由 yaw/pitch 计算，与执行顺序无关。*/
+        Vector3 lookDir = LookDir;
+
+        // 反向偏移：相机在焦点后方 = -lookDir * distance
+        Vector3 back = -lookDir * distance;
 
         // 防止穿进场景：从焦点往相机方向探，撞到就贴到命中点前
         RaycastHit hit;
@@ -3389,7 +3471,8 @@ public class SilkParkourController : MonoBehaviour
 
         Vector3 f = bodyVelocity;                 // 挂丝线时的运动方向
         f.z = 0f;
-        if (f.sqrMagnitude < 0.5f) f = camLookFlat; // 否则用相机朝向
+        // 与MoveForward 同源，保证鼻尖指向与实际移动方向一致
+        if (f.sqrMagnitude < 0.5f) f = MoveForward;
         if (f.sqrMagnitude < 0.0001f) f = Vector3.right;
 
         visual.rotation = Quaternion.LookRotation(f.normalized, Vector3.forward);
@@ -3977,12 +4060,12 @@ public class SilkParkourController : MonoBehaviour
            + "测试关卡的方块未设自定义层，用 Everything 最稳")]
     public LayerMask groundMask = ~0;
 
-    [Tooltip("地面加速度（格/秒²）。越大越「立刻响应」。"
-        + "约为 moveSpeed 的 3~4 倍：即约 0.3 秒达到全速")]
-    public float groundAccel = 320f;
+    [Tooltip("地面加速度（格/秒²）。约为 moveSpeed 的 4~5 倍："
+        + "即约 0.22 秒达到全速。速度越高必须同步上调，否则会「滑行」")]
+    public float groundAccel = 1100f;
 
     [Tooltip("地面减速度（格/秒²）。松手后减速，越大停得越快")]
-    public float groundDecel = 300f;
+    public float groundDecel = 900f;
 
     [Tooltip("按住左Shift 的速度倍率")]
     public float sprintMultiplier = 1.8f;
@@ -3991,22 +4074,23 @@ public class SilkParkourController : MonoBehaviour
     /// 独立于 flightVel（那是空中惯性），两者互不干扰。</summary>
     Vector3 flatVel = Vector3.zero;
 
-    /// <summary>移动的「前方」= 相机朝向在水平面上的投影。
-    /// 相机被右键环绕改变后，W 的方向跟着变，符合第三人称直觉。</summary>
+    /// <summary>移动的「前方」= 视线方向在水平面上的投影。
+    ///
+    /// 【为什么用 LookDirFlat 而不是 cam.transform.forward】
+    /// 后者依赖 ApplyRotation 已执行，而本组件 Update 与相机组件的
+    /// Update 顺序不保证 —— 读到的可能是上一帧朝向，导致「按W 往哪走」
+    /// 和「画面朝哪」对不上。LookDirFlat 由 yaw 现算，与顺序无关，
+    /// 且与 OrbitAround 同源，保证移动方向与画面方向永远一致。
+    ///
+    /// 相机被鼠标环绕改变后，W 的方向跟着变，符合第三人称直觉。</summary>
     Vector3 MoveForward
     {
         get
         {
             if (cam == null) return Vector3.forward;
-            Vector3 d = cam.transform.forward;
-            d.z = 0f;
-            if (d.sqrMagnitude < 0.0001f)
-            {
-                // 相机正好垂直俯视时 forward 的水平投影为 0，退回用 up 的投影
-                d = cam.transform.up;
-                d.z = 0f;
-            }
-            return d.sqrMagnitude < 0.0001f ? Vector3.forward : d.normalized;
+            Vector3 d = cam.LookDirFlat;
+            if (d.sqrMagnitude < 0.0001f) return Vector3.forward;
+            return d;
         }
     }
 
@@ -4031,19 +4115,11 @@ public class SilkParkourController : MonoBehaviour
                Input.GetKey(KeyCode.E) || Input.GetKey(KeyCode.Q);
     }
 
-    /// <summary>相机的水平朝向（用于 WASD 移动）。
-    /// 与 MoveForward 是同一套逻辑，直接复用，避免两处退化行为不一致
-    /// （旧实现相机垂直俯视时退化方向不同，会让「鼻尖」与W 键方向打架）。
-    /// </summary>
-    Vector3 camLookFlat => MoveForward;
-
-    /// <summary>相机朝向的左方向（水平）</summary>
-    Vector3 camLookFlatPerp => MoveRight;
-
     [Header("自由移动")]
     [Tooltip("WASD 移动球的速度（格/秒）。球半径 6 格、平台间距 30 格，"
-           + "35 太慢（跨一个平台要近 1 秒）；75 约 0.4 秒跨过，节奏更接近跑酷")]
-    public float moveSpeed = 75f;
+           + "上一版 75 用户仍嫌慢 -> 提到 225（约 0.13 秒跨过一个平台，"
+           + "接近跑酷的急促手感）")]
+    public float moveSpeed = 225f;
 
     /* ---------- 挂荡：按输入移动自己，丝线末端跟随 ---------- */
     void UpdateSwing(float dt)
