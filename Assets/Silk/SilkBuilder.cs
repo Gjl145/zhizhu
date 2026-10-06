@@ -3370,7 +3370,11 @@ public class SilkParkourController : MonoBehaviour
     [Header("外观")]
     [Tooltip("自动创建可见球体。没有它就只能从日志判断状态，看不到玩家在哪")]
     public bool autoCreateVisual = true;
-    public float visualRadius = 6f;
+
+    [Tooltip("球的视觉半径（格）。**同时也是碰撞半径、地面吸附高度、边界限制**"
+           + "—— 改它等于整体等比缩放玩家。6 -> 4.5（用户要求缩到 3/4）。"
+           + "平台间距 30 格，4.5 让球在平台间显得更小、更灵活")]
+    public float visualRadius = 4.5f;
 
     [Tooltip("状态配色：蓝=自由移动 / 黄=抓着丝线 / 绿=正在建锚点")]
     public Color freeColor = new Color(0.4f, 0.8f, 1f);
@@ -4106,9 +4110,19 @@ public class SilkParkourController : MonoBehaviour
 
         float radius = visualRadius;
         Vector3 origin = desired + Vector3.forward * radius;
-        // 向下探一个「半径 + 容差」的距离：容差让走上平台时被吸上去，
-        // 而走下平台时不会立刻掉落（一格容差 ≈ 0.6 格）。
-        float probe = groundSnapDistance + radius;
+
+        /* 探测距离必须 **至少覆盖单帧位移**，否则高速下会「跳过」地面。
+         *
+         * 实测：moveSpeed=350、dt=1/60 -> 单帧位移5.83 格，
+         * 而原来 probe = groundSnapDistance + radius = 0.6 + 4.5 = 5.1 格 ——
+         * **单帧位移 > 探测范围**，球会在两步之间「越过」平台边缘而检测不到，
+         * 表现为高速穿过平台或莫名掉下去。
+         *
+         * 修法：probe 至少取「单帧位移 × 1.5」，
+         * 这样即使调用方漏调 MoveTowards 也不会漏检。
+         */
+        float singleFrame = Mathf.Abs(flatVel.z) * Time.deltaTime;
+        float probe = Mathf.Max(groundSnapDistance + radius, singleFrame * 1.5f + radius);
 
         if (Physics.Raycast(origin, -Vector3.forward, out RaycastHit hit,
                             probe, groundMask,
@@ -4122,19 +4136,21 @@ public class SilkParkourController : MonoBehaviour
         return desired;
     }
 
-    [Tooltip("地面吸附的容差（格）。走上平台会吸上去，走下有短暂悬空感")]
+    [Tooltip("地面吸附的容差（格）。会与「单帧位移 × 1.5」取较大值，"
+           + "保证高速下也不会漏检地面")]
     public float groundSnapDistance = 0.6f;
 
     [Tooltip("地面层（用于向下吸附，防止球穿过平台）。默认全部，"
            + "测试关卡的方块未设自定义层，用 Everything 最稳")]
     public LayerMask groundMask = ~0;
 
-    [Tooltip("地面加速度（格/秒²）。约为 moveSpeed 的 4~5 倍："
-        + "即约 0.22 秒达到全速。速度越高必须同步上调，否则会「滑行」")]
-    public float groundAccel = 1100f;
+    [Tooltip("地面加速度（格/秒²）。**约为 moveSpeed 的 5 倍**"
+        + "（即约 0.2 秒到全速）。moveSpeed 从 225 提到 350 后，"
+        + "本值必须同步上调，否则会「滑行」——手速跟不上球")]
+    public float groundAccel = 1750f;
 
-    [Tooltip("地面减速度（格/秒²）。松手后减速，越大停得越快")]
-    public float groundDecel = 900f;
+    [Tooltip("地面减速度（格/秒²）。与加速度同量级，停得干脆")]
+    public float groundDecel = 1600f;
 
     [Tooltip("按住左Shift 的速度倍率")]
     public float sprintMultiplier = 1.8f;
@@ -4185,10 +4201,9 @@ public class SilkParkourController : MonoBehaviour
     }
 
     [Header("自由移动")]
-    [Tooltip("WASD 移动球的速度（格/秒）。球半径 6 格、平台间距 30 格，"
-           + "上一版 75 用户仍嫌慢 -> 提到 225（约 0.13 秒跨过一个平台，"
-           + "接近跑酷的急促手感）")]
-    public float moveSpeed = 225f;
+    [Tooltip("WASD 移动球的速度（格/秒）。版本历程：35 → 75 → 225 → 350。"
+           + "平台间距 30 格，350 约 0.086 秒跨过，非常急促")]
+    public float moveSpeed = 350f;
 
     /* ---------- 挂荡：按输入移动自己，丝线末端跟随 ---------- */
     void UpdateSwing(float dt)
