@@ -1635,6 +1635,10 @@ public class SilkBuilder : MonoBehaviour
     [Tooltip("玩家自建节点的世界空间碰撞半径。默认锚点仅 0.06 格，射线打不中，固化时必须放大才能被动态丝线粘住")]
     public float playerNodeRadius = 1.5f;
 
+    [Tooltip("是否生成跑酷测试关卡（3 个平台 + 沟壑）。"
+           + "临时功能，删除 SilkTestLevel.cs 后请把这里也移除")]
+    public bool createTestLevel = true;
+
     /// <summary>第三人称跑酷模式。为 true 时本组件不响应鼠标左键与 R，
     /// 避免与玩家的「发射丝线」「重置」冲突。由控制器在切模式时设置。</summary>
     public bool parkourMode = false;
@@ -2379,6 +2383,10 @@ public class SilkWorldBootstrap
         CreateWireCube(world.transform, grid.GetHalfSize());
         CreateInnerWalls(world.transform, grid.GetHalfSize());
         GenerateAnchors(grid, 8);
+
+        /* 跑酷测试关卡（临时）。
+         * 删除：删掉这一行 + SilkTestLevel.cs 整个文件即可。*/
+        if (createTestLevel) SilkTestLevel.Create(grid.GetHalfSize());
 
         var builderGO = new GameObject("SilkBuilder");
         var builder = builderGO.AddComponent<SilkBuilder>();
