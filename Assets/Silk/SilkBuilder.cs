@@ -2297,6 +2297,11 @@ public class SilkWorldBootstrap
             (Vector3.zero - camGO.transform.position).normalized, Vector3.forward);
         camGO.AddComponent<SimpleOrbitCamera>();
 
+        // 玩家球：第三人称跑酷用。必须自动创建 ——
+        // 否则控制器不存在，Tab 切模式与发射丝线都无法测试。
+        var playerGO = new GameObject("SilkPlayer");
+        playerGO.AddComponent<SilkParkourController>();
+
         Debug.Log("[Bootstrap] 100³ 蛛网战场就绪\n" +
                   "左键 连丝 | 右键单击 断丝（1/4~1/2自然掉落）| 右键拖拽 旋转\n" +
                   "WASD 飞行 | QE 升降 | Shift加速 | 滚轮微移\n" +
