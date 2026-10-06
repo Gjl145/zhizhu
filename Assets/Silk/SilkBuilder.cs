@@ -3402,7 +3402,23 @@ public class SilkParkourController : MonoBehaviour
         line.StartSwing();
         grabbed = line;
         isFlying = false;
-        Debug.Log("[Fire] 已连接自己 → " + target.position);
+
+        /* 诊断：确认同一对点是否只建了一条线。
+         * 用户截图显示一次点击出现两条弧线，需区分：
+         *   (a) silkLines 里真有两条 -> 去重失效
+         *   (b) 只有一条但画了两次 -> 渲染层重复
+         * 这个日志会打出 silkLines.Count 与全局 Seg_ 物件数。*/
+        int segCount = 0;
+        foreach (var li in silkLines)
+            foreach (var sg in li.segments)
+                if (sg != null) segCount++;
+        Debug.Log("[Fire] 已连接自己 → " + target.position +
+                  "\n  silkLines 总数 = " + silkLines.Count +
+                  "\n  渲染段总数 = " + segCount +
+                  "\n  lineKeys 数= " + lineKeys.Count +
+                  "\n  本线段数 = " + (line.segments.Count) +
+                  "\n  本线两端 = " + line.rootFrom.position + " ↔ " + line.rootTo.position);
+    }
     }
 
     /// <summary>
