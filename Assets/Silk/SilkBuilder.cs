@@ -2033,16 +2033,47 @@ public class SilkBuilder : MonoBehaviour
         // 打空：什么都不做 —— 不凭空建点
     }
 
-    /// <summary>
-    /// Parkour 世界用：把某个锚点送进「选中-连线」流程。
-    /// 与 FreeFly 的OnAnchorPicked 完全同一套逻辑 ——
-    /// 区别只是 Parkour 第一个点由「自己」提供，所以只需连点两次。
+/// <summary>
+    /// Parkour 世界用：**一次性**建线 from→to，不走「两次点击」状态机。
+    ///
+    /// 【为什么必须独立，不能复用 OnAnchorPicked】
+    /// OnAnchorPicked 是 FreeFly 的「两次点击」状态机，靠共享字段
+    /// isFirstSelected / firstAnchor 记录进度。而切模式时这两个字段
+    /// 不会自动复位，于是产生这种错乱（用户实测：一次点击出两根线）：
+    ///
+    ///   FreeFly 单击过一次        -> isFirstSelected = true（脏状态残留）
+    ///   切到 Parkour（未复位）
+    ///   Parkour 左键 call1(self)  -> 被当成「第二个点」-> 建出 旧锚点→自己 的线
+    ///                    call2(target) -> call1 已ResetSelection，只记住目标（半污染）
+    ///   下一次左键 call1(self)    -> 又被当成「第二个点」-> 建出 上次目标→自己 的线
+    ///
+    /// 结果：每次点击都会多建一根「历史点→自己」的线，
+    /// 终点不是你点的那个锚点，于是屏幕上出现多根朝向不同的线。
+    ///
+    /// 现在：Parkour 用这个独立入口，语义清晰且无跨世界状态污染。
+    /// 走的是同一个 CreateSilkLine，所以距离校验与去重依然生效。
     /// </summary>
-    public void SelectAnchorForPlayer(AnchorPoint a)
+    public SilkLine ConnectForParkour(AnchorPoint from, AnchorPoint to)
     {
-        if (a == null) return;
-        OnAnchorPicked(a);
+        if (from == null || to == null) return null;
+        if (from == to) return null;
+
+        // 顺手清掉任何残留的选中态，避免影响 FreeFly
+        ResetSelection();
+
+        if (VoxelDistance(from.position, to.position) < 5)
+        {
+            Debug.Log("[SilkBuilder] 锚点太近（<5格），拒绝连线");
+            return null;
+        }
+
+        lastCreatedLine = CreateSilkLine(from, to, defaultColor, BreakMode.Middle);
+        return lastCreatedLine;
     }
+
+    /// <summary>清理选中态。切模式 / 发射 / 清场时都必须调用，
+    /// 否则 isFirstSelected 会跨世界残留，造成建线错乱。</summary>
+    public void ClearSelectionState() => ResetSelection();
 
     void OnAnchorPicked(AnchorPoint a)
     {
@@ -2394,6 +2425,13 @@ public class SilkBuilder : MonoBehaviour
 
     public SilkLine CreateSilkLine(AnchorPoint a, AnchorPoint b, SilkColor color, BreakMode mode = BreakMode.Middle)
     {
+        /* 每根线的创建都留痕。
+         * 「屏幕上多出线」这类问题的第一手证据就是这些日志 ——
+         * 若一次点击打出两条 [NewLine]，说明建线入口被触发多次；
+         * 若只一条但端点不是你点的那个，说明选中态被污染。*/
+        Debug.Log("[NewLine] " + a.position + " -> " + b.position +
+                  " 总数 " + (silkLines.Count + 1));
+
         // 去重：key 基于体素坐标，与对象生命周期解耦
         if (lineKeys.Contains(GetPairKey(a, b))) return null;
         lineKeys.Add(GetPairKey(a, b));
@@ -3353,7 +3391,15 @@ public class SilkParkourController : MonoBehaviour
         SimpleOrbitCamera.SetCursorLocked(mode == SilkControlMode.Parkour);
 
         // 同步告知 SilkBuilder：跑酷模式下左键/R 归玩家，它别抢
-        if (builder != null) builder.parkourMode = (mode == SilkControlMode.Parkour);
+        if (builder != null)
+        {
+            builder.parkourMode = (mode == SilkControlMode.Parkour);
+            /* 必须清掉 FreeFly 的「两次点击」选中态。
+             * isFirstSelected / firstAnchor 不会自动复位，跨模式残留会让
+             * 下一次建线错乱 —— 这是「一次点击出两根线」的根因之一。
+             * 切模式是天然的状态边界，任何跨世界的临时状态都该在此清零。*/
+            builder.ClearSelectionState();
+        }
 
         if (mode == SilkControlMode.Parkour)
         {
@@ -3657,12 +3703,15 @@ public class SilkParkourController : MonoBehaviour
     /// <summary>
     /// Parkour 的左键：**一键把「自己」和「目标锚点」连起来**。
     ///
-    /// 与 FreeFly 的关系（不是两套机制，是同一套）：
+    /// 与 FreeFly 的关系（**语义**相同，实现已分离）：
     ///   FreeFly  左键① 选中锚点 A     → 左键② 选中锚点 B   → 建线 A-B
-    ///   Parkour  左键  已默认选中自己 → 左键 选中目标锚点 → 建线 自己-目标
+    ///   Parkour  左键  目标锚点 T→ 一步建线 自己-T
     ///
-    /// 所以 Parkour 只多了「默认选中自己」这一步，
-    /// 丝线的建立 / 距离校验 / 去重全部复用 SilkBuilder 既有的 OnAnchorPicked。
+    /// 【实现为何分离】曾试图让Parkour 连调OnAnchorPicked 两次来复用同一套
+    /// 状态机，结果造成「一次点击建出两根线」。原因是 OnAnchorPicked 依赖
+    /// 共享字段 isFirstSelected / firstAnchor，而切模式时它们不会复位：
+    /// FreeFly 下单击过一次就会留下脏状态，导致 call1 被误当成「第二个点」。
+    /// 详见 ConnectForParkour 的注释。切模式时已加 ClearSelectionState 兜底。
     /// </summary>
     void FireAtAnchor()
     {
@@ -3682,16 +3731,12 @@ public class SilkParkourController : MonoBehaviour
             return;
         }
 
-        // 复用 SilkBuilder 的选中-连线流程：自己是起点，目标是终点。
-        // 与 FreeFly 完全同一套逻辑，只是第一个点由「自己」提供。
-        builder.lastCreatedLine = null;
-        builder.SelectAnchorForPlayer(selfNode);
-        builder.SelectAnchorForPlayer(target);
-
-        var line = builder.lastCreatedLine;
+        // 独立入口建线：自己 → 目标。不走 FreeFly 的两次点击状态机
+        // （那会造成跨世界状态污染，每次点击多建一根错线）
+        var line = builder.ConnectForParkour(selfNode, target);
         if (line == null)
         {
-            Debug.Log("[Fire]连线未成立（太近或重复）");
+            Debug.Log("[Fire] 连线未成立（太近或重复）");
             return;
         }
         if (!firedLines.Contains(line)) firedLines.Add(line);
