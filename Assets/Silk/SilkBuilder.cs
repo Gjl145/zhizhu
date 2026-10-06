@@ -2777,7 +2777,11 @@ public class SilkParkourController : MonoBehaviour
     public float minFireLength = 5f;
 
     [Header("初始位置")]
-    public Vector3 startPosition = new Vector3(0f, 0f, 30f);
+    /// <summary>初始位置：落在测试平台 A 顶面。
+    /// 平台 A 中心 (-30,0,-34) 尺寸 30x50x12 -> 顶面 z = -34+6 = -28
+    /// 球半径 6 -> 球心 z = -28 + 6 = -22
+    /// 之前放在 (0,0,30)，悬在平台上方 58 格，会一直往下掉。</summary>
+    public Vector3 startPosition = new Vector3(-30f, 0f, -22f);
 
     [Header("外观")]
     [Tooltip("自动创建可见球体。没有它就只能从日志判断状态，看不到玩家在哪")]
@@ -3047,7 +3051,25 @@ public class SilkParkourController : MonoBehaviour
         if (toBall.sqrMagnitude > 0.0001f)
             cam.transform.rotation =
                 Quaternion.LookRotation(toBall.normalized, Vector3.forward);
+
+        /* 诊断：确认相机在球外且球在画面内。
+         * 用户报告「变成第一人称」—— 若相机在球内（距离 < 球半径），
+         * 球会填满整个视野或被 near plane 裁掉，看起来就是「看不到球」。
+         * 这里把关键数值算出来，一次定位。*/
+        if (verboseFollowLog)
+        {
+            float dist = Vector3.Distance(cam.transform.position, transform.position);
+            bool inside = dist < visualRadius;
+            Debug.Log("[Follow] 相机到球 " + dist.ToString("F1") + " 格" +
+                      " | 球半径 " + visualRadius +
+                      " | " + (inside ? "!! 相机在球内（第一人称）" : "相机在球外（第三人称）") +
+                      " | 相机near=" + (camComp != null ? camComp.nearClipPlane.ToString("F2") : "无Camera组件") +
+                      " | 球前表面距相机 " + (dist - visualRadius).ToString("F1") + " 格");
+        }
     }
+
+    [Tooltip("每帧输出相机跟随诊断（排查「看不到球」时开启）")]
+    public bool verboseFollowLog = true;
 
     bool warnedNoCam = false;
 
