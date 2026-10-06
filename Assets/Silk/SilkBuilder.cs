@@ -1182,6 +1182,27 @@ public class SilkLine
 
         segments.Remove(oldSeg);
 
+        /* 断掉可能存在的旧约束链。
+         *
+         * 关键：这根线之前可能已经 Attach 过 -> EnsureChain 建过链 A。
+         * 断裂时如果直接 chainGO = new GameObject(...)，
+         * 链 A 的 GameObject 会**泄漏**，它仍在运行、
+         * 仍每帧往同一条 LineRenderer 写顶点 —— 结果两条弧度不同
+         * 的线叠在一起（用户实测：断裂后长度不一样、下面挂两个球）。
+         *
+         * 注意顺序：先 enabled=false 立即停掉它的 Update，
+         * 再 Destroy —— Object.Destroy 要到帧末才生效，
+         * 若只 Destroy，本帧两条链仍会各写一次顶点。*/
+        if (chain != null) chain.enabled = false;
+        if (chainGO != null) Object.Destroy(chainGO);
+        else if (chain != null) Object.Destroy(chain.gameObject);
+        chain = null;
+        chainGO = null;
+
+        // 旧段的渲染要还给新链：新链会接管 oldSeg 的 LineRenderer，
+        // 所以这里不隐藏 oldSeg，只是不再让segments 保留它。
+        oldSeg.chainDriven = true;
+
         // 上半截：保留为约束链，由 SilkChain 驱动自然摆动
         // 下半截：按需求直接丢弃，不创建任何段
         chainGO = new GameObject("SilkChain_" + rootFrom.position + "_" + rootTo.position);
@@ -1196,12 +1217,22 @@ public class SilkLine
         chain.slackScale = 1.15f;    // 略松于弧长，重力能把弧线拉直
         chain.Build(high, node, this, oldSeg.tension);
 
-        /* 断裂后：链条接管 oldSeg 的渲染。
-         * oldSeg 马上要被销毁，但视觉要连续 ——
-         * 让约束链把 nodes 位置写进 oldSeg 的 LineRenderer 再销毁。
-         * Build 里取的是 owner.segments[0]，这里 oldSeg 可能正是它，
-         * 所以单独指定更可靠。*/
-        chain.SetRenderSegment(oldSeg);
+        /* 断裂后：由新链接管渲染。
+         *
+         * 注意不能沿用 oldSeg —— 它紧接着就被 Destroy 了，
+         * renderSeg 会指向已销毁对象，ApplyNodesToRender 每帧访问它。
+         * 所以新建一段专门给约束链画，旧的销毁。*/
+        var renderGO = new GameObject("SegChain_" + rootFrom.position);
+        renderGO.transform.SetParent(builder.transform);
+        var renderSegNew = renderGO.AddComponent<SilkSegment>();
+        renderSegNew.from = high;
+        renderSegNew.to = node;
+        renderSegNew.parentLine = this;
+        renderSegNew.tension = oldSeg.tension;
+        renderSegNew.noSag = true;          // 弧度交给约束链算
+        renderSegNew.chainDriven = true;    // 自己不画，由 SilkChain 写顶点
+        segments.Add(renderSegNew);         // 收入列表，清场时才不会漏
+        chain.SetRenderSegment(renderSegNew);
 
         // 必须在 Build() 之后、首帧 Update 之前注入初速度。
         // Build 里 velocities 全部初始化为 0，此时施加冲量才正确；
@@ -1209,6 +1240,9 @@ public class SilkLine
         if (injectVelocity && chain != null)
             chain.ApplyInitialVelocity(initialVelocity, tipBoost);
 
+        // 旧段退场：先关渲染再销毁，避免本帧新旧两段同时被画
+        oldSeg.chainDriven = true;
+        if (oldSeg != null) oldSeg.SetVisible(false);
         Object.Destroy(oldSeg.gameObject);
     }
 
