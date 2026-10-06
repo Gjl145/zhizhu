@@ -2884,6 +2884,25 @@ public class SilkParkourController : MonoBehaviour
         noseRenderer = nose.GetComponent<MeshRenderer>();
 
         UpdateVisualFacing();
+
+        /* 诊断：直接验证球是否真的被创建、是否真的会被渲染。
+         * 之前反复「看不到球」，而我只能看到 [Follow] 日志 ——
+         * 它只证明相机在球外，**不证明球存在或可见**。
+         * 这里把球的真实状态全部打出来。*/
+        if (verboseFollowLog && body != null)
+        {
+            var br = body.GetComponent<MeshRenderer>();
+            Debug.Log("[Visual] 球已创建" +
+                      "\n  body 世界位置 = " + body.transform.position +
+                      "\n  body 世界缩放 = " + body.transform.lossyScale +
+                      "\n  body 激活 = " + body.activeInHierarchy +
+                      "\n  渲染器 = " + (br != null ? "有" : "!! 无") +
+                      "\n  渲染器启用 = " + (br != null ? br.enabled.ToString() : "-") +
+                      "\n  Shader = " + (br != null && br.material != null
+                          ? br.material.shader.name : "!! 无材质") +
+                      "\n  颜色 = " + (br != null && br.material != null
+                          ? br.material.color.ToString() : "-"));
+        }
     }
 
     /// <summary>给刚建的物件上色。</summary>
