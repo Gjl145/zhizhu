@@ -478,9 +478,26 @@ public class AnchorPoint : MonoBehaviour
         mf.sharedMesh = Mesh;
         var mr = gameObject.AddComponent<MeshRenderer>();
         mr.sharedMaterial = BaseMat;   // 先共享，用到改色时再克隆
-        gameObject.AddComponent<SphereCollider>().radius = 0.3f;
-        transform.localScale = Vector3.one * 0.2f;
+
+        /* 视觉与碰撞分离。
+         * 原来localScale=0.2 把 SphereCollider 也缩成了
+         * 0.3 × 0.2 = **0.06 格**，只有锚点间距（8格）的 0.75%，
+         * 鼠标几乎点不中 —— 这是「点不到锚点」的根本原因。
+         * 现在：视觉保持小而精致，碰撞体按世界半径单独设置。*/
+        transform.localScale = Vector3.one * VisualScale;
+
+        var col = gameObject.AddComponent<SphereCollider>();
+        col.radius = HitRadius / Mathf.Max(transform.lossyScale.x, 0.0001f);
     }
+
+    /// <summary>锚点视觉缩放（相对原生球半径 0.5）。
+    /// 只影响看起来多大，不影响点击判定。</summary>
+    public static float VisualScale = 0.9f;
+
+    /// <summary>锚点的点击判定半径（世界空间单位）。
+    /// 锚点间距 8 格，半径 1.5 格时直径占 37.5%，相邻球不重叠 ——
+    /// 既好点又不会误选邻近锚点。</summary>
+    public static float HitRadius = 1.5f;
 
     /// <summary>
     /// 把这个锚点标记为「可被玩家构建」，并放大碰撞体。
@@ -492,18 +509,20 @@ public class AnchorPoint : MonoBehaviour
     public void MarkAsPlayerNode(float worldRadius = 1.5f)
     {
         type = AnchorType.PlayerNode;
+
+        // 先设视觉缩放，再算碰撞半径 —— 顺序很重要：
+        // col.radius 是**局部**半径，会被 localScale 缩放，
+        // 必须先确定最终的 localScale 才能反算出正确的局部值。
+        transform.localScale = Vector3.one * (VisualScale * 1.6f);   // 玩家节点视觉更大
         var col = GetComponent<SphereCollider>();
         if (col != null)
         {
-            // 父级缩放会影响实际半径，这里按localScale 反算，
-            // 保证世界空间半径就是 worldRadius
             float s = transform.lossyScale.x;
             if (s < 0.0001f) s = 1f;
-            col.radius = worldRadius / s;
+            col.radius = worldRadius / s;      // 保证世界半径 == worldRadius
         }
         // 玩家节点用醒目颜色，一眼能看出哪些是自己建的
         SetColor(new Color(0.4f, 1f, 0.5f));
-        transform.localScale = Vector3.one;   // 恢复原尺寸，让碰撞半径直观
         gameObject.name = "PlayerNode_" + position;
     }
 
