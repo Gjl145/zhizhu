@@ -3063,12 +3063,47 @@ public class SilkParkourController : MonoBehaviour
     /// <summary>
     /// LateUpdate 而非 Update：Unity 保证所有 Update 之后才执行 LateUpdate，
     /// 此时相机的位置写入不会被自己的旋转逻辑覆盖，球一定在画面里。
-    /// 这也是「看不到球」的真正原因 —— 不是球没创建，是相机被覆盖了。
     /// </summary>
     void LateUpdate()
     {
         if (mode == SilkControlMode.Parkour) FollowCamera();
+        ScanRenderers();
     }
+
+    float lastScan = -99f;
+
+    /// <summary>扫描场景里所有 SilkSegment，按「两端点」分组，
+    /// 找出被重复渲染的点对。每 2 秒一次。</summary>
+    void ScanRenderers()
+    {
+        if (!renderScan) return;
+        if (Time.time - lastScan < 2f) return;
+        lastScan = Time.time;
+
+        var groups = new Dictionary<string, int>();
+        foreach (var seg in FindObjectsOfType<SilkSegment>())
+        {
+            if (seg == null) continue;
+            var lr = seg.GetComponent<LineRenderer>();
+            if (lr == null || !lr.enabled) continue;      // 只统计可见的
+            if (seg.from == null || seg.to == null) continue;
+
+            // 用体素坐标做 key，与顺序无关
+            var pa = seg.from.position; var pb = seg.to.position;
+            string key = (pa.x < pb.x || (pa.x == pb.x && pa.y < pb.y))
+                ? pa + "|" + pb : pb + "|" + pa;
+            if (!groups.ContainsKey(key)) groups[key] = 0;
+            groups[key]++;
+        }
+
+        int dup = 0;
+        foreach (var kv in groups)
+            if (kv.Value > 1) { dup++; Debug.Log("[Scan] 重复渲染 " + kv.Value + " 层: " + kv.Key); }
+        Debug.Log("[Scan] 可见 SilkSegment 点对数 = " + groups.Count + "，其中重复 " + dup);
+    }
+
+    [Tooltip("扫描场景里被重复渲染的丝线（排查重影）")]
+    public bool renderScan = true;
 
     SilkControlMode mode = SilkControlMode.FreeFly;
 
