@@ -3356,41 +3356,22 @@ public class SilkParkourController : MonoBehaviour
     }
 
     /// <summary>
-    /// 左键：**在蓝球当前位置构建一个锚点**（不是点击射线的命中点）。
-    ///
-    /// 这是「自己构建地形」的核心 —— 丝线只从玩家这里出现，
-    /// 锚点也只在玩家经过的地方生成，不会凭空出现在别处。
-    ///
-    /// 门槛：必须先发射过 shotsToPin 次（默认 2）才会真的固化。
-    /// 这样第一次左键是「甩丝线粘墙」，第二次才「就地固化」，
-    /// 符合蜘蛛侠的节奏感。
-    /// </summary>
-    /// <summary>
-    /// 左键：**挂到身边已存在的点上**（以自身为锚点）。
-    ///
-    /// 绝不允许凭空建点。候选只有两类：
-    ///   1) 自己用 C 键固化过的 PlayerNode
-    ///   2) 玩家此刻正好悬停在某个已有锚点上（距离小于 selfSnapRange）
-    /// 两类都没有就什么都不做 —— 不产生新锚点、不产生新丝线。
-    /// </summary>
-    /// <summary>
-    /// Parkour 的左键：**一键把「自己」和「刚选中的锚点」连起来**。
+    /// Parkour 的左键：**一键把「自己」和「目标锚点」连起来**。
     ///
     /// 与 FreeFly 的关系（不是两套机制，是同一套）：
-    ///   FreeFly  左键 = 选中一个锚点作为丝线的一端，再点另一个完成连线
-    ///   Parkour  左键 = 默认已选中「自己」，点一下目标锚点即完成连线
+    ///   FreeFly  左键① 选中锚点 A     → 左键② 选中锚点 B   → 建线 A-B
+    ///   Parkour  左键  已默认选中自己 → 左键 选中目标锚点 → 建线 自己-目标
     ///
     /// 所以 Parkour 只多了「默认选中自己」这一步，
-    /// 丝线的建立/校验/去重全部复用 SilkBuilder 既有的 OnAnchorPicked 流程。
+    /// 丝线的建立 / 距离校验 / 去重全部复用 SilkBuilder 既有的 OnAnchorPicked。
     /// </summary>
     void FireAtAnchor()
     {
         if (builder == null) return;
 
         // 射线找目标锚点（不命中就什么都不做 —— 不凭空建点）
-        Ray ray = camComp != null
-            ? camComp.ScreenPointToRay(Input.mousePosition)
-            : mainCam.ScreenPointToRay(Input.mousePosition);
+        if (camComp == null) return;
+        Ray ray = camComp.ScreenPointToRay(Input.mousePosition);
 
         AnchorPoint target = null;
         if (Physics.Raycast(ray, out RaycastHit hit, 2000f, builder.anchorLayer))
@@ -3405,8 +3386,8 @@ public class SilkParkourController : MonoBehaviour
         // 复用 SilkBuilder 的选中-连线流程：自己是起点，目标是终点。
         // 与 FreeFly 完全同一套逻辑，只是第一个点由「自己」提供。
         builder.lastCreatedLine = null;
-        SilkBuilder.SelectAnchorForPlayer(selfNode);
-        SilkBuilder.SelectAnchorForPlayer(target);
+        builder.SelectAnchorForPlayer(selfNode);
+        builder.SelectAnchorForPlayer(target);
 
         var line = builder.lastCreatedLine;
         if (line == null)
