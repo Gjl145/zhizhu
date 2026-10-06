@@ -2782,7 +2782,7 @@ public class SilkParkourController : MonoBehaviour
     [Header("外观")]
     [Tooltip("自动创建可见球体。没有它就只能从日志判断状态，看不到玩家在哪")]
     public bool autoCreateVisual = true;
-    public float visualRadius = 3f;
+    public float visualRadius = 6f;
 
     [Tooltip("状态配色：蓝=自由移动 / 黄=抓着丝线 / 绿=正在建锚点")]
     public Color freeColor = new Color(0.4f, 0.8f, 1f);
@@ -2825,7 +2825,19 @@ public class SilkParkourController : MonoBehaviour
         transform.position = startPosition;
         CreateVisual();
         UpdateVisualColor();   // 立即上色+摆朝向，否则第一帧是默认朝向
-        FollowCamera();// 立即摆一次相机，切Tab 当帧就能看到球
+        FollowCamera();        // 立即摆一次相机，切 Tab 当帧就能看到球
+
+        /* 诊断日志：一眼确认球、相机、位置是否都正常。
+         * 之前「看不到球」反复查不出，就是因为缺这条日志。*/
+        Debug.Log("[Parkour] 初始化完成" +
+                  "\n  球位置 = " + transform.position +
+                  "\n  球半径 = " + visualRadius +
+                  "\n  visual = " + (visual != null ? visual.name : "!! 未创建") +
+                  "\n  bodyRenderer = " + (bodyRenderer != null ? "有" : "!! 无") +
+                  "\n  相机 = " + (cam != null ? cam.transform.position.ToString() : "!! 为空") +
+                  "\n  相机距离 = " + (cam != null
+                      ? Vector3.Distance(cam.transform.position, transform.position).ToString("F1")
+                      : "-"));
     }
 
     /// <summary>自动创建一个可见球体代表「玩家」。
@@ -2981,7 +2993,9 @@ public class SilkParkourController : MonoBehaviour
             transform.position = startPosition;
             flightVel = Vector3.zero;
             isFlying = true;
-            // 立刻摆一次相机 —— 否则要等下一帧才看得到球
+            // 关键：立刻把相机摆到球旁边。
+            // 否则切模式这一帧相机还在 (120,-120,85)，
+            // 离球 190 格，球小到看不见 —— 这才是「看不到球」的真因。
             FollowCamera();
         }
         else
@@ -3012,15 +3026,18 @@ public class SilkParkourController : MonoBehaviour
     /// </summary>
     void FollowCamera()
     {
-        if (cam == null) return;
+        if (cam == null)
+        {
+            if (!warnedNoCam)
+            {
+                warnedNoCam = true;
+                Debug.LogWarning("[Parkour] cam 为空（Start 未执行或相机未找到），无法跟随。球仍会移动。");
+            }
+            return;
+        }
 
         /* 极简版：相机固定在球的 -Y 侧偏上，**始终正对球**。
-         * 不响应任何鼠标输入 —— 视角完全由球的位置决定。
-         *
-         * 之前的问题：位置用 cam.LookDirFlat（yaw 推算）摆，
-         * 而朝向又由 SimpleOrbitCamera.ApplyRotation 决定 ——
-         * 两套逻辑同时改相机，鼠标一动位置和朝向一起变，
-         * 看起来就是「位置在动而不是视角在转」。*/
+         * 不响应任何鼠标输入 —— 视角完全由球的位置决定。*/
         cam.transform.position = transform.position
                                + new Vector3(0f, -camDistance, camHeight);
         cam.transform.up = Vector3.forward;
@@ -3031,6 +3048,8 @@ public class SilkParkourController : MonoBehaviour
             cam.transform.rotation =
                 Quaternion.LookRotation(toBall.normalized, Vector3.forward);
     }
+
+    bool warnedNoCam = false;
 
     [Header("蜘蛛侠式发射")]
     [Tooltip("发射方向的向上抬升角（度）。0=水平前，45=斜上 45 度。"
@@ -3046,9 +3065,9 @@ public class SilkParkourController : MonoBehaviour
     [Header("第三人称相机")]
     [Tooltip("相机水平跟随距离。球在 z=30、顶棚在 z=50，只有 20 格余量，"
            + "故 camHeight 不宜超过 15")]
-    public float camDistance = 40f;
+    public float camDistance = 30f;
     [Tooltip("相机高于球的高度。必须 < 20（球到顶棚的距离），否则相机穿出顶棚")]
-    public float camHeight = 8f;
+    public float camHeight = 10f;
 
     /* ---------- 脱手飞行：纯重力 + 阻尼 + 撞墙反弹 ---------- */
     void UpdateFlight(float dt)
