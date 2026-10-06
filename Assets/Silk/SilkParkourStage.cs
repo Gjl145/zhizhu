@@ -54,10 +54,26 @@ public static class SilkParkourStage
              new Vector3(16f, 16f, 6f) * k, C.Jump);
 
         /* ===== 区 2：窄道（考验平衡）=====
-         * 宽 8 格、两侧无护栏，长 30 格。
-         * 掉落即失败，但没惩罚 —— 纯粹是「体验窄道」。*/
+         * 宽 8 格、长 20 格。球直径 9 格 -> 窄道比球还窄，
+         * 天然有压迫感（对应视频说的「消极空间：玩家感到受限」）。
+         *
+         * 【关键】两侧加了「不可通过」的视觉封堵 —— 见 Barrier()的注释。
+         * 没有它，玩家看到直角方块边缘不知道能不能跳出去，
+         * 试了掉下去会以为是 bug 而不是设计（视频：功能非可供性缺失）。*/
         Plat("Plat_2_窄道", new Vector3(26f, 0f, -36f) * k,
              new Vector3(20f, 8f, 6f) * k, C.Narrow);
+
+        /* 窄道两侧的护栏：明确标示「此处不可通过」。
+         *
+         * 高度 5 格 —— 按球半径（4.5 格）取约1.1 倍，
+         * 视觉上与球等高才够明确；太矮（试过 1.5 格）在
+         * 9 格直径的球旁边几乎看不见，等于没加。
+         * 位置在窄道外侧（内缘 ±4.2 vs 边缘 ±4），不挡通行。
+         * 材质用 Sprites/Default 以支持真正的半透明。*/
+        Barrier("2_窄道_护栏L", new Vector3(26f, -4.8f, -31f) * k,
+                new Vector3(20f, 0.8f, 6f) * k);
+        Barrier("2_窄道_护栏R", new Vector3(26f, 4.8f, -31f) * k,
+                new Vector3(20f, 0.8f, 6f) * k);
 
         /* ===== 区 3：终点台（收尾）=====
          * 比窄道高 5 格，需再跳一次。颜色醒目提示「到头了」。*/
@@ -122,5 +138,52 @@ public static class SilkParkourStage
         if (sh == null) sh = Shader.Find("Standard");
         if (sh == null) sh = Shader.Find("Sprites/Default");
         if (sh != null) mr.material = new Material(sh) { color = color };
+    }
+
+    /// <summary>
+    /// 建一道「不可通过」的边界标记。
+    ///
+    /// 【为什么必须有它 —— 来自参考视频「功能非可供性」原则】
+    /// 视频原话：「在做边界封堵时，一定要明确表示此处无法通过」。
+    /// 反面案例是《战神》：某些地方看上去能跳上去，实际却是空气墙 ——
+    /// 玩家会以为那是 bug，不会以为是设计。
+    ///
+    /// 正面案例是《消逝之光2》：不能进入的建筑外墙覆盖大量藤蔓且
+    /// **不留缺口**；能进入的虽然也有植被，但**留了缺口**做提示。
+    /// 两相对照形成「一致性」，玩家一看就懂。
+    ///
+    /// 【我们的窄道之前的问题】
+    /// 宽 8 格（比球直径 9 格还窄），但两侧什么都没有。
+    /// 玩家看到直角方块边缘，分不清「这是边缘」还是「我能跳出去」，
+    /// 试了掉下去只会以为程序有问题。
+    ///
+    /// 【做法】半透明格栅：既封堵边界，又不完全挡住视线，
+    /// 让玩家能看见下面是什么（知情后才不会误判）。
+    /// </summary>
+    static void Barrier(string name, Vector3 center, Vector3 size)
+    {
+        var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        go.name = "Plat_" + name;
+        go.transform.position = center;
+        go.transform.localScale = size;
+        go.transform.rotation = Quaternion.identity;
+
+        // 碰撞体**保留**（要真的挡住）—— 玩家撞上去就该停住，
+        // 而不是穿过护栏掉下去，那才是视频批评的「空气墙」糟糕体验。
+        var mr = go.GetComponent<MeshRenderer>();
+        if (mr == null) return;
+
+        // 用 Sprites/Default 而非 Lit —— 前者天然支持透明且不受光照影响，
+        // 后者即使设了 alpha 也会因为不透明渲染模式而看不见通透效果。
+        Shader sh = Shader.Find("Sprites/Default");
+        if (sh == null) sh = Shader.Find("Universal Render Pipeline/Unlit");
+        if (sh == null) sh = Shader.Find("Standard");
+        if (sh != null)
+            mr.material = new Material(sh)
+            {
+                // 半透明橙红 —— 与平台色明显区分，一眼看出「这是边界」，
+                // 且能透过去看见下方（知情后才不会误判能不能跳）。
+                color = new Color(0.95f, 0.35f, 0.2f, 0.4f)
+            };
     }
 }

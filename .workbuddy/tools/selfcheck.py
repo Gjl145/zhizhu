@@ -34,15 +34,21 @@ stage = open(STAGE, encoding='utf-8').read()
 # 原先在第 9 项内部解析，第 10 项依赖它 —— 变量作用域太脆弱，
 # 一旦调整顺序就NameError。改为在顶层解析一次，两处共用。
 _body = stage[stage.index('public static void Create'):stage.index('public static void Clear')]
-calls = re.findall(r'Plat\("([^"]+)"', _body)
+# 记录调用处用的是 Plat() 还是 Barrier()：
+#   Plat()    -> 可站立平台（参与路线/重叠检查）
+#   Barrier() -> 护栏，竖直挡板，不是路面（必须排除）
+# 不能按尺寸推断（平台本身也是扁的），也不能靠名字前缀。
+calls = re.findall(r'\b(Plat|Barrier)\("([^"]+)"', _body)
 _vecs = re.findall(r'new Vector3\(\s*(-?[\d.]+)f,\s*(-?[\d.]+)f,\s*(-?[\d.]+)f\s*\)', _body)
 plats = []
-for _i, _n in enumerate(calls):
+B = {}
+for _i, (_fn, _n) in enumerate(calls):
     _c = tuple(float(x) for x in _vecs[_i * 2])
     _s = tuple(float(x) for x in _vecs[_i * 2 + 1])
+    # 护栏不是路面，与 B 保持一致地排除，避免后续 KeyError
+    if _fn == 'Barrier':
+        continue
     plats.append((_n, _c, _s))
-B = {}
-for _n, _c, _s in plats:
     B[_n] = [(_c[i] - _s[i] / 2, _c[i] + _s[i] / 2) for i in range(3)]
 
 # ---------- 1. 括号配平 ----------

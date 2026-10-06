@@ -44,28 +44,47 @@ print('  跳跃最高 %.1f 格 | 滞空 %.2f 秒 | 全速起跳跨度 %.0f 格' 
 
 # 解析关卡里的平台：Plat("名字", center, size, 色)
 plats = []
-# 先取出所有 Plat("名字", ... 调用，再按出现顺序取成对的 Vector3
-calls = re.findall(r'Plat\("([^"]+)"', stage)
 # 只看 Create() 函数体，避免把别处的 Vector3 也算进来
 body = stage[stage.index('public static void Create'):stage.index('public static void Clear')]
+# 按「调用顺序」取出所有建几何物件的调用（Plat / Barrier），
+# 再按出现顺序取成对的 Vector3（中心点 + 尺寸）。
+# 注意：不能只用 Plat\\(" 匹配 —— Barrier(" 不含它但会混入；
+# 也不能按尺寸推断哪个是墙（平台本身也是扁的）。必须都取出来再分类。
+# 【关键】同时记录「用哪个函数建的」——
+# Plat() 建可站立平台，Barrier() 建护栏（竖直挡板，不是路面）。
+# 早先试过按尺寸推断（sz[2]<sz[1] 判墙），但平台本身也是扁的，
+# 结果所有平台都被误判成墙；也不能靠名字前缀（Barrier 内部同样
+# 加 Plat_ 前缀）。唯一可靠的方式是看调用处写的是哪个函数名。
+calls = re.findall(r'\b(Plat|Barrier)\("([^"]+)"', body)
 vecs = re.findall(r'new Vector3\(\s*(-?[\d.]+)f,\s*(-?[\d.]+)f,\s*(-?[\d.]+)f\s*\)', body)
 
 if len(vecs) < 2 * len(calls):
-    print('!! 解析到 %d 个 Plat 调用但只有 %d 个 Vector3 —— 数量不匹配'
+    print('!! 解析到 %d 个建造调用但只有 %d 个 Vector3 —— 数量不匹配'
           % (len(calls), len(vecs)))
     raise SystemExit(1)
 
-for i, n in enumerate(calls):
+for i, (fn, n) in enumerate(calls):
     c = tuple(float(x) for x in vecs[i * 2])
     sz = tuple(float(x) for x in vecs[i * 2 + 1])
-    plats.append((n, c, sz))
+    plats.append((n, c, sz, fn))    # fn: 'Plat'=可站立, 'Barrier'=护栏
 
 
 def bx(c, sz, i):
     return (c[i] - sz[i] / 2, c[i] + sz[i] / 2)
 
 
-B = {n: [bx(c, sz, i) for i in range(3)] for n, c, sz in plats}
+# 区分「可站立平台」与「护栏」：**必须按调用函数名，不能按尺寸推断**。
+# （曾试过 sz[2] < sz[1] 判墙，但平台本身也是扁的 —— z 尺寸天然小于 y，
+#   结果所有平台都被误判成墙，只剩护栏参与判定。）
+# Barrier(...) 建的是竖直挡板，不是路面，不能参与路线/重叠检查。
+# 只把 Plat() 建的算作可站立平台；Barrier() 建的是护栏，排除。
+B = {}
+BARRIERS = []
+for n, c, sz, fn in plats:
+    if fn == 'Barrier':
+        BARRIERS.append((n, c, sz))
+        continue
+    B[n] = [bx(c, sz, i) for i in range(3)]
 
 print()
 print('=== 越界检查（内墙 ±50）===')
@@ -81,9 +100,11 @@ if not bad:
 print()
 print('=== 重叠检查 ===')
 ov = False
-for i in range(len(plats)):
-    for j in range(i + 1, len(plats)):
-        n1, n2 = plats[i][0], plats[j][0]
+# 只在平台之间查重叠（B 已过滤掉护栏），避免护栏与相邻平台误报
+names = sorted(B.keys())
+for i in range(len(names)):
+    for j in range(i + 1, len(names)):
+        n1, n2 = names[i], names[j]
         if all(min(B[n1][a][1], B[n2][a][1]) - max(B[n1][a][0], B[n2][a][0]) > 0
                for a in range(3)):
             print('  !! %s vs %s 重叠' % (n1, n2))
@@ -126,6 +147,10 @@ print('=== 起点 ===')
 m = re.search(r'public Vector3 startPosition = new Vector3\(([-\d.]+)f,\s*([-\d.]+)f,\s*([-\d.]+)f\)', s)
 sx, sy, sz = (float(m.group(i)) for i in (1, 2, 3))
 p0 = basic[0]
+# basic 的名字排序依赖命名，而过滤掉护栏后顺序可能变化。
+# 用「x 坐标最小」来定位起点平台更符合语义 ——
+# 关卡沿 +X 推进，起点必然在最左侧。
+p0 = min(basic, key=lambda n: B[n][0][0])
 inx = B[p0][0][0] <= sx <= B[p0][0][1]
 iny = B[p0][1][0] <= sy <= B[p0][1][1]
 top = B[p0][2][1]
