@@ -4047,7 +4047,7 @@ public class SilkParkourController : MonoBehaviour
      *
      * ⚠ visualRadius 是「玩家整体尺寸」，同时用于碰撞半径、
      *   地面吸附高度、场景边界限制 —— 换载具后这项影响最大。
-     * ⚠ 高速时务必检查 StickToGround 的 probe：
+     * ⚠ 高速时务必检查 ResolveGround 的 probe：
      *   单帧位移（moveSpeed/60）不能超过探测范围，
      *   现有实现已用 max(容差+半径, 单帧位移×1.5+半径)兜底。*/
     [Tooltip("相机水平跟随距离（格）。球半径从 6 缩到 4.5 后，"
@@ -4154,13 +4154,27 @@ public class SilkParkourController : MonoBehaviour
             flatVel = Vector3.MoveTowards(flatVel, targetVel, rate * dt);
         }
 
-        if (flatVel.sqrMagnitude > 0.0001f)
+        if (flatVel.sqrMagnitude > 0.0001f || Mathf.Abs(vertVel) > 0.0001f)
         {
-            Vector3 next = transform.position + flatVel * dt;
+            /* 垂直运动：重力 + 起跳初速度。
+             * 与水平速度分开积分 —— 跳跃是抛物线，
+             * 水平速度不该被垂直方向影响。*/
+            if (!grounded || vertVel > 0f)
+            {
+                vertVel -= gravity * dt;
+                // 最高点之后 vertVel 会变负 —— 那就是下落
+                if (vertVel < -terminalVel) vertVel = -terminalVel;
+            }
+
+            Vector3 next = transform.position
+                         + flatVel * dt
+                         + Vector3.forward * (vertVel * dt);
 
             /* 地面吸附：向下探一小段，若脚下有面就把球贴上去。
-             * 没有这一步的话，纯坐标改写会让球直接穿过平台。*/
-            next = StickToGround(next);
+             * 没有这一步的话，纯坐标改写会让球直接穿过平台。
+             * 跳跃下落时同样依赖它来判定落地。*/
+            bool wasAirborne = !grounded;
+            next = ResolveGround(next, wasAirborne, ref vertVel);
 
             transform.position = next;
         }
@@ -4169,43 +4183,72 @@ public class SilkParkourController : MonoBehaviour
         UpdateVisualFacing();
     }
 
-    /// <summary>把球吸附到脚下的地面上，防止穿过平台。
-    /// 做法：从目标位置向下投一段射线，命中则把球放在命中点上方一个半径处。
-    /// 若脚下无地面（悬空），保持原位置 —— 交给重力逻辑处理。</summary>
-    Vector3 StickToGround(Vector3 desired)
+    [Tooltip("重力加速度（格/秒²）。与 SilkChain.gravity 一致")]
+    public float gravity = 15f;
+
+    [Tooltip("下落的最大速度（格/秒），避免越掉越快")]
+    public float terminalVel = 120f;
+
+    /// <summary>
+    /// 地面判定与落地处理。跳跃加入后，这一件事要同时负责：
+    ///   1. 走上平台时把球吸上去（防穿透）
+    ///   2. 下落时检测到地面 -> 置 grounded、垂直速度归零
+    ///
+    /// 【探测距离】必须至少覆盖**单帧位移**（水平 + 垂直），
+    /// 否则高速/高跳时会「跳过」地面：
+    ///   moveSpeed=450、dt=1/60 -> 单帧水平 7.5 格；
+    ///   垂直速度 120 时单帧 2 格 -> 合计近 10 格，
+    ///   而原 probe 只有 0.6 + 4.5 = 5.1 格 —— 会漏检。
+    ///
+    /// ref vertVel：落地时把垂直速度按 landBounce 衰减（默认完全归零）。
+    /// </summary>
+    Vector3 ResolveGround(Vector3 desired, bool wasAirborne, ref float vertVel)
     {
-        if (camComp == null) return desired;
+        if (camComp == null)
+        {
+            grounded = false;
+            return desired;
+        }
 
         float radius = visualRadius;
         Vector3 origin = desired + Vector3.forward * radius;
 
-        /* 探测距离必须 **至少覆盖单帧位移**，否则高速下会「跳过」地面。
-         *
-         * 实测：moveSpeed=350、dt=1/60 -> 单帧位移5.83 格，
-         * 而原来 probe = groundSnapDistance + radius = 0.6 + 4.5 = 5.1 格 ——
-         * **单帧位移 > 探测范围**，球会在两步之间「越过」平台边缘而检测不到，
-         * 表现为高速穿过平台或莫名掉下去。
-         *
-         * 修法：probe 至少取「单帧位移 × 1.5」，
-         * 这样即使调用方漏调 MoveTowards 也不会漏检。
-         */
-        float singleFrame = Mathf.Abs(flatVel.z) * Time.deltaTime;
-        float probe = Mathf.Max(groundSnapDistance + radius, singleFrame * 1.5f + radius);
+        // 探测距离 = 半径 + 容差 + 单帧位移（水平与垂直都要算）
+        float frameMove = (flatVel.magnitude + Mathf.Abs(vertVel)) * Time.deltaTime;
+        float probe = groundSnapDistance + radius + frameMove * 1.5f;
 
-        if (Physics.Raycast(origin, -Vector3.forward, out RaycastHit hit,
-                            probe, groundMask,
-                            QueryTriggerInteraction.Ignore))
+        bool hitGround = Physics.Raycast(origin, -Vector3.forward, out RaycastHit hit,
+                                         probe, groundMask,
+                                         QueryTriggerInteraction.Ignore);
+
+        if (hitGround)
         {
-            Vector3 p = hit.point + Vector3.forward * radius;
-            // 只在「当前位置不在地面下方」时吸附，避免每帧抖动
-            if (desired.z < p.z || Mathf.Abs(desired.z - p.z) < 0.01f) return p;
-            return desired;
+            Vector3 surface = hit.point + Vector3.forward * radius;
+
+            // 上升时不吸附（要往上跳，不能被地面拉住）
+            if (vertVel > 0f && desired.z > surface.z) { grounded = false; return desired; }
+
+            // 下落或贴地 -> 吸附到表面
+            if (wasAirborne && vertVel < 0f)
+            {
+                // 落地：垂直速度按 landBounce 衰减（默认 0 = 完全弹停）
+                vertVel *= landBounce;
+                grounded = true;
+                if (verboseFireLog && Mathf.Abs(vertVel) > 1f)
+                    Debug.Log("[Jump] 落地，保留垂直速度 " + vertVel.ToString("F1"));
+            }
+            else grounded = true;
+
+            return surface;
         }
+
+        // 没打到地面：空中
+        grounded = false;
         return desired;
     }
 
-    [Tooltip("地面吸附的容差（格）。会与「单帧位移 × 1.5」取较大值，"
-           + "保证高速下也不会漏检地面")]
+    [Tooltip("地面吸附的容差（格）。实际探测距离会再加上「单帧位移 × 1.5」，"
+           + "保证高速与跳跃时也不会漏检地面")]
     public float groundSnapDistance = 0.6f;
 
     [Tooltip("地面层（用于向下吸附，防止球穿过平台）。默认全部，"
@@ -4255,6 +4298,60 @@ public class SilkParkourController : MonoBehaviour
     /// <summary>水平移动速度（XZ 平面），已做插值。
     /// 独立于 flightVel（那是空中惯性），两者互不干扰。</summary>
     Vector3 flatVel = Vector3.zero;
+
+    /* ---------- 跳跃 ---------- */
+
+    /// <summary>垂直速度（+Z 为上）。与 flatVel 分开，
+    /// 因为跳跃是抛物线运动，水平速度不该受它影响。</summary>
+    float vertVel = 0f;
+
+    /// <summary>是否站在地面上（跳跃/落地的判据）。</summary>
+    bool grounded = true;
+
+    /// <summary>
+    /// 空格：**上下文感知** —— 地面跳 / 空中抓丝线。
+    ///
+    /// 【为什么这样分工】
+    /// 蜘蛛侠2 的空格是上下文键：地面按是普通跳，空中按是抓蛛丝。
+    /// 本作复刻这个设计，因为玩家在地面跑酷时最需要的���普通跳跃」，
+    /// 而抓丝线只在空中才需要。
+    ///
+    /// 注意与旧版的区别：原来空格统一是「抓/放」，
+    /// 地面按空格会去TryGrab 找附近的丝线 —— 地面上没有丝线可抓，
+    /// 结果就是「按了没反应」，玩家自然会觉得「没有跳跃键」。
+    /// </summary>
+    void HandleJumpOrGrab()
+    {
+        if (grounded || vertVel <= 0.01f)
+        {
+            // 地面（或刚落地）：普通跳跃
+            DoJump();
+        }
+        else
+        {
+            // 空中：抓丝线（沿视线自动瞄准）
+            FireAtAnchor();
+        }
+    }
+
+    /// <summary>普通跳跃。给一个向上的初速度，之后由重力接管。
+    /// 水平速度**保留** —— 蜘蛛侠式起跳不应该打断跑动节奏。</summary>
+    void DoJump()
+    {
+        vertVel = jumpSpeed;
+        grounded = false;
+        if (verboseFireLog)
+            Debug.Log("[Jump] 起跳，垂直速度 " + jumpSpeed +
+                      "（水平速度保留 " + flatVel.magnitude.ToString("F0") + "）");
+    }
+
+    [Header("跳跃")]
+    [Tooltip("起跳的垂直初速度（格/秒）。重力15，"
+           + "则最高点上升 = v²/2g = 15²/30 = 7.5 格")]
+    public float jumpSpeed = 15f;
+
+    [Tooltip("落地时垂直速度的衰减（1=完全弹停）")]
+    [Range(0f, 1f)] public float landBounce = 0f;
 
     /// <summary>移动的「前方」= 视线方向在水平面上的投影。
     ///
@@ -4340,17 +4437,32 @@ public class SilkParkourController : MonoBehaviour
     /* ---------- 按键 ---------- */
     void HandleKeys()
     {
-        // 空格：抓住 / 松手
+        /* 空格：**上下文感知**（蜘蛛侠2 的做法）
+         *   地面按-> 普通跳跃
+         *   空中按 -> 抓丝线（自动瞄准）
+         *
+         * 【为什么要改】原来空格统一是「抓/放」。但地面上没有丝线可抓，
+         * 玩家在平台跑酷时按空格会去TryGrab 找附近的线 —— 结果「按了没反应」，
+         * 自然会觉得「没有跳跃键」。这是键位设计问题，不是 bug。
+         *
+         * 松手改用 G（与「断视线中心的线」分工）：
+         *   G = 断线（原本就有）
+         *   Shift 或右键 = 松手
+         */
         if (Input.GetKeyDown(KeyCode.Space))
         {
-            if (isFlying) TryGrab();
-            else DoRelease();
+            HandleJumpOrGrab();
         }
 
-        /* 左键：**以自身当前所在的点为锚点** —— 勾住脚下/身旁的挂点。
-         * 不是「鼠标点击建点」—— 两个世界都不允许凭空建点。
-         * 玩家能连的只有已经存在的点：墙面锚点、自己固化过的节点、
-         * 或者自己此刻悬停的那个点。*/
+        // 抓着丝线时按 Shift松手（蜘蛛侠2 里松手是独立操作）
+        if (Input.GetKeyDown(KeyCode.LeftShift) && grabbed != null)
+        {
+            DoRelease();
+        }
+
+        /* 左键：**自动瞄准**并抓住最优锚点（不再需要玩家点选）。
+         * 详见 FireAtAnchor / PickBestAnchor 的注释 ——
+         * 手动点击在 100³ 网格 + 高速移动下几乎不可用。*/
         if (Input.GetMouseButtonDown(0)) FireAtAnchor();
 
         // B：蜘蛛侠式发射（斜上勾住并摆荡）—— 走另一条路径
@@ -4446,37 +4558,143 @@ public class SilkParkourController : MonoBehaviour
     {
         if (builder == null) return;
 
-        // 射线找目标锚点（不命中就什么都不做 —— 不凭空建点）
-        if (camComp == null) return;
-        Ray ray = camComp.ScreenPointToRay(Input.mousePosition);
-
-        AnchorPoint target = null;
-        if (Physics.Raycast(ray, out RaycastHit hit, 2000f, builder.anchorLayer))
-            target = hit.collider.GetComponent<AnchorPoint>();
-
-        if (target == null)
-        {
-            Debug.Log("[Fire] 视线里没有可连接的锚点");
-            return;
-        }
+        /* 【自动瞄准，不再要求玩家点选】
+         *
+         * 原来这里是鼠标射线点击，在本作几乎不可用：
+         *   · 锚点分布在 100³ 网格、间距 8 格，屏幕上很小
+         *   · 玩家高速移动中点击 -> 几乎必错
+         *   · 鼠标同时还要控制视角 -> 双重负担
+         * 这是设计层面的错误，不是实现 bug。
+         *
+         * 蜘蛛侠2 就是自动瞄准：玩家给方向意图，游戏自己算最佳落点。
+         * 现在照这个思路：按评分挑最优锚点（见 PickBestAnchor）。
+         *
+         * 键位仍不与 FreeFly 共享：
+         *   FreeFly 左键点选（关卡编辑要精确）
+         *   Parkour 左键自动瞄准（游戏要顺手）*/
+        var target = PickBestAnchor();
+        if (target == null) return;   // PickBestAnchor 内部已说明原因
 
         // 独立入口建线：自己 → 目标。不走 FreeFly 的两次点击状态机
-        // （那会造成跨世界状态污染，每次点击多建一根错线）
         var line = builder.ConnectForParkour(selfNode, target);
-        if (line == null)
-        {
-            Debug.Log("[Fire] 连线未成立（太近或重复）");
-            return;
-        }
+        if (line == null) return;     // 太近或重复
         if (!firedLines.Contains(line)) firedLines.Add(line);
 
-        // 末端挂到目标点 -> 进入摆荡（后续补发射动画）
+        // 末端挂到目标点 -> 进入摆荡
         line.Attach(target, builder, "命中点");
         line.StartSwing();
         grabbed = line;
         isFlying = false;
-        Debug.Log("[Fire] 已连接自己 → " + target.position);
+        if (verboseFireLog)
+            Debug.Log("[Fire] 已连接自己 → " + target.position +
+                      "（评分 " + lastAnchorScore.ToString("F1") + "）");
     }
+
+    [Tooltip("输出自动瞄准的选点结果（调自动瞄准手感时临时开启）")]
+    public bool verboseFireLog = false;
+
+    float lastAnchorScore;
+
+    /// <summary>
+    /// 自动瞄准：在视野内挑一个「最适合当前状态」的锚点。
+    ///
+    /// 【评分维度】模拟蜘蛛侠2 的「最佳落点」判断，按重要性排序：
+    ///   1. **必须够高**（目标高于自己）—— 摆荡要先获得势能，
+    ///      否则荡不起来。这是物理前提，不满足直接排除。
+    ///   2. **距离适中** —— 太近够不着摆的幅度；太远会飞过头。
+    ///      用「接近理想距离」的程度评分（抛物线型曲线）。
+    ///   3. **在前方** —— 顺着视线方向最符合直觉。
+    ///   4. **高度收益** —— 越高越能持续摆荡，但权重低于距离。
+    ///
+    /// 效果就是：新手总在「够高 + 距离合适 + 在前方」的锚点上荡，
+    /// 而游戏帮他把这个判断做掉了。
+    /// </summary>
+    AnchorPoint PickBestAnchor()
+    {
+        Camera c = camComp != null ? camComp : (cam != null ? cam.GetComponent<Camera>() : null);
+        if (c == null) return null;
+
+        var all = FindObjectsOfType<AnchorPoint>();
+        Vector3 selfPos = transform.position;
+        Vector3 facing = MoveForward;          // 视线水平方向
+        if (facing.sqrMagnitude < 0.0001f) facing = Vector3.forward;
+
+        AnchorPoint best = null;
+        float bestScore = float.MinValue;
+        lastAnchorScore = 0f;
+        int candidates = 0;
+
+        foreach (var a in all)
+        {
+            if (a == null || !a.AnchorAlive) continue;
+            if (a.type == AnchorType.SilkNode || a.type == AnchorType.Internal) continue;
+
+            Vector3 wp = a.WorldPosition;
+            Vector3 to = wp - selfPos;
+            float dist = to.magnitude;
+            if (dist < minAnchorDistance || dist > fireSearchRange) continue;
+
+            // 维度1：必须够高。留一点容差，允许平飞（贴天花板横移）
+            if (wp.z < selfPos.z + minAnchorHeightGain) continue;
+
+            // 视野内才考虑：用 dot 而非视锥判定，避免近距离时视角退化
+            Vector3 dirTo = to.normalized;
+            if (Vector3.Dot(c.transform.forward, dirTo) < autoAimCone) continue;
+
+            candidates++;
+
+            float score = 0f;
+
+            // 维度2：距离 —— 越接近理想距离越高（抛物线型）
+            float ideal = Mathf.Lerp(minAnchorDistance, fireSearchRange * 0.85f, 0.5f);
+            float norm = (dist - ideal) / ideal;
+            score += (1f - Mathf.Clamp01(norm * norm)) * 3f;
+
+            // 维度3：前方优先
+            score += Vector3.Dot(dirTo, facing) * 1.5f;
+
+            // 维度4：高度收益
+            score += Mathf.Clamp01((wp.z - selfPos.z) / Mathf.Max(fireSearchRange, 1f)) * 0.8f;
+
+            if (score > bestScore)
+            {
+                bestScore = score;
+                best = a;
+            }
+        }
+
+        lastAnchorScore = bestScore;
+
+        if (best == null)
+        {
+            if (verboseFireLog)
+                Debug.Log("[Fire] 无合适锚点（候选 " + candidates +
+                          "；需距离 " + minAnchorDistance + "~" + fireSearchRange +
+                          "、高出 " + minAnchorHeightGain + "）");
+            return null;
+        }
+
+        if (verboseFireLog)
+            Debug.Log("[Fire] 候选 " + candidates + " 个→ 选中 " + best.position +
+                      " 距离 " + Vector3.Distance(selfPos, best.WorldPosition).ToString("F1") +
+                      " 评分 " + bestScore.ToString("F2"));
+        return best;
+    }
+
+    [Header("自动瞄准")]
+    [Tooltip("自动搜索锚点的最大距离（格）")]
+    public float fireSearchRange = 90f;
+
+    [Tooltip("目标锚点至少要比自己高出多少（格）。"
+           + "摆荡要先获得势能荡不起来 —— 这是物理前提，不够高的直接排除")]
+    public float minAnchorHeightGain = 3f;
+
+    [Tooltip("目标锚点的最小距离（格）。太近则摆的幅度不足")]
+    public float minAnchorDistance = 12f;
+
+    [Tooltip("瞄准锥：锚点方向与视线夹角的余弦下限。"
+           + "0.45 ≈ 63 度锥角，越小越要求锚点在正前方")]
+    [Range(0.1f, 0.95f)] public float autoAimCone = 0.45f;
 
     /// <summary>
     /// 自己这个「锚点」。Parkour 世界的丝线起点。
