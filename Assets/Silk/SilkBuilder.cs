@@ -576,7 +576,11 @@ public class SilkSegment : MonoBehaviour
 
     LineRenderer lr;
     float fadeTimer;
-    bool visible = true;      // 被 SilkChain 接管渲染时置 false
+    /* 被 SilkChain 接管渲染时为 true —— 本段不再自己画，
+     * 顶点由 SilkChain 每帧写入。这是「一根线只有一个渲染者」的关键。*/
+    public bool chainDriven = false;
+
+    bool visible = true;
 
     /// <summary>显示/隐藏本段的渲染。同一根线只能有一个渲染来源，
     /// 否则会看到「一条悬链线 + 一条折线」的重影。</summary>
@@ -663,7 +667,7 @@ public class SilkSegment : MonoBehaviour
         if (from == null || to == null) { Object.Destroy(gameObject); return; }
         if (lr == null) { Object.Destroy(gameObject); return; }
         // 渲染已交给 SilkChain 时，本段完全不做事（不写顶点、不跑物理）
-        if (!visible) return;
+        if (!visible || chainDriven) return;
 
         // 自由端：纯重力自然掉落（Z 轴负方向）+ 绳长约束
         if (isFreeEnd && state == SilkState.Intact)
@@ -997,19 +1001,8 @@ public class SilkLine
         chain.catenarySag = 0f;      // 抓住时链条按直线起步，不再带悬链线弧度
         chain.slackScale = 1.0f;
         chain.Build(rootFrom, rootTo, this, 1f);
-
-        /* 关键：链条已接管本线的运动，隐藏原来的静态悬链线渲染段。
-         *
-         * 不隐藏的话，同一根线会被画两次：
-         *   1) SilkSegment 的悬链线（7 点采样，带下垂弧度）
-         *   2) ChainSeg_0..7 的直线段（串成折线）
-         * 断裂时也一样：SplitSegment 销毁了 SilkSegment，
-         * 但 ChainSeg 还在 -> 依然看到两条线。
-         *
-         * 渲染责任必须唯一：动态时归 ChainSeg，静态时归 SilkSegment。
-         */
-        foreach (var seg in segments)
-            if (seg != null) seg.SetVisible(false);
+        // 渲染不再需要「让位」—— SilkChain 只用那一个 SilkSegment 画线，
+        // 形状由物理节点决定，没有第二个渲染源。
     }
 
     /// <summary>让静态悬链线重新可见（链条销毁时用）。</summary>
@@ -1160,6 +1153,13 @@ public class SilkLine
         chain.slackScale = 1.15f;    // 略松于弧长，重力能把弧线拉直
         chain.Build(high, node, this, oldSeg.tension);
 
+        /* 断裂后：链条接管 oldSeg 的渲染。
+         * oldSeg 马上要被销毁，但视觉要连续 ——
+         * 让约束链把 nodes 位置写进 oldSeg 的 LineRenderer 再销毁。
+         * Build 里取的是 owner.segments[0]，这里 oldSeg 可能正是它，
+         * 所以单独指定更可靠。*/
+        chain.SetRenderSegment(oldSeg);
+
         // 必须在 Build() 之后、首帧 Update 之前注入初速度。
         // Build 里 velocities 全部初始化为 0，此时施加冲量才正确；
         // 若改初始位置（污染 prevPositions）会首帧瞬移。
@@ -1228,7 +1228,15 @@ public class SilkChain : MonoBehaviour
     }
 
     readonly List<AnchorPoint> nodes = new();
-    readonly List<SilkSegment> renderSegs = new();
+
+    /* 唯一的渲染者：一根 SilkSegment。
+     * 它的顶点每帧由本组件写入 —— 形状完全由物理（重力/阻尼/约束）决定。
+     * 旧实现是「SilkSegment 弧线 + 8 段 ChainSeg 直线」同时渲染 -> 重影。*/
+    SilkSegment renderSeg;
+
+    [Tooltip("形变上限：绳索最多能拉伸的比例，超过就绷直不再伸长。"
+           + "真实蛛丝断裂伸长率约 20~30%")]
+    [Range(0f, 0.5f)] public float maxStrain = 0.25f;
     readonly List<float> restLengths = new();
     readonly List<Vector3> velocities = new();   // 显式速度（格/秒）
 
@@ -1380,19 +1388,20 @@ public class SilkChain : MonoBehaviour
         for (int i = 0; i < nodes.Count; i++)
             velocities.Add(Vector3.zero);
 
-        // 建立渲染段（位置每帧由本组件写入，isFreeEnd 保持 false）
-        for (int i = 0; i < nodes.Count - 1; i++)
+        /* 渲染责任：只交给原 SilkSegment 一根线。
+         *
+         * 旧实现在这里建了 8 个 ChainSeg_ 当「画笔」，还强制 noSag=true
+         * 把弧度关掉 —— 结果同一根线被 SilkSegment（弧线）和
+         * 8 段 ChainSeg（直线折线）同时渲染，视觉上就是「两条线」。
+         *
+         * 正确做法：约束链的 nodes 已经带重力/阻尼/约束，
+         * 位置本身就是物理算出来的弧形。每帧把 nodes 的位置
+         * 写进那一个 SilkSegment 的 LineRenderer 顶点即可 ——
+         * 一根线，形变由物理决定，不需要第二个渲染源。*/
+        if (owner != null && owner.segments.Count > 0)
         {
-            var go = new GameObject("ChainSeg_" + i);
-            go.transform.SetParent(transform);
-            var seg = go.AddComponent<SilkSegment>();
-            seg.from = nodes[i];
-            seg.to = nodes[i + 1];
-            seg.parentLine = owner;
-            seg.tension = tension;
-            seg.isFreeEnd = false;   // 关键：不由 SilkSegment 自行摆动，避免双重积分
-            seg.noSag = true;        // 弧度交给约束链，不叠加中点下垂
-            renderSegs.Add(seg);
+            renderSeg = owner.segments[0];
+            renderSeg.chainDriven = true;   // 交给本组件渲染，它自己不再画
         }
 
         initialized = true;
@@ -1447,8 +1456,14 @@ public class SilkChain : MonoBehaviour
                 float len = d.magnitude;
                 if (len < 0.0001f) continue;
 
-                float rest = restLengths[i];
-                float diff = ((len - rest) / len) * stiffness;
+                /* 弹性绳索：静止长度 rest 允许被拉伸到 rest*(1+maxStrain)。
+                 * - 拉伸超过上限 -> 硬约束拉回，绳索「绷直」不再伸长
+                 * - 压缩（len<rest）-> 允许，绳索松弛下垂
+                 * 这样只施加重力时自然下垂；
+                 * 末端挂重物时先被拉长，到上限后绷直 —— 符合真实材料。*/
+                float maxLen = rest * (1f + maxStrain);
+                float restNow = len > maxLen ? maxLen : rest;
+                float diff = ((len - restNow) / len) * stiffness;
                 if (diff > 1f) diff = 1f;
                 else if (diff < -1f) diff = -1f;
 
@@ -1487,9 +1502,37 @@ public class SilkChain : MonoBehaviour
             nodes[last].transform.position = want;
             drivenVelocity = (want - cur) / dt;
         }
+
+        // 4. 渲染：把物理算出的节点位置写进那一个 SilkSegment。
+        //    一根线，形状完全由上面的重力/阻尼/约束决定。
+        ApplyNodesToRender();
+    }
+
+    /// <summary>把 nodes 的位置写进 LineRenderer 顶点。
+    /// 只有一个渲染源，所以永远不会出现「两条线」。</summary>
+    void ApplyNodesToRender()
+    {
+        if (renderSeg == null) return;
+        var lr = renderSeg.GetComponent<LineRenderer>();
+        if (lr == null) return;
+
+        int n = nodes.Count;
+        lr.positionCount = n;
+        for (int i = 0; i < n; i++)
+            lr.SetPosition(i, nodes[i].WorldPosition);
     }
 
     /* ============ 末端驱动（跑酷挂载物扩展） ============ */
+
+    /// <summary>指定由哪个 SilkSegment 承担渲染。
+    /// 断裂时 Build 里取的 segments[0] 可能不是被断的那一段，
+    /// 所以由调用方显式指定。</summary>
+    public void SetRenderSegment(SilkSegment seg)
+    {
+        renderSeg = seg;
+        // 被接管的段不再自己渲染，否则又会出现两个渲染源
+        if (seg != null) seg.chainDriven = true;
+    }
 
     /// <summary>末端是否由外部驱动。true 时末端不受重力，由挂载物决定位置。</summary>
     public bool endDriven = false;
@@ -1595,9 +1638,11 @@ public class SilkChain : MonoBehaviour
 
     void OnDestroy()
     {
-        foreach (var seg in renderSegs)
-            if (seg) Destroy(seg.gameObject);
-        renderSegs.Clear();
+        // 只清引用 —— 渲染的那根 SilkSegment 属于 SilkLine，
+        // 由 SilkLine 自己管理生命周期，约束链销毁不该连带销毁它。
+        // （旧实现在这里销毁 renderSegs 里的 8 段 ChainSeg，
+        //   而现在不再有那些段。）
+        renderSeg = null;
     }
 }
 
