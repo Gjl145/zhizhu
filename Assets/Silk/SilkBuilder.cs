@@ -445,7 +445,30 @@ public static class SilkEventBus
 /* ===================== 体素网格 ===================== */
 public class VoxelGrid : MonoBehaviour
 {
-    public int size = 100;
+    /* ★ 100 -> 160（2026-10-07）：内墙边界 ±50 -> ±80
+     *
+     * 【★ 更正：扩边界的理由不是「不扩就会越界」】
+     *   我最初的理由是「房间放大到 7 米后建筑会越界」——**这是错的**。
+     *   实算：建筑半宽 = (7.0×2 + 4.22) / 2 × 5 = **45.5 格** < 50 格。
+     *   原来的 ±50 完全够用，余量还有 4.5 格。
+     *   → 那个理由是错的，别照着它做决策。
+     *
+     * 【扩到 160 的真实理由（用户决定）】
+     *   用户在「房间放得下 10 个球」的两个解读中，同时选择了
+     *   「扩网格到 ±80」，为后续摆荡与风景填充留出空间：
+     *     · 摆荡绳长上限提高（网格越大，能钩到的锚点越远）
+     *     · 空旷关卡（SwingTest / SwingUnit）的活动空间变大
+     *     · 住宅总深 70 格，为将来的家具/装饰布置留余量
+     *
+     * 【连带影响】
+     *   · CreateInnerWalls() 会在 ±80 处生成内墙（场景更大，编辑器略慢）
+     *   · UpdateFlight 的 limit = h - visualRadius 从 47.5 变成 77.5
+     *   · 掉落重生线 fallRespawnZ 默认 -70：原本是「边界外 1.4 倍」的安全线，
+     *     现在变成「边界内 0.875 倍」。对本关卡无害（楼板在 z≈14.5，
+     *     球很难掉到 -70），但语义变了，若将来做「掉出建筑即重生」需重新设定。
+     *   · SpatialHash 的分桶与网格尺寸无关（按格数分）
+     */
+    public int size = 160;
     public float cellSize = 1f;
     public float GetHalfSize() => size * cellSize * 0.5f;
     public Vector3 GetCenter() => transform.position;
@@ -3581,7 +3604,9 @@ public class SilkWorldBootstrap
 
         var world = new GameObject("SilkWorld");
         var grid = world.AddComponent<VoxelGrid>();
-        grid.size = 100; grid.cellSize = 1f;
+        // ★ 100 -> 160：内墙 ±50 -> ±80（用户决定，为摆荡与风景填充留空间）。
+        //   注意：这里显式赋值会覆盖 VoxelGrid 字段的默认值 —— **两处都要改**。
+        grid.size = 160; grid.cellSize = 1f;
 
         CreateWireCube(world.transform, grid.GetHalfSize());
         CreateInnerWalls(world.transform, grid.GetHalfSize());
@@ -4292,14 +4317,34 @@ public class SilkParkourController : MonoBehaviour
     /// <summary>初始位置：落在「区0 平地」的顶面上。
     ///
     /// 平地：中心 (-30, 0, -38)，尺寸 30×44×8 -> 顶面 z = -38 + 4 = -34。
-    /// 球半径 4.5 -> **球心 z = -34 + 4.5 = -29.5**。
+    /// 球半径 2.5 -> **球心 z = -34 + 2.5 = -31.5**。
     ///
     /// 【必须严格等于顶面 + 半径】否则会出现两种问题：
     ///   · 偏高 -> 开局先掉一段，玩家以为「控制不了」
     ///   · 偏低 -> 开局卡在地面里，射线检测异常
-    /// 这一条已用 Python 核算：z=-25 会悬空 4.5 格（正好一个半径），
-    /// 明显不对，现改为 -29.5。</summary>
-    public Vector3 startPosition = new Vector3(-30f, 0f, -29.5f);
+    ///
+    /// ★★【不要把 -31.5 写成字面量】——
+    ///   球半径从 4.5 缩到 2.5 时，这里若不改就会「悬空 2 格」
+    ///   （自检第 8 项当场抓到：偏差 2.0 格）。
+    ///   凡是「由别的参数推导出来的位置」，都必须在注释里写明公式，
+    ///   改那个参数时才能立刻知道要同步改哪里。
+    ///   → 见 <see cref="StartPositionBasicStage"/>：那里用公式而非字面量。</summary>
+    public Vector3 startPosition = new Vector3(-30f, 0f, -31.5f);
+
+    /// <summary>基础关卡（Basic）的球心起点 —— **由公式推导，不用字面量**。
+    ///
+    /// 平地平台顶面 z = -34（见 SilkParkourStage 的区 0），
+    /// 球心必须恰好在顶面 + 视觉半径，否则会悬空或卡进地里。
+    /// 球半径改了，这里自动跟随 —— 不再出现「改了半径忘了改起点」。
+    /// </summary>
+    public Vector3 StartPositionBasicStage
+        => new Vector3(-30f, 0f, BasicStageFloorZ + visualRadius);
+
+    /// <summary>基础关卡「区 0 平地」的**顶面**高度（格）。
+    /// 平台中心 (-30, 0, -38)，厚度 8 -> 顶面 = -38 + 8/2 = -34。
+    /// 球心 = 本值 + visualRadius（见 <see cref="StartPositionBasicStage"/>）。
+    /// </summary>
+    public const float BasicStageFloorZ = -34f;
 
     [Header("外观")]
     [Tooltip("自动创建可见球体。没有它就只能从日志判断状态，看不到玩家在哪")]
@@ -4308,17 +4353,29 @@ public class SilkParkourController : MonoBehaviour
     /// <summary>
     /// 球的**视觉**半径（格）—— 只管看起来多大。
     ///
-    /// ★ 与 <see cref="colliderRadius"/> 拆开是用户的明确要求：
-    /// 「球要变得小啊，我要的是**球的大小不变**（视觉），
-    ///   每次是周围的场景变化。……球可以缩小」
+    /// ★ 4.5 -> 2.5（2026-10-07，用户要求「球现在太大了，视上也变小吧」）
     ///
-    /// 保持 4.5 —— 球的观感是「一个可辨识的球」，不随关卡变化。
+    /// 【为什么之前 9 格直径在住宅里显得过大 —— Python 实算】
+    ///   房间边长 22.5 格 -> 球直径 9 格 = **占房间宽度 40%**
+    ///   楼梯梯段净宽 6.0 格 -> 球直径 9 格 **比楼梯还宽 3 格**
+    ///   净高 13.0 格 -> 球直径 9 格 = **占净高 69%**
+    /// 换句话说：球比门大、比楼梯宽、比层高大 —— 观感上根本不像「在房间里跑」，
+    /// 而像「房间里塞了个球」。
+    ///
+    /// 【改成 2.5 之后】
+    ///   直径 5 格：占房间 22%、楼梯 5<6 可过、占净高 38%
+    ///   视觉直径 5 格 < 楼梯净宽 6 格 —— 球终于「能进 stairs」了。
+    ///
+    /// ★ 连带好处：camDistance 7 从「贴脸」变「合理」
+    ///   （之前为9 格球把相机压到 7，是被球逼的妥协；现在球缩小了，
+    ///   7 格相机退到 8 格即可，用户选择「不动」，故保持 7）
     /// </summary>
     [Tooltip("球的**视觉**半径（格）。只管看起来多大。\n"
-        + "★ 用户要求：球看起来保持不变，缩的是碰撞体。\n"
-        + "  通行能力看 colliderRadius。\n"
-        + "  地面吸附高度也用本值（否则球会陷进地板）。")]
-    public float visualRadius = 4.5f;
+        + "★ 4.5 -> 2.5（2026-10-07）：9 格直径在 22.5 格房间里占 40%，\n"
+        + "  且比楼梯净宽 6 格还宽 —— 观感不像「在房间里跑」。\n"
+        + "  2.5 -> 直径 5 格，占房间 22%，能过楼梯。\n"
+        + "  通行能力看 colliderRadius；地面吸附高度也用本值。")]
+    public float visualRadius = 2.5f;
 
     /// <summary>
     /// 球的**碰撞**半径（格）—— 决定能不能穿过门洞、缝隙。
@@ -4327,27 +4384,34 @@ public class SilkParkourController : MonoBehaviour
     /// 原本visualRadius 同时负责视觉、碰撞、地面吸附、边界限制，
     /// 改它等于把玩家整体等比缩放 —— 一次改动会牵连所有已调好的手感。
     ///
-    /// 【为什么需要变小】
-    /// 中国住宅的门洞（GB 50096-2011 表 5.8.7）：
-    ///     卧室门 0.90 米 | 厨房门 0.80 米 | 卫生间门 0.70 米
-    /// 换算成格（1 米 = 5 格）后分别是 4.5 / 4.0 / 3.5 格。
-    /// 而球的**视觉**直径是 9 格 —— 比门洞宽一到两倍。
+    /// ★★ 2.0 -> 2.5，与视觉统一（用户决定「统一，同时加宽所有门」）
     ///
-    /// 【参照】Bungie 官方 Halo 关卡 Metrics 给出
-    /// 「玩家碰撞体最小通过宽度 1.22 m」作为「能过去」的下限。
-    /// 本值 2.0 格 = 0.40 米，远小于该下限 —— 通行宽松。
+    /// 【统一后的连带后果：门洞必须加宽】
+    ///   碰撞直径 5.0 格 vs 原门洞（GB 50096-2011 表 5.8.7，1米=5格）：
+    ///     · 卧室门  0.90 米 = 4.5 格 -> ★过不去（窄 0.5）
+    ///     · 厨房门  0.80 米 = 4.0 格 -> ★过不去（窄 1.0）
+    ///     · 卫生间门 0.70 米 = 3.5 格 -> ★过不去（窄 1.5）
+    ///   即球会**锁死在房间里出不来**（楼梯梯段 6 格能过，但门全进不去）。
+    ///   → 已同步把 HouseBlockout 的门洞统一加宽到 1.10 米 = 5.5 格。
+    ///     偏离幅度：卧室 +22%、厨房 +38%、卫生间 +57%（已记录，见HouseBlockout）
+    ///     但仍**低于** Halo 官方玩家通行下限 1.22 米（= 6.1 格）。
     ///
-    /// ★★ 【当前状态：本字段尚未被任何代码消费】
-    ///   球的坐标是脚本直接改写transform.position，
-    ///   唯一的碰撞响应是 ResolveGround 的**单条向下射线**（只管地面），
-    ///   **没有墙体碰撞检测**。
-    ///   所以把本值调小不会改变任何实际行为 —— 球本来就穿墙而过。
-    ///   要让它生效，必须先实现球 vs墙体的解算。见 SolveWallCollision()。
+    /// 【代价：失去「卫生间门要挤一下」的设计张力】
+    ///   原设计里 0.70 米的卫生间门是最有味道的约束（要侧身挤）。
+    ///   统一到 1.10 米后所有门洞余量相同（宽 0.5 格），张力消失了。
+    ///   这是「视觉与碰撞统一」的必然代价 —— 保留的话就不能统一。
+    ///
+    /// 【参照】Bungie 官方 Halo 关卡 Metrics：「玩家碰撞体最小通过宽度 1.22 m」。
+    /// 本值 2.5 格 = 0.50 米，远小于该下限。
+    ///
+    /// ★ 本字段由 SolveWallCollision() 消费（墙体 SphereCast 扫掠半径）。
     /// </summary>
     [Tooltip("球的**碰撞**半径（格）—— 决定能否穿过门洞与缝隙。\n"
-        + "★ 注意：墙体碰撞尚未实现，本值目前不生效。\n"
-        + "  球能过门洞的前提是先有墙体解算。")]
-    public float colliderRadius = 2.0f;
+        + "★ 2.0 -> 2.5，与视觉统一（用户决定）。\n"
+        + "  代价：门洞已同步加宽到 1.10 米 = 5.5 格（偏离 GB 50096 规范），\n"
+        + "  否则球进不了任何房间。\n"
+        + "  由 SolveWallCollision 的 SphereCast 消费。")]
+    public float colliderRadius = 2.5f;
 
     [Tooltip("状态配色：蓝=自由移动 / 黄=抓着丝线 / 绿=正在建锚点")]
     public Color freeColor = new Color(0.4f, 0.8f, 1f);
@@ -4961,7 +5025,8 @@ public class SilkParkourController : MonoBehaviour
          *  故：先记住 fallback 起点，try 创建，
          *  失败则退回基础关卡（至少有东西可看）并给出明确提示。
          * ============================================================ */
-        Vector3 fallbackStart = new Vector3(-30f, 0f, -29.5f);
+        // ★ 同样用公式而非字面量（原为 -29.5，即旧半径 4.5 时的值）
+        Vector3 fallbackStart = StartPositionBasicStage;
 
         switch (kind)
         {
@@ -5021,7 +5086,9 @@ public class SilkParkourController : MonoBehaviour
 
             default:  // Basic
                 SilkParkourStage.Create(h);
-                startPosition = new Vector3(-30f, 0f, -29.5f);   // 基础区平地顶面-34 + 半径 4.5
+                // ★ 用公式而非字面量：球心 = 平台顶面 + 视觉半径。
+                //   球半径改了这里自动跟随（曾因硬编码 -29.5 而悬空 2 格）。
+                startPosition = StartPositionBasicStage;
                 ApplyCameraForStage(OpenStageCameraDistance,
                                     OpenStageCameraHeight);
                 break;

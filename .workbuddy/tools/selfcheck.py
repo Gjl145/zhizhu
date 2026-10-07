@@ -1143,6 +1143,84 @@ else:
 ok('（第 22 项已放弃：局部 const 的 CS0103 无法用文本正则可靠检测，'
    '请以 Unity Console 的编译结果为准）')
 
+# ---------- 23. 建筑参数联动（改了球径/房间后不能漏改的地方）----------
+# 【背景】2026-10-07 把球从直径 9 格缩到 5 格、房间从 4.5 米放大到 7.0 米，
+# 连带牵出 5 处必须同步的地方。其中两处当时真的错了：
+#   · 起点高度写成字面量 -29.5 -> 球心悬空 2 格（自检第 8 项抓到）
+#   · 踏步高若用净高算而非层高算 -> 楼梯差0.34 m 爬不到二层（肉眼极难察觉）
+#
+# 本项把「必须用公式而非字面量」固化为检查。
+_link = []
+_house = open('Assets/Silk/HouseBlockout.cs', encoding='utf-8').read()
+
+# 23a. RoomLength 必须由 RoomSize 推导（曾硬编码 (4.5*5.0)）
+_m = re.search(r'public const float RoomLength = ([^;]+);', _house)
+if not _m:
+    _link.append('HouseBlockout: 找不到 RoomLength 定义')
+elif 'RoomSize' not in _m.group(1):
+    _link.append('HouseBlockout: RoomLength = %s 是字面量，'
+                 '必须写成 (RoomSize * 5.0) —— 否则改了 RoomSize 房间不变'
+                 % _m.group(1).strip())
+
+# 23b. StepRise 必须由 StoreyHeight / TotalSteps 推导
+_m = re.search(r'StepRise\s*(?:=>|=)\s*([^;]+);', _house)
+if not _m:
+    _link.append('HouseBlockout: 找不到 StepRise 定义')
+else:
+    _v = _m.group(1).strip()
+    if 'StoreyHeight' not in _v or 'TotalSteps' not in _v:
+        _link.append('HouseBlockout: StepRise = %s 必须写成 '
+                     'StoreyHeight / TotalSteps —— 硬编码会在改层高后'
+                     '导致楼梯爬不到二层（差值肉眼难察）' % _v)
+
+# 23c. 起点高度必须用公式
+if 'StartPositionBasicStage' not in s:
+    _link.append('SilkBuilder: 缺少 StartPositionBasicStage —— '
+                 '起点高度应写成「平台顶面 + visualRadius」而非字面量')
+elif not re.search(r'BasicStageFloorZ\s*\+\s*visualRadius', s):
+    _link.append('SilkBuilder: StartPositionBasicStage 没用 '
+                 'BasicStageFloorZ + visualRadius 公式')
+
+# 23d. 球径必须小于最窄门洞与楼梯梯段
+_vr = re.search(r'public float visualRadius\s*=\s*([\d.]+)f', s)
+_cr = re.search(r'public float colliderRadius\s*=\s*([\d.]+)f', s)
+_toi = re.search(r'ToiletDoorWidth\s*=\s*([\d.]+)f', _house)
+_stw = re.search(r'StairWidth\s*=\s*([\d.]+)f', _house)
+_upm = re.search(r'UnitsPerMeter\s*=\s*([\d.]+)f', _house)
+if _cr and _toi and _stw and _upm:
+    _u = float(_upm.group(1))
+    _d = float(_cr.group(1)) * 2
+    _toi_g = float(_toi.group(1)) * _u
+    _stw_g = float(_stw.group(1)) * _u
+    if _d > _toi_g:
+        _link.append('碰撞直径 %.1f 格 > 卫生间门 %.1f 格 —— 球进不了厕所'
+                     % (_d, _toi_g))
+    if _d > _stw_g:
+        _link.append('碰撞直径 %.1f 格 > 楼梯梯段 %.1f 格 —— 球上不了楼梯'
+                     % (_d, _stw_g))
+    # 建筑必须装得进网格：半宽 = (房间 × 2 + 楼梯井) / 2
+    _rs = re.search(r'RoomSize\s*=\s*([\d.]+)f', _house)
+    _grid = re.search(r'public int size = (\d+)', s)
+    _f1 = re.search(r'Flight1Steps\s*=\s*(\d+)', _house)
+    _f3 = re.search(r'Flight3Steps\s*=\s*(\d+)', _house)
+    _tr = re.search(r'StepTread\s*=\s*([\d.]+)f', _house)
+    if _rs and _grid and _f1 and _f3 and _tr:
+        _room = float(_rs.group(1))
+        _half = float(_grid.group(1)) / 2.0
+        # 楼梯井 X = (Flight1+Flight3) ×踏步宽 + 0.30 余量
+        _shaft_m = (int(_f1.group(1)) + int(_f3.group(1))) * float(_tr.group(1)) + 0.30
+        _need = (_room * 2 + _shaft_m) / 2 * _u
+        if _need > _half:
+            _link.append('建筑半宽 %.1f 格 > 网格边界 ±%.0f 格 —— 会出界'
+                         % (_need, _half))
+
+if _link:
+    for _x in _link:
+        err(_x)
+else:
+    ok('建筑参数联动正确（RoomLength/StepRise/起点高度均为公式，'
+       '球径小于门洞与楼梯，建筑在网格内）')
+
 # ---------- 汇总 ----------
 print()
 print('=' * 60)
