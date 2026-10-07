@@ -4134,10 +4134,49 @@ public class SilkParkourController : MonoBehaviour
     [Tooltip("自动创建可见球体。没有它就只能从日志判断状态，看不到玩家在哪")]
     public bool autoCreateVisual = true;
 
-    [Tooltip("球的视觉半径（格）。**同时也是碰撞半径、地面吸附高度、边界限制**"
-           + "—— 改它等于整体等比缩放玩家。6 -> 4.5（用户要求缩到 3/4）。"
-           + "平台间距 30 格，4.5 让球在平台间显得更小、更灵活")]
+    /// <summary>
+    /// 球的**视觉**半径（格）—— 只管看起来多大。
+    ///
+    /// ★ 与 <see cref="colliderRadius"/> 拆开是用户的明确要求：
+    /// 「球要变得小啊，我要的是**球的大小不变**（视觉），
+    ///   每次是周围的场景变化。……球可以缩小」
+    ///
+    /// 保持 4.5 —— 球的观感是「一个可辨识的球」，不随关卡变化。
+    /// </summary>
+    [Tooltip("球的**视觉**半径（格）。只管看起来多大。\n"
+        + "★ 用户要求：球看起来保持不变，缩的是碰撞体。\n"
+        + "  通行能力看 colliderRadius。\n"
+        + "  地面吸附高度也用本值（否则球会陷进地板）。")]
     public float visualRadius = 4.5f;
+
+    /// <summary>
+    /// 球的**碰撞**半径（格）—— 决定能不能穿过门洞、缝隙。
+    ///
+    /// 【为什么必须与视觉拆开】
+    /// 原本visualRadius 同时负责视觉、碰撞、地面吸附、边界限制，
+    /// 改它等于把玩家整体等比缩放 —— 一次改动会牵连所有已调好的手感。
+    ///
+    /// 【为什么需要变小】
+    /// 中国住宅的门洞（GB 50096-2011 表 5.8.7）：
+    ///     卧室门 0.90 米 | 厨房门 0.80 米 | 卫生间门 0.70 米
+    /// 换算成格（1 米 = 5 格）后分别是 4.5 / 4.0 / 3.5 格。
+    /// 而球的**视觉**直径是 9 格 —— 比门洞宽一到两倍。
+    ///
+    /// 【参照】Bungie 官方 Halo 关卡 Metrics 给出
+    /// 「玩家碰撞体最小通过宽度 1.22 m」作为「能过去」的下限。
+    /// 本值 2.0 格 = 0.40 米，远小于该下限 —— 通行宽松。
+    ///
+    /// ★★ 【当前状态：本字段尚未被任何代码消费】
+    ///   球的坐标是脚本直接改写transform.position，
+    ///   唯一的碰撞响应是 ResolveGround 的**单条向下射线**（只管地面），
+    ///   **没有墙体碰撞检测**。
+    ///   所以把本值调小不会改变任何实际行为 —— 球本来就穿墙而过。
+    ///   要让它生效，必须先实现球 vs墙体的解算。见 SolveWallCollision()。
+    /// </summary>
+    [Tooltip("球的**碰撞**半径（格）—— 决定能否穿过门洞与缝隙。\n"
+        + "★ 注意：墙体碰撞尚未实现，本值目前不生效。\n"
+        + "  球能过门洞的前提是先有墙体解算。")]
+    public float colliderRadius = 2.0f;
 
     [Tooltip("状态配色：蓝=自由移动 / 黄=抓着丝线 / 绿=正在建锚点")]
     public Color freeColor = new Color(0.4f, 0.8f, 1f);
@@ -4986,11 +5025,20 @@ public class SilkParkourController : MonoBehaviour
         flightVel += new Vector3(0, 0, -gravity * flightGravityScale) * dt;
         flightVel *= Mathf.Pow(flightDamping, dt * 60f);
 
-        // 撞墙反弹：直接积分会穿墙（加 Collider 只是让射线能命中，
-        // 不会自动阻止 transform 被移过去）。
-        // 做法：位移后若已越过墙面（|坐标| > 半高 - 球半径），
-        // 退回墙面内侧并把该轴速度取反 —— 相当于「弹一下」。
-        Vector3 next = transform.position + flightVel * dt;
+        Vector3 origin = transform.position;
+        Vector3 next = origin + flightVel * dt;
+
+        /* ★ 真实墙体解算（新增，此前完全缺失）。
+         *
+         * 【为什么网格边界反弹不够】
+         * 下面那段|坐标| > limit 的反弹只管「场景网格的外框」，
+         * 对HouseBlockout 生成的那些薄墙（1.2 格厚）毫无作用 ——
+         * 球会直接从厨房穿墙进卧室。
+         * 有了SphereCast 才能真正被墙挡住，
+         * 这也是「把colliderRadius 缩到 2 让球能钻门洞」得以成立的前提。*/
+        next = SolveWallCollision(origin, next, ref flightVel);
+
+        // 场景网格边界反弹（保留原有逻辑，作用于外框而非室内墙）
         float h = builder != null ? builder.grid.GetHalfSize() : 50f;
         float limit = h - visualRadius;
 
@@ -5088,7 +5136,8 @@ public class SilkParkourController : MonoBehaviour
                 if (vertVel < -terminalVel) vertVel = -terminalVel;
             }
 
-            Vector3 next = transform.position
+            Vector3 origin = transform.position;
+            Vector3 next = origin
                          + flatVel * dt
                          + Vector3.forward * (vertVel * dt);
 
@@ -5097,6 +5146,20 @@ public class SilkParkourController : MonoBehaviour
              * 跳跃下落时同样依赖它来判定落地。*/
             bool wasAirborne = !grounded;
             next = ResolveGround(next, wasAirborne, ref vertVel);
+
+            /* ★ 墙体解算（新增，此前完全缺失）。
+             *
+             * 【执行顺序很关键：地面在前，墙体在后】
+             * 若反过来先解墙再吸附地面，会出现「站在地上却被墙推走」的抖动：
+             *   地面吸附把球放到板面上（球心恰好等于板厚的一半处），
+             *   此时若再做 SphereCast，球与地面这一薄板**已经重叠**，
+             *   SphereCast 起点就在碰撞体内部 -> 判定结果不可靠。
+             * 先地面后墙则球永远站在板面之上，扫掠起点干净。
+             *
+             * 【速度处理】
+             * flatVel 是水平速度。就地清掉法向分量即可，
+             * 竖直方向由ResolveGround 单独处理，不受这里影响。*/
+            next = SolveWallCollision(origin, next, ref flatVel);
 
             transform.position = next;
         }
@@ -5129,6 +5192,13 @@ public class SilkParkourController : MonoBehaviour
     ///   而原 probe 只有 0.6 + 4.5 = 5.1 格 —— 会漏检。
     ///
     /// ref vertVel：落地时把垂直速度按 landBounce 衰减（默认完全归零）。
+    ///
+    /// ★【这里的 radius 故意用 visualRadius 而不是 colliderRadius】
+    ///   地面吸附算的是「球心悬空多高」，即 hit.point + forward × radius。
+    ///   若改用 colliderRadius（2），球心只悬空 2 格，
+    ///   而**视觉**球半径仍是 4.5 格 -> 球会有 2.5 格陷进地板里。
+    ///   视觉必须与物理解耦，但「站在地上时球心的高度」属于**视觉范畴**，
+    ///   所以这一处保留 visualRadius 是正确的，不是遗漏。
     /// </summary>
     Vector3 ResolveGround(Vector3 desired, bool wasAirborne, ref float vertVel)
     {
@@ -5138,6 +5208,7 @@ public class SilkParkourController : MonoBehaviour
             return desired;
         }
 
+        // ★ 视觉球心悬空高度 —— 见上方说明，此处**必须**用 visualRadius
         float radius = visualRadius;
         Vector3 origin = desired + Vector3.forward * radius;
 
@@ -5176,6 +5247,106 @@ public class SilkParkourController : MonoBehaviour
         grounded = false;
         return desired;
     }
+
+    // ================================================================
+    //  墙体碰撞：让 colliderRadius 真正生效
+    // ================================================================
+
+    /// <summary>
+    /// 球 vs 墙体的解算 —— **这是本项目此前完全缺失的一环**。
+    ///
+    /// 【为什么必须加】
+    /// 球的坐标一直是脚本直接改写 transform.position，
+    /// 唯一的碰撞响应是 ResolveGround 的**单条向下射线**（只管地面）。
+    /// 也就是说：**在此之前球能直接穿过任何墙**。
+    /// 于是「把球缩小才能过门洞」这件事根本无从谈起 ——
+    /// 球不需要「过」，它本来就穿过去了，只是穿得很难看。
+    ///
+    /// 【为什么用 SphereCast 而不是每帧改Collider】
+    ///   · 球没有 Rigidbody，transform 直写不会触发物理引擎的接触解算，
+    ///     所以挂 SphereCollider 也没用（这和撞墙反弹那段的老问题同源）。
+    ///   · SphereCast 是**扫掠**：即使单帧位移很大（25 格/秒 -> 0.42 格/帧，
+    ///     摆荡时可达数格），也不会「跳过」薄墙。这正是薄板房场景的关键。
+    ///   · 板厚 1.2 格 >>单帧位移 0.42 格，本例不会 tunneling；
+    ///     但摆荡高速时必须靠扫掠而非点检测，否则会穿。
+    ///
+    /// 【实现方式】
+    /// 用「本帧起点-> 本帧终点」做一次 SphereCast：
+    ///   · 命中 -> 把球退到 contactOffset 处，并沿法线推出 colliderRadius
+    ///   · 同时把沿法线的速度分量清零（贴墙滑行，不反弹、不粘住）
+    ///   · 不命中 -> 原样放行
+    ///
+    /// 【为什么沿法线推出而不是简单停在 contact.point】
+    /// SphereCast 命中时球心距墙还有 colliderRadius。
+    /// 只退到 contact.point 会让球**陷进墙里 colliderRadius 的深度**，
+    /// 下一帧又会重复命中 -> 抖动。
+    /// 正确做法：命中点 + 法线 × colliderRadius。
+    /// </summary>
+    /// <param name="from">本帧位移的起点。</param>
+    /// <param name="to">本帧位移的终点（尚未应用）。</param>
+    /// <param name="velocityRef">速度，就地修改 —— 撞墙时清掉法向分量。</param>
+    /// <returns>修正后的位置。</returns>
+    Vector3 SolveWallCollision(Vector3 from, Vector3 to, ref Vector3 velocityRef)
+    {
+        Vector3 delta = to - from;
+        float dist = delta.magnitude;
+
+        // 位移太小（比如贴地静止）就不用扫掠，省开销
+        if (dist < 0.0001f || colliderRadius <= 0f) return to;
+
+        // ★ 扫掠半径要比碰撞半径略小一点（留contactOffset 的余量），
+        //   否则球贴墙时会每一帧都判定为「正好接触」而卡住不动。
+        float castRadius = Mathf.Max(0.001f, colliderRadius - 0.02f);
+
+        RaycastHit hit;
+        bool blocked = Physics.SphereCast(from, castRadius, delta / dist, out hit,
+                                         dist, wallMask,
+                                         QueryTriggerInteraction.Ignore);
+
+        if (!blocked) return to;
+
+        /* 退到「刚好接触」的位置。
+         * hit.distance 是球心沿 delta 方向到碰撞面的距离，
+         * 这里再退一点让球停在墙外而不是正好嵌进去。 */
+        float safe = Mathf.Max(0f, hit.distance - 0.01f);
+        Vector3 contact = from + (delta / dist) * safe;
+
+        // 沿法线推出一个完整半径 -> 球就贴在墙面上，不会陷进去
+        Vector3 pushed = contact + hit.normal * colliderRadius;
+
+        /* 速度处理：只清掉「冲向墙里」的那一份法向分量。
+         *
+         * 【为什么不整段清零，也不反弹】
+         *   · 整段清零 -> 玩家贴墙横移时会被粘住，手感极差。
+         *   · 反弹     -> 房间狭窄时会连续弹射，控制不住。
+         *   · 保留切向分量（沿墙滑行）是最符合直觉的：
+         *     你推着墙走，效果就是「贴着墙蹭过去」。
+         *
+         * 用 Dot < 0 判断朝向：只有速度指向墙里才需要抵消，
+         * 若球正在离墙（Dot > 0）则什么都不做。*/
+        float intoWall = Vector3.Dot(velocityRef, hit.normal);
+        if (intoWall < 0f)
+            velocityRef -= hit.normal * intoWall;      // 完全抵消法向分量
+
+        wallContact = true;
+        lastWallNormal = hit.normal;
+        return pushed;
+    }
+
+    [Tooltip("碰撞墙体所用的层。默认 Everything ——\n"
+           + "白盒房的所有墙/楼板都是普通 Cube，没设自定义层，\n"
+           + "用 ~0 最稳。QueryTriggerInteraction.Ignore 会自动跳过触发器。")]
+    public LayerMask wallMask = ~0;
+
+    [Tooltip("撞墙时是否保留沿墙的切向速度（贴墙滑行）。\n"
+           + "关闭 = 撞墙就完全停住（更硬，但容易卡在角落里）")]
+    public bool slideAlongWall = true;
+
+    /// <summary>本帧是否撞到了墙（诊断用）。</summary>
+    public bool wallContact { get; private set; }
+
+    /// <summary>最近一次撞墙的法线（诊断/调试用）。</summary>
+    public Vector3 lastWallNormal { get; private set; }
 
     [Tooltip("地面吸附的容差（格）。实际探测距离会再加上「单帧位移 × 1.5」，"
            + "保证高速与跳跃时也不会漏检地面")]

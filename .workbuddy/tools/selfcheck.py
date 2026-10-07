@@ -844,6 +844,89 @@ if _slock:
 else:
     ok('绳长 = 两锚点实际距离（slackScale = 1.0），随距离动态变化')
 
+# ---------- 19. 视觉/碰撞半径分离，且碰撞半径必须真被消费 ----------
+# 【背景】用户要求「球的视觉看上去不变，但可以缩小（碰撞）」。
+#   拆分后发现一个更根本的问题：本项目球的位置是脚本直接改写
+#   transform.position，唯一的碰撞响应是 ResolveGround 的单条向下射线，
+#   **从来没有墙体碰撞** —— 球本来就能穿墙而过。
+#   于是「把碰撞半径调小」若无墙体解算配合，则完全无行为变化。
+#   本项防止 colliderRadius 再次退化成「定义了但没人用」的死字段。
+_r = []
+
+# 19a. 两个字段都必须存在且是独立字段
+if not re.search(r'public float visualRadius\s*=\s*[\d.]+f', s):
+    _r.append('缺少 visualRadius 字段（视觉半径）')
+if not re.search(r'public float colliderRadius\s*=\s*[\d.]+f', s):
+    _r.append('缺少 colliderRadius 字段（碰撞半径）')
+
+# 19b. colliderRadius 必须至少被消费一次（不能是死字段）
+_used = len(re.findall(r'colliderRadius', s)) - 1   # 减去字段定义本身那处
+if _used < 1:
+    _r.append('colliderRadius 只出现在定义处，没有任何代码消费它'
+              '——缩它不会改变任何行为')
+
+# 19c. 墙体解算必须存在，且必须真的用 SphereCast（薄板防穿透的关键）
+if 'SolveWallCollision' not in s:
+    _r.append('缺少 SolveWallCollision：球能直接穿墙，'
+              'colliderRadius 无从生效')
+else:
+    # ★ 按大括号配平截取函数体 ——不能用 '\n    }' 之类的字符串切分，
+    #   函数体内的 if/for嵌套也会出现同样缩进的 '}'，会提前截断。
+    _i = s.find('Vector3 SolveWallCollision(')
+    if _i < 0:
+        _r.append('未找到 SolveWallCollision 的定义')
+    else:
+        _j = s.find('{', _i)
+        _depth = 0
+        _k = _j
+        while _k < len(s):
+            if s[_k] == '{':
+                _depth += 1
+            elif s[_k] == '}':
+                _depth -= 1
+                if _depth == 0:
+                    break
+            _k += 1
+        _body = s[_j:_k]
+        # ★ 搜代码前必须先剥掉注释 ——
+        #   本函数的文档注释里就写着「hit.normal」「SphereCast」等字样，
+        #   直接搜整段会因注释命中而永远「通过」（变异测试实测漏抓）。
+        _body = re.sub(r'//[^\n]*', '', _body)
+        _body = re.sub(r'/\*.*?\*/', '', _body, flags=re.S)
+        if 'SphereCast' not in _body:
+            _r.append('SolveWallCollision 内没有 SphereCast —— '
+                      '用点检测会在高速/薄板场景下穿透')
+        # 沿法线推出必须存在，否则球会陷进墙里并逐帧抖动。
+        # ★ 必须匹配「推出表达式」本身，不能只搜 'hit.normal' ——
+        #   函数里 velocityRef 那几行也用 hit.normal，
+        #   只搜字符串会在推出被删后仍然「通过」（变异测试实测漏抓）。
+        if not re.search(r'\+\s*hit\.normal\s*\*\s*colliderRadius', _body):
+            _r.append('SolveWallCollision 内没有「contact + hit.normal × '
+                      'colliderRadius」的推出 —— 球会陷进墙里，'
+                      '每帧重复命中导致抖动')
+
+# 19d. 两个位移入口都要过墙体解算（地面移动 + 脱手飞行）
+_nsolve = len(re.findall(r'=\s*SolveWallCollision\(', s))
+if _nsolve < 2:
+    _r.append('SolveWallCollision 只有 %d 处调用点（应为 2：'
+              '地面移动 + 脱手飞行）—— 有一路会穿墙' % _nsolve)
+
+# 19e. 地面吸附半径必须用 visualRadius（否则球陷进地板）
+_gr = re.search(r'ResolveGround\(Vector3[^)]*\)\s*\{(.{0,600}?)float radius = (\w+);',
+                s, re.S)
+if not _gr:
+    _r.append('未找到 ResolveGround 里的 radius 赋值')
+elif _gr.group(2) != 'visualRadius':
+    _r.append('ResolveGround 的 radius = %s，应为 visualRadius —— '
+              '用 colliderRadius 会让视觉球陷进地板' % _gr.group(2))
+
+if _r:
+    for _x in _r:
+        err(_x)
+else:
+    ok('视觉/碰撞半径已分离，碰撞半径被墙体 SphereCast 解算消费'
+       '（%d 处调用）' % _nsolve)
+
 # ---------- 汇总 ----------
 print()
 print('=' * 60)
