@@ -644,7 +644,7 @@ public static class HouseBlockout
                "  层高 " + StoreyHeight + " m\n" +
                "  房间 " + RoomSize + " × " + RoomSize + " m（四间统一）\n" +
                "  楼梯 踏步 " + StepTread + "×" + StepRise + " m   GB50096 6.3.2 强条\n" +
-               "  楼梯 梯段净宽 " + stairW + " m   GB50096 6.3.1 强条（≥1.10）\n" +
+               "  楼梯 梯段净宽 " + StairWidth + " m   GB50096 6.3.1 强条（≥1.10）\n" +
                "  门洞 高 " + DoorHeight + " m   表 5.8.7（规范 2.00 + 实际余量）\n" +
                "  ── 关键提示 ──\n" +
                "  · 所有墙/板都是**薄板**，房间是空心的，可以进去\n" +
