@@ -570,6 +570,54 @@ else:
     if 'GetMouseButtonDown(0)' in code_hk:
         ok('鼠标左键 = 发射丝线')
 
+# ---------- 16. 速度类参数的比例一致性 ----------
+# 【为什么会失衡】用户把moveSpeed 砍半时，若只改它一个，
+# 冲刺 / 加速度的**相对强度**就变了：
+#   50+42=92（1.84 倍）-> 25+42=67（2.68 倍）
+# 冲刺会变得过强，空中连按两次就能飞出关卡。
+# 故把「比例」固化为检查项。
+dash = grab_float('dashImpulse')
+acc = grab_float('groundAccel')
+dec = grab_float('groundDecel')
+mult = grab_float('sprintMultiplier')
+
+if dash:
+    ratio = (sp + dash) / sp
+    if ratio > 2.2:
+        err('冲刺过强：%.0f+%.0f=%.0f 格/秒 = **%.2f 倍**基础速度'
+            '（应 ≤ 2.2；只降 moveSpeed 不降 dashImpulse 会造成失衡）'
+            % (sp, dash, sp + dash, ratio))
+    else:
+        ok('冲刺强度合理：冲刺后 %.0f 格/秒 = %.2f 倍基础速度'
+           % (sp + dash, ratio))
+
+if acc:
+    t = sp / acc                       # 到全速所需秒数
+    if t < 0.06:
+        err('地面加速度过大：到全速仅 %.3f 秒，球会「一按就粘在地上」'
+            '（建议 0.08~0.2 秒；accel 应约为 moveSpeed 的 5~12 倍）' % t)
+    elif t > 0.35:
+        warn('地面加速度偏小：到全速需 %.2f 秒，手感会「拖」' % t)
+    else:
+        ok('地面加速度合理：到全速 %.2f 秒（%.0f 倍速度）' % (t, acc / sp))
+
+if acc and dec:
+    r = abs(acc - dec) / max(acc, dec)
+    if r > 0.5:
+        warn('加速(%.0f)与减速(%.0f)差距过大，松开会有明显滑行' % (acc, dec))
+
+if dash and acc and sp:
+    # 三者应大致同比例 —— 用比值的比值来判定
+    bad = []
+    if abs(dash / sp - 0.84) > 0.35:
+        bad.append('dashImpulse/速度 = %.2f（基准 0.84）' % (dash / sp))
+    if abs(acc / sp - 10) > 6:
+        bad.append('groundAccel/速度 = %.1f（基准 10）' % (acc / sp))
+    if bad:
+        warn('速度类参数未同比例下调：%s' % '；'.join(bad))
+    else:
+        ok('速度类参数同比例（冲刺/加速度与速度的比例保持在基准附近）')
+
 # ---------- 汇总 ----------
 print()
 print('=' * 60)

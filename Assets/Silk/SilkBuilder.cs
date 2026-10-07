@@ -4478,12 +4478,16 @@ public class SilkParkourController : MonoBehaviour
     public LayerMask groundMask = ~0;
 
     [Tooltip("地面加速度（格/秒²）。**约为 moveSpeed 的 10 倍**"
-        + "（即约 0.14 秒到全速），手感干脆不拖沓。"
-        + "每次改moveSpeed 都要同步按比例调整本值")]
-    public float groundAccel = 500f;
+        + "（即约 0.10 秒到全速），手感干脆不拖沓。\n"
+        + "★ 与 moveSpeed 同比例下调（50→25 时 500→250）：\n"
+        + "   若不同步降，速度减半后到全速只需 0.05 秒，\n"
+        + "   球会「一按就粘在地上」，失去加速的推力感。\n"
+        + "每次改 moveSpeed 都要按比例同步调整本值")]
+    public float groundAccel = 250f;
 
-    [Tooltip("地面减速度（格/秒²）。略低于加速度，松开后有短暂余韵")]
-    public float groundDecel = 420f;
+    [Tooltip("地面减速度（格/秒²）。略低于加速度，松开后有短暂余韵。"
+        + "同样需与 moveSpeed 保持约 8.4 : 10 的比例")]
+    public float groundDecel = 210f;
 
     [Tooltip("按住左 Shift 的速度倍率（加速跑）。\n"
         + "★ 与冲刺共用左 Shift，这是**有意为之**：\n"
@@ -4612,8 +4616,12 @@ public class SilkParkourController : MonoBehaviour
 
     [Header("冲刺")]
     [Tooltip("冲刺的瞬时速度增量（格/秒）。**叠加**在当前速度上，不是设为固定值 —— "
-           + "覆盖速度会破坏「动量是核心资产」这条铁律")]
-    public float dashImpulse = 42f;
+        + "覆盖速度会破坏「动量是核心资产」这条铁律。\n"
+        + "★ 与 moveSpeed 同比例下调（50→25 时42→21）：\n"
+        + "   冲刺是**相对增幅**，若只降moveSpeed 不降它，\n"
+        + "   增幅会从 1.84 倍变成 2.68 倍 —— 冲刺变得过强，\n"
+        + "   空中连按两次就能飞出关卡。")]
+    public float dashImpulse = 21f;
 
     [Tooltip("空中冲刺额外附加的上升速度（格/秒）。"
         + "让冲刺能接续跳跃，做出「跳→冲刺→拉高→再摆」的节奏。\n"
@@ -4738,13 +4746,14 @@ public class SilkParkourController : MonoBehaviour
     }
 
     [Header("自由移动")]
-    [Tooltip("WASD 移动速度（格/秒）。"
-        + "用户反馈「有点快」-> 40 降到 **50**（注：用户要求 50，"
-        + "即在此基础上小幅下调后的目标值）。"
-        + "历程：35 → 450(错误) → 40 → 50。"
-        + "450 格/秒 ≈ 900 km/h 比跑车快 10 倍，那是错的；"
-        + "现实人类跑动约 3~12 格/秒，取 50 属于偏快的冲刺手感。")]
-    public float moveSpeed = 50f;
+    [Tooltip("WASD 移动速度（格/秒）。\n"
+        + "历程：35 → 450（错误）→ 40 → 50 → **25**。\n"
+        + "· 450 格/秒 ≈ 1620 km/h，比跑车快 10 倍，是错的\n"
+        + "· 用户反馈「有点快」-> 50 砍半到 25\n"
+        + "· 25×3.6 = 90 km/h，仍属游戏化跑酷的快档位\n"
+        + "★ 联动参数：dashImpulse / groundAccel / groundDecel "
+        + "都按同比例下调，否则相对强度会失衡（见各自注释）。")]
+    public float moveSpeed = 25f;
 
     /* ---------- 挂荡：球跟随丝线末端 ---------- */
 
