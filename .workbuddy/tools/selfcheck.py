@@ -70,13 +70,54 @@ for name, o, c in [('braces', '{', '}'), ('parens', '(', ')'), ('brackets', '[',
 if not errors:
     ok('括号配平 ({} %d, () %d, [] %d)' % (t.count('{'), t.count('('), t.count('[')))
 
-# ---------- 2. stage 文件括号 ----------
-ts = re.sub(r'//[^\n]*', '', stage)
-ts = re.sub(r'/\*.*?\*/', '', ts, flags=re.S)
-ts = re.sub(r'"(?:\\.|[^"\\])*"', '""', ts)
-for name, o, c in [('braces', '{', '}'), ('parens', '(', ')')]:
-    if ts.count(o) != ts.count(c):
-        err('SilkParkourStage 括号不配平 %s: %d vs %d' % (name, ts.count(o), ts.count(c)))
+# ---------- 2. ★ 所有 .cs 文件的注释与括号配平 ----------
+# 【为什么要覆盖全部文件】
+# 原先只检查 SilkParkourStage.cs，于是 SilkParkourDesign.cs 里
+# 一个未闭合的 `/*`（插入大段注释时漏了结尾的 `*/`）
+# 完全没被拦住 —— 要等编译报 CS1035 才发现。
+# 教训：新增/修改 .cs 文件后，这类结构错误必须自动检查，不能指望肉眼。
+for _f in SILK_ALL_FILES:
+    if _f == SILK:
+        continue          # SilkBuilder.cs 已在第 1 项查过
+    if not os.path.exists(_f):
+        continue
+    _raw = open(_f, encoding='utf-8').read()
+    _base = os.path.basename(_f)
+
+    # 2a. 注释必须成对（未闭合的 /* 会导致 CS1035）
+    #    ★ 必须先剥掉 `///` 文档注释再统计 —— 否则
+    #    `/// <summary>xxx</summary>` 里的 `*/` 会被误判成「多余的」。
+    _nodoc = re.sub(r'^\s*///.*$', '', _raw, flags=re.M)
+    _no = len(re.findall(r'/\*', _nodoc))
+    _nc = len(re.findall(r'\*/', _nodoc))
+    if _no != _nc:
+        _stack = []
+        for _m in re.finditer(r'/\*|\*/', _nodoc):
+            if _m.group(0) == '/*':
+                _stack.append(_nodoc[:_m.start()].count('\n') + 1)
+            elif _stack:
+                _stack.pop()
+            else:
+                err('%s: 多余的 */ 在行 %d'
+                    % (_base, _nodoc[:_m.start()].count('\n') + 1))
+        for _ln in _stack:
+            err('%s:%d 未闭合的 /* —— 会报 CS1035'
+                '（插入大段注释时容易漏掉结尾的 */）' % (_base, _ln))
+        continue          # 注释坏了，括号计数没意义
+
+    # 2b. 括号配平
+    _t = re.sub(r'//[^\n]*', '', _raw)
+    _t = re.sub(r'/\*.*?\*/', '', _t, flags=re.S)
+    _t = re.sub(r'@"(?:[^"]|"")*"', '""', _t, flags=re.S)
+    _t = re.sub(r'"(?:\\.|[^"\\])*"', '""', _t)
+    _t = re.sub(r"'(?:\\.|[^'\\])*'", "''", _t)
+    for _name, _o, _c in [('braces', '{', '}'), ('parens', '(', ')'),
+                          ('brackets', '[', ']')]:
+        if _t.count(_o) != _t.count(_c):
+            err('%s 括号不配平 %s: %d vs %d'
+                % (_base, _name, _t.count(_o), _t.count(_c)))
+
+ok('全部 %d 个 .cs 文件的注释与括号均配平' % len(SILK_ALL_FILES))
 
 # ---------- 3. class 清单 ----------
 classes = re.findall(r'\npublic (?:static )?(?:class|interface) (\w+)', s)
