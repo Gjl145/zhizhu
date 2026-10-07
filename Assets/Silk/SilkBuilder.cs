@@ -2365,6 +2365,71 @@ public class SilkChain : MonoBehaviour
         velocities[last] += impulse;
     }
 
+    /// <summary>
+    /// 把末端节点**强制移动**到指定世界坐标，并同步速度。
+    ///
+    /// 【为什么需要 —— 墙体碰撞的约束一致性】
+    /// 玩家（球）在摆荡中的位置由本约束链解出，外部不能随意改写。
+    /// 但房屋场景需要球「被墙挡住」，于是出现矛盾：
+    ///   · 直接改球的位置 -> 球与末端分离 ->视觉上「线断开了」
+    ///   · 且下一帧约束会把球拉回墙里 -> 反复抖动
+    ///
+    /// 正确做法是把修正**同步回末端**，让三者始终一致：
+    ///   球位置 == 末端位置 == 约束解出的位置
+    /// 这样墙挡的是「整条链的末端」，而不是「球这个独立物体」。
+    ///
+    /// 【速度也要同步】
+    /// 本项目用**显式速度积分**（velocities[i] += a·dt，位置 += v·dt），
+    /// 不是 Verlet 的「位置差反推速度」。
+    /// 所以只改位置而不改速度的话，约束求解器下一帧会用旧速度
+    /// 把节点拉回墙里 —— 等于没修。
+    ///
+    /// 【被Drive 时不处理】
+    /// endDriven 时末端位置由 endTarget 决定，
+    /// 改这里会被下一帧覆盖，且语义上不该由本方法决定。
+    /// </summary>
+    public void SetEndPosition(Vector3 worldPos)
+    {
+        if (nodes.Count < 2) return;
+        if (endDriven && endTarget != null) return;
+
+        int last = nodes.Count - 1;
+        AnchorPoint endNode = nodes[last];
+        if (endNode == null) return;
+
+        float dt = Mathf.Max(Time.deltaTime, 0.0001f);
+
+        /* 本项目用**显式速度积分**（velocities[i] += a·dt，位置 += v·dt），
+         * 不是 Verlet 的「位置差反推速度」。
+         * 所以只改位置而不改速度的话，约束求解器下一帧会用旧速度
+         * 把节点拉回墙里 —— 等于没修。
+         *
+         * 速度 = (新位置 − 旧位置) / dt —— 这就是显式积分的逆运算。*/
+        Vector3 impliedVel = (worldPos - endNode.WorldPosition) / dt;
+
+        // ★ 先限速再赋值 —— 撞墙时 impliedVel 可能与原速度反向且量级相当，
+        //   直接赋值会让末端速度瞬间翻转，下一帧被约束甩回墙里，
+        //   表现为「贴墙抖动」。
+        //   限速的物理含义：单帧速度变化不超过摆荡的典型速度尺度。
+        float maxDelta = maxEndSpeedClamp * dt * 60f;
+        Vector3 prevVel = velocities[last];
+        Vector3 newVel = impliedVel - prevVel;
+
+        if (newVel.magnitude > maxDelta)
+            newVel = newVel.normalized * maxDelta;
+
+        endNode.transform.position = worldPos;
+        velocities[last] = prevVel + newVel;
+    }
+
+    [Tooltip("末端单帧速度变化上限（格/秒）。\n"
+        + "★ 撞墙时外部会把位置推到墙外，由此反推的速度可能与原速度反向，\n"
+        + "  直接赋值会让末端速度瞬间翻转、下一帧被约束甩回墙里 -> 贴墙抖动。\n"
+        + "  按「单帧（1/60 秒）最多改变这么多格/秒」限速，\n"
+        + "  120 格/秒 意味着每帧最多改 2 格 —— 足以脱离墙面，又不会反弹。\n"
+        + "  设 0 = 不限速（会抖动）")]
+    public float maxEndSpeedClamp = 120f;
+
     /* ============================================================
      *  入摆速度混合 —— Insomniac GDC 2019 P76-P80
      * ============================================================*/
@@ -3829,6 +3894,8 @@ public class SimpleOrbitCamera : MonoBehaviour
             yaw += signX * Input.GetAxis("Mouse X") * rotateSpeed;
             pitch += signY * Input.GetAxis("Mouse Y") * rotateSpeed;
             pitch = Mathf.Clamp(pitch, -85f, 85f);
+            // ★ 同样要归一化 yaw，否则 FreeFly 转久了也会精度耗尽
+            yaw = NormalizeAngle(yaw);
             ApplyRotation();
         }
 
@@ -3944,7 +4011,34 @@ public class SimpleOrbitCamera : MonoBehaviour
         yaw += signX * mx * rate;
         pitch = Mathf.Clamp(pitch + signY * my * rate, pitchMin, pitchMax);
 
+        /* ★ yaw 必须归一化到 (-180, 180]（2026-10-07 补）
+         *
+         * pitch 有 clamp，yaw 一直没有 —— 它可以无限累积。
+         * 后果不是「转错方向」，而是**float 精度耗尽**：
+         *   鼠标转200 圈 -> yaw = 72000 度
+         *   float 有效精度约 7 位十进制 -> 72000 度时小数位只剩 2 位
+         *   -> Mathf.Atan2/cos/sin 的输入剧烈跳变 -> 视角开始顿挫、抖动
+         *
+         * 【为什么不能简单 `yaw %= 360`】
+         * 取模会在 ±180 处跳变（179 -> -179），
+         * 而 LookDir 由 cos/sin 算出，**视觉上完全连续**，
+         * 但 ResetOrientation 用 Atan2 反解出的值会突然变号——
+         * 若那一刻恰好调用它，pitch 的基准轴就会漂。
+         * 用「加减 360 直到落在区间内」则不会产生这种跳变。
+         */
+        yaw = NormalizeAngle(yaw);
+
         ApplyRotation();
+    }
+
+    /// <summary>把角度归一化到 (-180, 180]，保持视觉连续。
+    /// 用加减法而非 %=360 —— 取模会在边界产生数值跳变
+    /// （179 度一步跳到 -179 度），对Atan2 反解的pitch 基准有干扰。</summary>
+    static float NormalizeAngle(float deg)
+    {
+        while (deg > 180f) deg -= 360f;
+        while (deg <= -180f) deg += 360f;
+        return deg;
     }
 
     [Tooltip("Parkour 模式下锁定光标，让鼠标移动直接控制视角（第一人称手感）")]
@@ -4027,37 +4121,114 @@ public class SimpleOrbitCamera : MonoBehaviour
     /// </summary>
     public void OrbitAround(Vector3 targetPos, float distance, float height)
     {
-        Vector3 focus = targetPos + Vector3.forward * height;
-
-        /* 用 LookDir（由 yaw/pitch 现算）而不是 transform.forward。
+        /* ★★★ 这里曾必然穿墙，两个独立缺陷（2026-10-07定位）★★★ *
          *
-         * 【为什么】transform.forward 依赖 ApplyRotation 已执行，
-         * 而本组件 Update 与 ParkourController.LateUpdate 的顺序不保证
-         * （Unity 不保证不同组件的 Update 先后）。若LateUpdate 先跑，
-         * 读到的就是**上一帧**的朝向 -> 视角更新有一帧延迟，
-         * 快速转视角时会有明显的「拖影感」。
-         * LookDir（含 pitch）直接由 yaw/pitch 计算，与执行顺序无关。*/
+         * 【缺陷1：SphereCast 起点可能埋进几何体 —— 探测直接失效】
+         *   原实现：`SphereCast(focus, probe, dir, out hit, distance)`。
+         *   focus =球心 + 抬高(camHeight)。在住宅里 camHeight=10 格，
+         *   而房间净高只有 13 格 —— 球直径已占9 格，
+         *   focus 抬高 10 格后距楼板仅 3 格。
+         *   此时若focus 恰好贴近或已埋入楼板，
+         *   **Unity 的 SphereCast 对「起点已在碰撞体内」会返回
+         *   distance=0 或直接不命中**（扫掠从内部开始无法确定出口）。
+         *   -> back 保持原值 20 格 -> 相机停在墙/楼板里，**画面被糊住**。
+         *
+         *   修法：先用 OverlapSphere 探测 focus 自身是否已在几何体内；
+         *   若在，则先沿「最近出口」把相机方向修正，再做扫掠。
+         *
+         * 【缺陷2：相机参数与房屋尺度不匹配】
+         *   实算：camDistance=20 但房间半宽只有 11.25 格
+         *         -> 即使探测正常，相机也想退到墙外 8.8 格。
+         *   SphereCast 会把它拉回来，但拉回来的距离取决于球半径，
+         *   不受控，且必然贴脸。
+         *   修法：新增 `orbitMaxDistance` 硬上限（室内场景必须调小），
+         *   并在房屋关卡里按房间尺度设置。
+         */
+        Vector3 focus = targetPos + Vector3.forward * height;
         Vector3 lookDir = LookDir;
 
         // 反向偏移：相机在焦点后方 = -lookDir * distance
         Vector3 back = -lookDir * distance;
 
-        // 防止穿进场景：从焦点往相机方向探，撞到就贴到命中点前
+        /* 步骤 1：修正「起点已在几何体内」的情形。
+         * OverlapSphere 能可靠回答「焦点处有没有东西」——
+         * 这正是 SphereCast 起点重叠时做不到的。 */
+        Collider[] overlaps = Physics.OverlapSphere(
+            focus, orbitProbeRadius, orbitMask, QueryTriggerInteraction.Ignore);
+
+        if (overlaps != null && overlaps.Length > 0)
+        {
+            /* 找出「最近出口」：把球沿碰撞体法线推出，
+             * 而不是简单地不让动——否则相机会被永久卡死。
+             *
+             * 做法：逐个算「球心到该碰撞体最近点的方向」，
+             * 取需要推出距离最大的那个（最先脱离的那个）。*/
+            Vector3 bestPush = Vector3.zero;
+            float bestDepth = 0f;
+
+            for (int i = 0; i < overlaps.Length; i++)
+            {
+                Vector3 closest = overlaps[i].ClosestPoint(focus);
+                Vector3 away = focus - closest;
+                float dist = away.magnitude;
+
+                // 球心几乎在碰撞体内部（dist≈0）时ClosestPoint 退化，
+                // 此时改用「碰撞体中心 -> 球心」方向，反正是要把球挤出去。
+                if (dist < 0.001f)
+                {
+                    away = focus - overlaps[i].bounds.center;
+                    dist = away.magnitude;
+                    if (dist < 0.001f) continue;
+                }
+
+                float depth = orbitProbeRadius - dist;
+                if (depth > bestDepth)
+                {
+                    bestDepth = depth;
+                    bestPush = away / dist * (depth + 0.05f);
+                }
+            }
+
+            // ★ 重点：把 focus 本身推出来，而不是推相机。
+            //   相机位置 = focus + back，focus 埋墙时无论 back 多短都没用。
+            focus += bestPush;
+
+            // 同时限制相机不要退到被挤开的墙之外
+            back = -lookDir * distance;
+        }
+
+        // 步骤 2：常规 SphereCast 扫掠（起点已在空气中，探测才可靠）
+        float castDist = Mathf.Min(distance, orbitMaxDistance);
         RaycastHit hit;
         if (Physics.SphereCast(focus, orbitProbeRadius, back.normalized,
-                               out hit, distance, orbitMask,
+                               out hit, castDist, orbitMask,
                                QueryTriggerInteraction.Ignore))
         {
-            back = back.normalized * Mathf.Max(hit.distance, 0.5f);
+            // 留一点余量，避免相机正好贴在墙面上（z-fighting + 看起来仍像贴墙）
+            float stopAt = hit.distance - 0.15f;
+            back = back.normalized * Mathf.Clamp(stopAt, orbitMinDistance, castDist);
         }
 
         transform.position = focus + back;
     }
 
-    [Tooltip("环绕时的相机探测球半径（避免相机穿进墙壁）")]
-    public float orbitProbeRadius = 2f;
+    [Tooltip("环绕时的相机探测球半径（避免相机穿进墙壁）。\n"
+        + "★ 应略大于墙厚的一半（墙厚 1.2 格 -> 0.6），\n"
+        + "  取 1.0~2.0 都能挡住，但过大会让相机在窄房间贴脸")]
+    public float orbitProbeRadius = 1.2f;
 
-    [Tooltip("相机避障检测层")]
+    [Tooltip("相机退让的**上限**（格）。★ 住宅内必须调小：\n"
+        + "  房间半宽只有 11.25 格，而旧默认是 20 -> 相机必然退到墙外。\n"
+        + "  球直径 9 格，取 7~9 比较合适（能看到全身又不穿墙）")]
+    public float orbitMaxDistance = 8f;
+
+    [Tooltip("相机退让的**下限**（格）。防止贴墙时被挤到球脸上——\n"
+        + "  近裁剪面 0.3，贴到 1 格内会看到球的内表面")]
+    public float orbitMinDistance = 1.5f;
+
+    [Tooltip("相机避障检测层。\n"
+        + "★ 注意：丝线内部节点的 Collider 已被 Destroy（见 SilkChain.Build），\n"
+        +"  所以~0 是安全的；若将来新增带 Collider 的装饰物，需自行排除")]
     public LayerMask orbitMask = ~0;
 }
 /* ===================== 跑酷挂点控制器 =====================
@@ -4800,6 +4971,8 @@ public class SilkParkourController : MonoBehaviour
                 // ResolveGround 只在下落时吸附，出生在空中（vertVel=0）
                 // 不会吸附，球会「悬空掉一截」才落地。
                 startPosition = SilkSwingTestStage.StartPosition;
+                ApplyCameraForStage(OpenStageCameraDistance,
+                                    OpenStageCameraHeight);
                 break;
 
             case SilkBuilder.ParkourStageKind.SwingUnit:
@@ -4807,6 +4980,8 @@ public class SilkParkourController : MonoBehaviour
                 {
                     SilkSwingUnitStage.Create(h);
                     startPosition = SilkSwingUnitStage.StartPosition;
+                    ApplyCameraForStage(OpenStageCameraDistance,
+                                        OpenStageCameraHeight);
                 }
                 catch (System.Exception e)
                 {
@@ -4822,6 +4997,18 @@ public class SilkParkourController : MonoBehaviour
                 {
                     HouseBlockout.Create(h);
                     startPosition = HouseBlockout.StartPosition;
+
+                    /* ★ 相机尺度必须随关卡同步（室内穿墙的第二个原因）
+                     *
+                     * 住宅房间半宽仅 11.25 格、净高仅 13 格，
+                     * 而相机默认值 20 / 10 是给空旷场地定的：
+                     *   · distance 20 -> 相机想退到墙外 8.8 格
+                     *   · height   10 -> 焦点距楼板只剩 3 格，
+                     *     SphereCast起点埋墙 -> 避障完全失效
+                     * 故这里显式套用 HouseBlockout 给出的室内尺度。*/
+                    ApplyCameraForStage(
+                        HouseBlockout.CameraDistance,
+                        HouseBlockout.CameraHeight);
                 }
                 catch (System.Exception e)
                 {
@@ -4835,9 +5022,20 @@ public class SilkParkourController : MonoBehaviour
             default:  // Basic
                 SilkParkourStage.Create(h);
                 startPosition = new Vector3(-30f, 0f, -29.5f);   // 基础区平地顶面-34 + 半径 4.5
+                ApplyCameraForStage(OpenStageCameraDistance,
+                                    OpenStageCameraHeight);
                 break;
         }
     }
+
+    /// <summary>空旷场地关卡的相机退让距离（格）。
+    /// 这些关卡无近墙，用 20 能看到更远的场景。
+    /// ★ 与 HouseBlockout.CameraDistance（7）区分 ——
+    ///   切关卡时必须换回来，否则在空旷关卡里相机贴脸。</summary>
+    public const float OpenStageCameraDistance = 20f;
+
+    /// <summary>空旷场地关卡的焦点抬高（格）。见OpenStageCameraDistance。</summary>
+    public const float OpenStageCameraHeight = 10f;
 
     /// <summary>测试关卡用的立方体半高。从 SilkBuilder 拿，保持与网格一致。</summary>
     float StageHalfSize()
@@ -5000,14 +5198,36 @@ public class SilkParkourController : MonoBehaviour
      *   地面吸附高度、场景边界限制 —— 换载具后这项影响最大。
      * ⚠ 高速时务必检查 ResolveGround 的 probe：
      *   单帧位移（moveSpeed/60）不能超过探测范围，
-     *   现有实现已用 max(容差+半径, 单帧位移×1.5+半径)兜底。*/
-    [Tooltip("相机水平跟随距离（格）。球半径从 6 缩到 4.5 后，"
-           + "若不调近则球在画面里显得比原来小 —— 30 -> 24 正好抵消缩小量。"
-           + "换载具时按「载具尺寸 × 2.5~4」重设（见上方速查表）")]
-    public float camDistance = 20f;
+     *   现有实现已用 max(容差+半径, 单帧位移×1.5+半径)兜底。
+     *
+     * ★★ 室内场景必须改这两个值（2026-10-07 实算）：
+     *   旧默认是给「空旷场地」定的（distance 20 / height 10），
+     *   放进住宅就必然穿墙 ——
+     *     · 房间半宽仅 11.25 格，而 camDistance 20 -> 想退到墙外 8.8 格
+     *     · 净高仅 13 格，而 camHeight 10 -> 焦点距楼板只剩 3 格
+     *       （球直径已占 9 格）-> SphereCast 起点埋墙，探测直接失效
+     *   故住宅关卡统一走 HouseBlockout 的相机参数，切换关卡时自动同步。*/
+    [Tooltip("相机水平跟随距离（格）。\n"
+        + "★ 已从 20 降到 7：住宅房间半宽只有 11.25 格，\n"
+        + "  20 会让相机退到墙外 8.8 格（必然穿墙）。\n"
+        + "换载具时按「载具尺寸 × 2.5~4」重设（见上方速查表）")]
+    public float camDistance = 7f;
 
-    [Tooltip("相机高于球的高度。必须 < 20（球到顶棚的距离），否则相机穿出顶棚")]
-    public float camHeight = 10f;
+    [Tooltip("**焦点**高于球心的距离（格）—— 不是相机本身的高度。\n"
+        + "★ 已从 10 降到 1.5：住宅净高仅 13 格而球直径已占 9 格，\n"
+        + "  抬高 10 格会让焦点距楼板只剩 3 格，SphereCast 起点埋墙而失效。\n"
+        + "相机实际高度由 pitch 决定，本值只抬「环绕中心」")]
+    public float camHeight = 1.5f;
+
+    /// <summary>把相机参数切换为关卡自带的尺度。
+    /// 室内关卡（如 HouseBlockout）必须调用，
+    /// 否则会沿用「空旷场地」的默认值而穿墙。</summary>
+    public void ApplyCameraForStage(float distance, float height)
+    {
+        camDistance = distance;
+        camHeight = height;
+        if (cam != null) cam.orbitMaxDistance = distance;
+    }
 
     /* ---------- 脱手飞行：纯重力 + 阻尼 + 撞墙反弹 ---------- */
     void UpdateFlight(float dt)
@@ -5707,9 +5927,45 @@ public class SilkParkourController : MonoBehaviour
          * 玩家能看到「按了键身体就被拉过去」，反馈才跟得上手。
          * 物理链（SilkChain）是在它自己的 Update 里解的，
          * 故这里读到的是上一帧解出的末端位置 ——
-         * 相差一帧（16ms），肉眼无法察觉。*/
+         * 相差一帧（16ms），肉眼无法察觉。
+         *
+         * ★★ 墙体解算（2026-10-07 补）
+         * 这里原本是**裸赋值**，完全绕过 SolveWallCollision ——
+         * 而球在摆荡中的速度可以到几十格/秒，是全局最快的状态，
+         * 于是摆荡时会直接穿墙（且比走路时更明显，因为位移更大）。
+         *
+         * 【为什么不能简单地"阻挡"】
+         * 球的位置是**约束求解的结果**，不是可以随意改写的。
+         * 若把球推出去，丝线末端与球就会分离 -> 视觉上「线断开了」，
+         * 而且下一帧约束又会把球拉回墙里 -> 反复抖动。
+         *
+         * 【正确做法：把墙当成约束，让求解器自己绕开】
+         * 移动球心去解约束是错的（会拉断线）；
+         * 正确做法是让**球心沿墙滑动** ——
+         * 只消除「压进墙里」的法向分量，保留切向，
+         * 同时把这个修正量反馈给末端，让约束与实际位置一致。
+         */
         if (grabbed.chain != null)
-            transform.position = grabbed.chain.GetEndPosition();
+        {
+            Vector3 prevPos = transform.position;
+            Vector3 desired = grabbed.chain.GetEndPosition();
+
+            /* 摆荡中的解算与走路的差别：
+             * 速度取「本帧实际位移」而不是某个速度字段
+             *（摆荡速度由约束求解决定，没有对应的速度变量）。
+             * 用速度字段会漏掉收绳/放绳带来的径向变化。*/
+            Vector3 swingVel = (desired - prevPos) / Mathf.Max(Time.deltaTime, 0.0001f);
+
+            Vector3 resolved = SolveWallCollision(prevPos, desired, ref swingVel);
+
+            transform.position = resolved;
+
+            /* 把修正量同步给末端，保持「球 = 末端」这个不变量。
+             * 不做这一步的话，墙里球与末端会分离，线看起来是断的。*/
+            Vector3 correction = resolved - desired;
+            if (correction.sqrMagnitude > 0.0001f)
+                grabbed.chain.SetEndPosition(resolved);
+        }
 
         bodyVelocity = endVel;
     }

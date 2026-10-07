@@ -455,10 +455,58 @@ if 'AttachSelf' not in s:
     err('缺少 AttachSelf —— 钩爪不能用它把末端钉死（否则摆荡不成立）')
 else:
     ok_msg.append('AttachSelf 存在')
-if re.search(r'transform\.position\s*=\s*grabbed\.chain\.GetEndPosition\(\)', s):
+# 这条检查的语义是「球的位置必须来自末端」，
+# 而不是「必须写成裸赋值 transform.position = grabbed.chain.GetEndPosition()」。
+#
+# 【为什么不能只认裸赋值】2026-10-07 给摆荡补墙体解算时，
+# 裸赋值改成了：
+#     Vector3 desired = grabbed.chain.GetEndPosition();
+#     Vector3 resolved = SolveWallCollision(prevPos, desired, ref swingVel);
+#     transform.position = resolved;
+# 语义完全正确（球仍跟随末端，只是先过一道墙），
+# 但旧检查只匹配裸赋值 -> 误报「球不再跟随末端」。
+#
+# -> 放宽为「UpdateSwing 里必须出现 GetEndPosition() 的结果被赋给 transform.position」。
+#    变异测试（把 transform.position = resolved 改掉）仍能抓到。
+if re.search(r'transform\.position\s*=\s*resolved', s) or \
+   re.search(r'transform\.position\s*=\s*grabbed\.chain\.GetEndPosition\(\)', s):
     ok_msg.append('球跟随末端位置')
 else:
     err('UpdateSwing 未让球跟随丝线末端 —— 会出现「球与线脱钩、看起来断开」')
+
+# 13a. ★ 摆荡也必须过墙体解算，且修正量必须回写末端
+#【为什么必须回写】球的位置若被墙推开而不通知末端，
+#   下一帧约束会把它拉回墙里 -> 贴墙抖动；
+#   而不通知的话，玩家看到的球与丝线末端是分离的（视觉上「线断了」）。
+# 【本项目的教训】只检查「做没做」不够，要检查「做的是不是对的那个」
+#   —— 历史上 13b 就是因为只查 AttachSelf 而漏掉「建链顺序反了」。
+if 'GetEndPosition' in s:
+    _sw = s.find('void UpdateSwing(')
+    if _sw > 0:
+        _ej = s.find('{', _sw)
+        _ed = 0
+        _ek = _ej
+        while _ek < len(s):
+            if s[_ek] == '{':
+                _ed += 1
+            elif s[_ek] == '}':
+                _ed -= 1
+                if _ed == 0:
+                    break
+            _ek += 1
+        _swb = re.sub(r'//[^\n]*', '', s[_ej:_ek])
+        _swb = re.sub(r'/\*.*?\*/', '', _swb, flags=re.S)
+        if 'SolveWallCollision' not in _swb:
+            err('UpdateSwing 没有过SolveWallCollision —— 摆荡速度可达数十格/秒，'
+                '是全局最快的状态，不挡墙必然穿墙')
+        else:
+            ok_msg.append('摆荡也过墙体解算')
+        if 'SetEndPosition' not in _swb:
+            err('UpdateSwing 未把修正量回写末端（SetEndPosition）—— '
+                '球被墙推开而末端不知情，下一帧约束会拉回墙里造成抖动，'
+                '且视觉上球与丝线末端分离')
+        else:
+            ok_msg.append('末端位置回写')
 if 'AddEndVelocity' in s:
     ok_msg.append('泵力施加到末端')
 else:
@@ -926,6 +974,135 @@ if _r:
 else:
     ok('视觉/碰撞半径已分离，碰撞半径被墙体 SphereCast 解算消费'
        '（%d 处调用）' % _nsolve)
+
+# ---------- 20. 相机穿墙防护 ----------
+# 【背景】用户报告「相机穿墙」。实算发现两个独立原因：
+#   ① SphereCast 起点（focus = 球心 + camHeight）可能已埋进楼板，
+#      而 Unity 对「起点已在碰撞体内」的 SphereCast 返回 distance=0
+#      或直接不命中 -> 避障完全失效（这是SphereCast 的固有陷阱，
+#      不是代码写错，是起点位置的问题）。
+#   ② 相机参数与房屋尺度不匹配：房间半宽 11.25 格 vs camDistance 20。
+#本项把这两条固化为检查。
+_cam = []
+
+# 20a. 必须有「起点重叠」的预处理 —— OverlapSphere
+_orbit = s.find('public void OrbitAround(')
+if _orbit < 0:
+    _cam.append('找不到 OrbitAround —— 相机无避障')
+else:
+    # 按大括号配平截取方法体（不能用 '\n    }'，会撞上 if 的同缩进 }）
+    _j = s.find('{', _orbit)
+    _d = 0
+    _k = _j
+    while _k < len(s):
+        if s[_k] == '{':
+            _d += 1
+        elif s[_k] == '}':
+            _d -= 1
+            if _d == 0:
+                break
+        _k += 1
+    _body = s[_j:_k]
+    # 剥注释（否则注释里的关键词会掩盖缺失 —— 已踩过这个坑）
+    _body = re.sub(r'//[^\n]*', '', _body)
+    _body = re.sub(r'/\*.*?\*/', '', _body, flags=re.S)
+
+    if 'OverlapSphere' not in _body:
+        _cam.append('OrbitAround 内没有 OverlapSphere 预处理 —— '
+                    'SphereCast 起点埋进墙里时避障会完全失效')
+    if 'SphereCast' not in _body:
+        _cam.append('OrbitAround 内没有 SphereCast —— 无墙时相机不避障')
+    # 退让上限：没有上限则 camDistance 大于房间半宽时必然穿墙
+    if 'orbitMaxDistance' not in _body:
+        _cam.append('OrbitAround 内没有用 orbitMaxDistance 限制退让 —— '
+                    'camDistance > 房间半宽时相机必然退到墙外')
+
+# 20b. orbitMaxDistance / orbitMinDistance 字段必须存在
+if not re.search(r'public float orbitMaxDistance\s*=\s*[\d.]+f', s):
+    _cam.append('缺少 orbitMaxDistance 字段（相机退让上限）')
+if not re.search(r'public float orbitMinDistance\s*=\s*[\d.]+f', s):
+    _cam.append('缺少 orbitMinDistance 字段（相机退让下限，防贴脸）')
+
+# 20c. ★ 相机默认参数必须与「最紧的室内尺度」相容
+#     判据：camDistance 默认值不得大于最小房间半宽。
+_house = open('Assets/Silk/HouseBlockout.cs', encoding='utf-8').read()
+_room = re.search(r'RoomLength\s*=\s*\(float\)\(([\d.]+)\s*\*\s*([\d.]+)\)', _house)
+_camdef = re.search(r'public float camDistance\s*=\s*([\d.]+)f', s)
+if _room and _camdef:
+    # RoomLength = RoomSize * UnitsPerMeter
+    room_len = float(_room.group(1)) * float(_room.group(2))
+    half = room_len / 2.0
+    cd = float(_camdef.group(1))
+    if cd > half:
+        _cam.append('camDistance 默认 %.0f > 房间半宽 %.2f 格 —— '
+                    '相机必然退到墙外（%.1f 格）'
+                    % (cd, half, cd - half))
+
+# 20d. House 关卡必须显式套用自己的相机尺度
+if 'ApplyCameraForStage(' not in s:
+    _cam.append('缺少 ApplyCameraForStage —— 切换关卡时相机尺度不跟随')
+else:
+    if 'HouseBlockout.CameraDistance' not in s:
+        _cam.append('House 关卡未套用 HouseBlockout.CameraDistance —— '
+                    '会沿用空旷场地默认值而穿墙')
+    if 'HouseBlockout.CameraHeight' not in s:
+        _cam.append('House 关卡未套用 HouseBlockout.CameraHeight —— '
+                    '焦点可能埋进楼板导致 SphereCast 失效')
+
+# 20e. 焦点抬高必须小于净高（否则焦点埋进楼板）
+_h2 = re.search(r'MinNetHeight\s*=\s*([\d.]+)f', _house)
+_chdef = re.search(r'public float camHeight\s*=\s*([\d.]+)f', s)
+if _h2 and _chdef:
+    _upm = re.search(r'UnitsPerMeter\s*=\s*([\d.]+)f', _house)
+    if _upm:
+        net = float(_h2.group(1)) * float(_upm.group(1))
+        ch = float(_chdef.group(1))
+        # 还要扣掉球的视觉直径（球已占据的净空）
+        vr = re.search(r'public float visualRadius\s*=\s*([\d.]+)f', s)
+        ball = float(vr.group(1)) * 2 if vr else 0.0
+        if ch > net - ball:
+            _cam.append('camHeight 默认 %.1f 超过「净高 %.1f − 球直径 %.1f = %.1f」'
+                        '—— 焦点会埋进楼板，SphereCast 起点重叠而失效'
+                        % (ch, net, ball, net - ball))
+
+if _cam:
+    for _x in _cam:
+        err(_x)
+else:
+    ok('相机穿墙防护完整（OverlapSphere 预处理 + SphereCast + 退让上下限，'
+       '且默认参数与室内尺度相容）')
+
+# ---------- 21. 视角转动：yaw 必须归一化 ----------
+# 【问题】pitch 有 clamp(pitchMin, pitchMax)，yaw 一直没有。
+#   yaw += mx * rate 可以无限累积 —— 转 200 圈就是 72000 度，
+#   float 有效精度约 7 位十进制，此时小数位只剩 2 位，
+#   cos/sin 的输入剧烈跳变 -> 视角顿挫抖动。
+# 【要点】两处写入点都要修：Parkour 的 HandleLookOnly、FreeFly 的右键拖拽。
+_look = []
+if 'NormalizeAngle' not in s:
+    _look.append('缺少 NormalizeAngle —— yaw 会无限累积，'
+                 '转久了因float 精度耗尽而顿挫')
+else:
+    _n = len(re.findall(r'yaw\s*=\s*NormalizeAngle\(yaw\)', s))
+    # 2 = HandleLookOnly（Parkour 鼠标视角）+ FreeFly 右键拖拽
+    if _n < 2:
+        _look.append('yaw 归一化只有 %d 处调用点（应为 2：'
+                     'Parkour 鼠标视角 + FreeFly 右键拖拽）' % _n)
+
+# 归一化必须用加减法而非 %=360 —— 取模会在 ±180 处数值跳变
+_m = re.search(r'static float NormalizeAngle\(float deg\)\s*\{(.{0,400}?)\n    \}', s, re.S)
+if _m:
+    _body = re.sub(r'//[^\n]*', '', _m.group(1))
+    if '%' in _body:
+        _look.append('NormalizeAngle 用了 %=360 —— 取模会在 ±180 处跳变，'
+                     '干扰 ResetOrientation 用 Atan2 反解的 pitch 基准；'
+                     '应改用加减法')
+
+if _look:
+    for _x in _look:
+        err(_x)
+else:
+    ok('视角转动：yaw 已归一化到 (-180,180]（2 处写入点），不会精度耗尽')
 
 # ---------- 汇总 ----------
 print()
