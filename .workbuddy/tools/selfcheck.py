@@ -9,6 +9,13 @@ import sys
 
 SILK = 'Assets/Silk/SilkBuilder.cs'
 STAGE = 'Assets/Silk/SilkParkourStage.cs'
+# ★ 所有 Assets/Silk/*.cs 都要读 —— 否则新增文件里的类型
+# 会被误报成「找不到定义」（加SilkSwingTestStage.cs 时踩过）。
+import glob
+SILK_ALL_FILES = sorted(glob.glob('Assets/Silk/*.cs'))
+
+# 类型定义的通用匹配（class / interface / enum / struct / static class）
+type_pat_all = (r'\npublic (?:static )?(?:class|interface|enum|struct) (\w+)')
 
 errors = []
 warns = []
@@ -350,6 +357,11 @@ for cls in sorted(stage_types):
 ok('跨文件类型引用：%s 均有调用点' % ', '.join(sorted(stage_types)))
 
 # 反向：SilkBuilder.cs 里用到的外部类型是否都存在
+# ★ 收集**所有** Assets/Silk/*.cs 里的类型定义 ——
+#   否则新增文件（如 SilkSwingTestStage.cs）里的类会被误报为「找不到定义」。
+all_types = set(re.findall(
+    type_pat_all, '\n'.join(open(f, encoding='utf-8').read()
+                              for f in SILK_ALL_FILES)))
 missing = set()
 for m in re.finditer(r'\b(Silk[A-Z]\w*)\s*\.', s):
     nm = m.group(1)

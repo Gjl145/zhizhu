@@ -2252,8 +2252,49 @@ public class SilkBuilder : MonoBehaviour
     public float playerNodeRadius = 1.5f;
 
     [Tooltip("是否生成跑酷测试关卡（4 个基础区段+ 摆荡进阶区，见 SilkParkourStage）。"
-           + "临时功能，删除 SilkParkourStage.cs 后请把这里也移除")]
+        + "临时功能，删除 SilkParkourStage.cs 后请把这里也移除")]
     public bool createTestLevel = true;
+
+    /// <summary>
+    /// 跑酷世界用哪套关卡。用于隔离摆荡问题 ——
+    /// 摆荡测试关卡提供绳长梯度（14/19/24/29/34 格），
+    /// 用来判断「摆荡太慢」是绳长问题还是机制问题。
+    ///
+    /// 改这个值后需**重新切一次模式**（Tab）才会重建关卡。
+    /// </summary>
+    public enum ParkourStageKind
+    {
+        Basic = 0,        // SilkParkourStage：渐进教学的 4 段基础区
+        SwingTest = 1,    // SilkSwingTestStage：5 个绳长梯度的摆荡点
+    }
+
+    [Tooltip("跑酷世界用哪套关卡。\n"
+        + "Basic     = 渐进教学 4 段（平地/高台/宽桥/终点）\n"
+        + "SwingTest = 摆荡测试 5 点（绳长 14~34 格，用于定位摆荡问题）\n"
+        + "★ 改这个值后要按 Tab 重新切一次模式才会重建。")]
+    public ParkourStageKind parkourStage = ParkourStageKind.SwingTest;
+
+    /// <summary>按 <see cref="parkourStage"/> 的选择重建跑酷关卡。</summary>
+    void RebuildParkourStage()
+    {
+        float h = StageHalfSize();
+        // 先清掉另一套，避免两套台子叠在一起
+        SilkParkourStage.Clear();
+        SilkSwingTestStage.Clear();
+
+        if (parkourStage == ParkourStageKind.SwingTest)
+        {
+            SilkSwingTestStage.Create(h);
+            // 两个关卡的起跳台高度不同，起点必须跟着改 ——
+            // ResolveGround 只在下落时吸附，出生在空中会「悬空掉一截」。
+            startPosition = SilkSwingTestStage.StartPosition;
+        }
+        else
+        {
+            SilkParkourStage.Create(h);
+            startPosition = new Vector3(-30f, 0f, -29.5f);
+        }
+    }
 
     /// <summary>第三人称跑酷模式。为 true 时本组件不响应鼠标左键与 R，
     /// 避免与玩家的「发射丝线」「重置」冲突。由控制器在切模式时设置。</summary>
@@ -4261,7 +4302,7 @@ public class SilkParkourController : MonoBehaviour
             lookAlignedOnce = false;   // 新世界需重新对齐一次视角
             FollowCamera();       // 立刻摆相机，当帧就能看到球
             // 测试关卡属于游戏世界，FreeFly 下不该存在
-            if (builder != null && builder.createTestLevel) SilkParkourStage.Create(StageHalfSize());
+            if (builder != null && builder.createTestLevel) RebuildParkourStage();
         }
         else
         {
@@ -4269,6 +4310,7 @@ public class SilkParkourController : MonoBehaviour
              * FreeFly 属于关卡编辑，不该有玩家角色和跑酷台子。*/
             DestroyVisual();
             SilkParkourStage.Clear();
+            SilkSwingTestStage.Clear();
             if (cam != null)
             {
                 cam.transform.position = freeFlyCameraPos;
