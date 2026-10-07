@@ -1911,6 +1911,12 @@ public class SilkChain : MonoBehaviour
             // 每轮都把根节点钉回墙上，防止数值漂移
             nodes[0].transform.position = root.WorldPosition;
             velocities[0] = Vector3.zero;
+
+            /* 官方 P80：「blend the incoming velocity towards the tangent
+             * direction of the swing arc **a little bit each iteration**」
+             * —— 必须放在**约束迭代内部**，让混合与约束交替进行。
+             * 若放在迭代之外，混合只做一次就结束，起不到稳定绳长的作用。*/
+            ApplySwingBlend();
         }
 
         // 3. 末端被驱动时，每帧末尾把它对齐到挂载点，
@@ -2190,6 +2196,84 @@ public class SilkChain : MonoBehaviour
         // 位置 += velocities[i] * dt），不是 Verlet 的位置差。
         velocities[last] += impulse;
     }
+
+    /* ============================================================
+     *  入摆速度混合 —— Insomniac GDC 2019 P76-P80
+     * ============================================================*/
+
+    /// <summary>剩余的混合迭代次数。0 = 不再混合。</summary>
+    int swingBlendIterations = 0;
+
+    /// <summary>
+    /// 开始「入摆速度混合」。
+    ///
+    /// 【问题 —— 官方 P76-P77 原文】
+    ///   "The **incoming velocity is nearly always very different** than
+    ///    the velocity that is **tangent to the swing arc**."
+    ///   "We **don't want to snap the velocity** because that will feel
+    ///    like a sudden change in direction."
+    ///
+    /// 【放任不管的后果 —— 官方 P78-P79 原文】
+    ///   "if we just let the simulation play out ... the velocity running
+    ///    into the center of the swing arc **shortens the line
+    ///    considerably**."
+    ///   "This can result in **losing the swing's dip** as well as causing
+    ///    a **rapid acceleration in angular velocity** that is hard for
+    ///    players to react to."
+    ///
+    /// 【官方解法 —— P80 原文】
+    ///   "we **blend the incoming velocity towards the tangent direction
+    ///    of the swing arc a little bit each iteration**. This helps
+    ///    maintain **healthier line lengths** and improves expected
+    ///    behavior in angular velocity."
+    ///
+    /// ★ 这正是用户反馈「摆到地上、然后莫名断开」的技术根源之一。
+    /// </summary>
+    public void BeginSwingBlend()
+    {
+        swingBlendIterations = swingBlendIterationsCount;
+    }
+
+    /// <summary>
+    /// 每次约束迭代后调用：把末端速度向「摆弧切线方向」拉一点。
+    /// 迭代若干次后自然收敛，绳长不会被入射速度压垮。
+    /// </summary>
+    void ApplySwingBlend()
+    {
+        if (swingBlendIterations <= 0 || nodes.Count < 2) return;
+        swingBlendIterations--;
+
+        int last = nodes.Count - 1;
+        Vector3 anchorPos = nodes[0].WorldPosition;
+
+        // 摆弧切线 = 垂直于「锚点→末端」的方向
+        Vector3 radial = nodes[last].WorldPosition - anchorPos;
+        if (radial.sqrMagnitude < 0.0001f) return;
+        Vector3 tangent = Vector3.Cross(Vector3.forward, radial).normalized;
+        if (tangent.sqrMagnitude < 0.0001f) return;
+
+        Vector3 v = velocities[last];
+        // 沿切线的分量（保留「荡过去」的那部分）
+        float alongTangent = Vector3.Dot(v, tangent);
+
+        // 只把切向部分往切线方向推一点 —— 幅度由 blendFactor 控制
+        float target = alongTangent >= 0f ? 1f : -1f;
+        Vector3 blended = Vector3.Lerp(v, tangent * target * v.magnitude,
+                                       swingBlendFactor);
+        velocities[last] = blended;
+    }
+
+    [Tooltip("入摆速度混合：每次迭代把速度往切线方向拉的比例（0~1）。\n"
+        + "★ 官方 P80：「we blend the incoming velocity towards the tangent\n"
+        + "  direction of the swing arc **a little bit each iteration**」\n"
+        + "「a little bit」= 小幅度。0.3 意味着每次只拉 30%。\n"
+        + "过大（>0.6）会变成「硬拽」，反而失去自然感。")]
+    [Range(0f, 0.8f)] public float swingBlendFactor = 0.3f;
+
+    [Tooltip("入摆速度混合的迭代次数（≈ 会持续多少帧）。\n"
+        + "官方未公开具体值；迭代次数越多，混合越彻底。\n"
+        + "10~20 帧比较自然——足够让绳长稳住，又不会让玩家感到「被拽」。")]
+    [Range(0, 60)] public int swingBlendIterationsCount = 15;
 
     /// <summary>
     /// 对整条链施加一次力（跑酷的施力入口）。
@@ -5506,6 +5590,41 @@ public class SilkParkourController : MonoBehaviour
         Vector3 carry = flatVel + Vector3.forward * vertVel;
         if (carry.sqrMagnitude > 0.0001f && line.chain != null)
             line.chain.AddEndVelocity(carry * swingEntryBoost);
+
+        /* ============================================================
+         *  ★ 入摆速度混合 —— 按 Insomniac GDC 2019 P76-P80
+         * ============================================================
+         *
+         *  官方原文（P76-P77）—— 问题陈述：
+         *    "Our first goal on getting a new line is giving the player
+         *     a good experience of **getting into the swing**. However,
+         *     the initial set up poses an immediate challenge:
+         *     · The **incoming velocity is nearly always very different
+         *       than the velocity that is tangent to the swing arc**"
+         *    "We **don't want to snap the velocity** because that will
+         *     feel like a sudden change in direction"
+         *
+         *  官方原文（P78-P79）—— 放任不管的后果：
+         *    "if we just let the simulation play out, you get something
+         *     that looks like this. Because of our rule that we don't
+         *     allow the line to lengthen again, the velocity running
+         *     into the center of the swing arc **shortens the line
+         *     considerably**."
+         *    "This can result in **losing the swing's dip** as well as
+         *     causing a **rapid acceleration in angular velocity**
+         *     that is hard for players to react to."
+         *
+         *  官方解法（P80）：
+         *    "To improve, we **blend the incoming velocity towards the
+         *     tangent direction of the swing arc a little bit each
+         *     iteration**. This helps maintain healthier line lengths
+         *     and improves expected behavior in angular velocity."
+         *
+         *  ★ 这正是用户反馈「摆到地上、然后莫名断开」的技术根源之一：
+         *    入射速度冲向摆弧中心 -> 绳长大幅缩短 -> 角速度暴涨 ->
+         *    玩家反应不过来，感觉就是「突然被甩下去」。
+         */
+        line.chain.BeginSwingBlend();
 
         if (verboseFireLog)
             Debug.Log("[Fire] 已连接自己 → " + target.position +
