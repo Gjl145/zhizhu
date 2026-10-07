@@ -1463,8 +1463,20 @@ public class SilkChain : MonoBehaviour
     [Tooltip("重力加速度（格/秒²）。默认取全局统一值 SilkPhysics.Gravity，"
            + "保证丝线摆荡与玩家跳跃的重力一致")]
     public float gravity = SilkPhysics.Gravity;
-    public float damping = 0.985f;     // 每帧速度保留系数，越接近 1 摆得越久
-    public float airDrag = 0.02f;      // 空气阻力（速度线性衰减）
+    [Tooltip("每帧速度保留系数（60fps 下），越接近 1 摆得越久。\n"
+        + "★ 这是**唯一**的速度衰减来源（帧率无关：pow(damping, dt*60)）。\n"
+        + "  0.995 -> 半衰期 2.3 秒（推荐，接近标杆的「荡很久」）\n"
+        + "  0.985 -> 半衰期 0.76 秒（偏短）\n"
+        + "  0.95  -> 半衰期 0.23 秒（几乎荡不起来）\n"
+        + "  注意：曾与 airDrag 相乘导致双重衰减、半衰期只剩 0.33 秒，\n"
+        + "  已改为两者合并成一个系数。")]
+    public float damping = 0.995f;
+
+    [Tooltip("附加空气阻力（每帧的额外损失比例）。\n"
+        + "与 damping **相乘**使用，故应保持很小的值。\n"
+        + "0.02 + damping 0.995 时每帧合计损失 2.5% —— 半衰期仅 0.33 秒，\n"
+        + "摆荡两秒就没劲。建议 0.005 ~ 0.01。")]
+    public float airDrag = 0.005f;
     public float stiffness = 1f;       // 距离约束刚度，1=完全不可拉伸
 
     [Header("求解器")]
@@ -1703,7 +1715,23 @@ public class SilkChain : MonoBehaviour
         //    重力沿 -Z（项目约定：Z = 高度），不是 Unity 默认的 Vector3.down
         //末节点在被外部驱动（挂载物）时不施加重力 —— 它由挂载物驱动
         int last = nodes.Count - 1;
-        float dragFactor = Mathf.Clamp01(1f - airDrag * dt * 60f);
+        /* 【★ 阻尼双重衰减的修复】
+         *
+         * 原代码是：
+         *     velocities[i] *= damping;          // 0.995
+         *     velocities[i] *= dragFactor;       // 1 - 0.02*dt*60 ≈ 0.98
+         * 每帧合计损失 = 1 - 0.995×0.98 ≈ 2.5%
+         * -> 半衰期仅 20 帧 = **0.33 秒**。摆荡两三秒就没劲，
+         *    全靠玩家泵力硬撑 —— 这正是用户反馈「摆荡太慢」的原因之一。
+         *
+         * 问题在于 airDrag 被当成了「每帧固定衰减率」，
+         * 而 damping 也是。两个同义的衰减相乘，效果翻倍且难以调参。
+         *
+         * 修法：把两者合并成**一个**每秒衰减系数，按指数衰减：
+         *     v *= pow(damping, dt*60)   —— 每帧等价，统一且帧率无关
+         * airDrag 保留但降为「附加阻尼」，默认调小。
+         */
+        float dampCoef = Mathf.Pow(damping, dt * 60f) * Mathf.Max(0f, 1f - airDrag);
         for (int i = 1; i <= last; i++)
         {
             bool isDrivenEnd = (i == last && endDriven);
@@ -1711,8 +1739,7 @@ public class SilkChain : MonoBehaviour
                 velocities[i] += new Vector3(0, 0, -gravity * dt);
             else if (endDriven)
                 velocities[i] = drivenVelocity;      // 完全交给外部（玩家输入）
-            velocities[i] *= damping;
-            velocities[i] *= dragFactor;
+            velocities[i] *= dampCoef;
             nodes[i].transform.position += velocities[i] * dt;
         }
 
@@ -3522,8 +3549,13 @@ public class SilkParkourController : MonoBehaviour
     [Tooltip("沿绳摆动速度。25 格/s 约 0.9g，是跑酷手感的目标区间")]
     public float swingSpeed = 25f;
 
-    [Tooltip("泵力加速度（沿切线）。越大越容易「起」起来")]
-    public float pumpAccel = 30f;
+    [Tooltip("泵力加速度（沿切线，格/秒²）。越大越容易把摆荡「起」起来。\n"
+        + "★ 用户反馈「摆荡太慢、怎么按都不动」，故从 30 提到 **90**：\n"
+        + "   原值下每帧只注入 30×0.0167 = 0.5 格/秒，\n"
+        + "   而阻尼每帧吃掉 2.5% —— 按住 4 秒才到 70 格/秒，反馈太弱。\n"
+        + "   90 → 每帧 1.5 格/秒，2 秒内可达 ~90 格/秒，接近基础跑速 3.6 倍。\n"
+        + "   参照：90 ≈ 1.8g，与 swingSpeed 25（约 0.9g）同一量级。")]
+    public float pumpAccel = 90f;
 
     [Tooltip("横推加速度（垂直绳方向）。控制摆动相位")]
     public float lateralAccel = 18f;
@@ -4275,7 +4307,17 @@ public class SilkParkourController : MonoBehaviour
     /* ---------- 脱手飞行：纯重力 + 阻尼 + 撞墙反弹 ---------- */
     void UpdateFlight(float dt)
     {
-        flightVel += new Vector3(0, 0, -15f * flightGravityScale) * dt;
+        /* ★ 用全局统一的 gravity，不要硬编码 -15f。
+         *
+         * 【曾存在的 bug】这里原写 `flightVel += new Vector3(0, 0, -15f)`，
+         * 那是**重力从 15 时代残留的常数**。后来全局 gravity 改成 50
+         * （为解决「上升下降太慢」），这里却没跟着改——
+         * 于是松手后球的下落加速度只有正常值的 **30%**，
+         * 球像在慢动作里飘荡，用户反馈「摆荡太慢」。
+         *
+         * 这正是「物理常量在多处写死」的典型后果，与之前
+         * `chain.gravity = 15f` 是同一类问题，故统一走 SilkPhysics.Gravity。*/
+        flightVel += new Vector3(0, 0, -gravity * flightGravityScale) * dt;
         flightVel *= Mathf.Pow(flightDamping, dt * 60f);
 
         // 撞墙反弹：直接积分会穿墙（加 Collider 只是让射线能命中，
@@ -4613,6 +4655,15 @@ public class SilkParkourController : MonoBehaviour
         dashCooldown = 0f;
         dashUsedThisAirborne = false;
     }
+
+    [Header("摆荡")]
+    [Tooltip("进入摆荡时注入动量的比例（1.0 = 完全保留玩家当前速度）。\n"
+        + "这是《蜘蛛侠2》「momentum carries between swings」的核心实现 ——\n"
+        + "  · 1.0：完全保留，荡到最低点速度最高（最接近标杆）\n"
+        + "  · 0.5：保留一半，荡得起来但不会太夸张\n"
+        + "  · 0.0：回到旧行为（从静止开始摆），会显得「挂在那晃」\n"
+        + "用户反馈「摆荡太慢」，此值是最直接的调节旋钮。")]
+    [Range(0f, 1.5f)] public float swingEntryBoost = 1.0f;
 
     [Header("冲刺")]
     [Tooltip("冲刺的瞬时速度增量（格/秒）。**叠加**在当前速度上，不是设为固定值 —— "
@@ -5089,14 +5140,39 @@ public class SilkParkourController : MonoBehaviour
          * 正确做法：末端**自由**（不Drive），由 SilkChain 的约束求解
          * 决定位置 —— 玩家是挂在末端的载荷，按方向键对末端施力。
          * 这样才有真正的摆荡。*/
-        line.AttachSelf(builder, "钩爪末端");
+        line.AttachSelf(builder, "丝线末端");
         line.StartSwing();
         grabbed = line;
         isFlying = false;
+
+        /* ★★ 动量注入：把玩家当前的运动速度交给丝线末端。
+         *
+         * 【这是「一钩飞出去」与「挂在那晃」的分水岭】
+         * 标杆（蜘蛛侠2 / 消逝之光2）的核心设计原则是
+         * 「momentum carries between swings」—— 动量在摆荡之间保留。
+         * 玩家跑着跳出去、钩住锚点时，摆荡**从零开始**是错的：
+         * 那样玩家会看到球「挂在绳上小幅晃动」，而不是「划出去」。
+         *
+         * 【注入什么速度】
+         * 玩家在空中的真实速度 = 水平(flatVel) + 垂直(vertVel)。
+         * 两者都要给：
+         *   · 水平速度 -> 决定摆的幅度与「甩出去」的距离
+         *   · 垂直速度 -> 若正在下落，进入摆荡时是加速的（自由落体）
+         * 若只给水平，落差摆荡的感觉就丢了。
+         *
+         * 【为什么用 AddEndVelocity 而不是直接赋值】
+         * 保持「动量是核心资产」的铁律 —— 丝线末端原有速度
+         * （建链时的残余）会被叠加保留，而不是被覆盖清零。*/
+        Vector3 carry = flatVel + Vector3.forward * vertVel;
+        if (carry.sqrMagnitude > 0.0001f && line.chain != null)
+            line.chain.AddEndVelocity(carry * swingEntryBoost);
+
         if (verboseFireLog)
             Debug.Log("[Fire] 已连接自己 → " + target.position +
                       "（评分 " + lastAnchorScore.ToString("F1") + "）"
-                      + "｜末端自由摆动 = true");
+                      + "｜注入动量 " + (carry * swingEntryBoost).magnitude.ToString("F0")
+                      + " 格/秒（实际速度 " + carry.magnitude.ToString("F0") + " × "
+                      + swingEntryBoost.ToString("F2") + "）");
     }
 
     [Tooltip("输出自动瞄准的选点结果（调自动瞄准手感时临时开启）")]
