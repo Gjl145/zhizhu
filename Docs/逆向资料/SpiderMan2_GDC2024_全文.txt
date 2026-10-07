@@ -1,0 +1,389 @@
+
+=== P1 ===
+1
+Higher, Further, Faster
+Evolving Traversal in Marvel’s Spider-Man 2
+Doug Sheahan
+Senior Programming Director
+© 2024 MARVEL
+=== P2 ===
+2
+© 2024 MARVEL
+=== P3 ===
+• Spider-Man
+Traversal Pillars
+3
+© 2024 MARVEL
+=== P4 ===
+• Spider-Man
+• Depth Through Momentum
+Traversal Pillars
+4
+© 2024 MARVEL
+=== P5 ===
+• Spider-Man
+• Depth Through Momentum
+• Breadth of Action
+Traversal Pillars
+5
+© 2024 MARVEL
+=== P6 ===
+• Spider-Man
+• Depth Through Momentum
+• Breadth of Action
+• Broad Audience
+Traversal Pillars
+6
+© 2024 MARVEL
+=== P7 ===
+7
+© 2024 MARVEL© 2024 MARVEL
+=== P8 ===
+8
+WEB WINGS
+© 2024 MARVEL
+=== P9 ===
+• Feel authentic but fantastical
+Design Goals
+9
+© 2024 MARVEL
+=== P10 ===
+• Feel authentic but fantastical
+• Follow height-for-speed tradeoffs
+Design Goals
+10
+© 2024 MARVEL
+=== P11 ===
+• Feel authentic but fantastical
+• Follow height-for-speed tradeoffs
+• Interleave with existing traversal
+Design Goals
+11
+© 2024 MARVEL
+=== P12 ===
+• Start Fast
+• Fail Fast
+• Learn Fast
+Early Prototyping
+12
+=== P13 ===
+• Define attributes of 
+authenticity
+▪ Gain speed as you dive
+▪ Lose speed as you glide
+▪ Gravity pulls you down
+▪ Steerable yaw and pitch
+▪ Limits on maximum speed
+▪ Limits on maximum pitch
+Early Prototyping
+13
+=== P14 ===
+Failure
+14
+© 2024 MARVEL
+=== P15 ===
+Early Prototyping - Results
+• Failed to feel authentic
+• Steering and speed were too linear
+• Missing key elements of flight
+• Not tunable
+15
+=== P16 ===
+Back to Basics
+16
+© 2024 MARVEL
+=== P17 ===
+• Wingsuit visually
+• Glider mechanically
+Wingsuit vs Glider
+17
+
+=== P18 ===
+• Body faces velocity
+Early Simplifications
+18
+=== P19 ===
+• Body faces velocity
+• Input driven yaw/pitch
+Early Simplifications
+19
+=== P20 ===
+• Body faces velocity
+• Input driven yaw/pitch
+• Fixed body parameters
+Early Simplifications
+20
+=== P21 ===
+Lift
+Drag
+Gravity
+Thrust
+Glider Forces
+21
+
+=== P22 ===
+FL: Force of lift
+CL : Coefficient of lift
+r : Air density
+V : Velocity (speed)
+A : Wing area
+Ignore air density and wing area as non-
+variable, bake into coefficient
+Forces: Lift
+22
+FL = CL * r * (V2/2) * A
+=== P23 ===
+FD : Force of drag
+CD : Coefficient of drag
+r : Air density
+V : Speed relative to motion
+A : Facing surface area
+Forces : Drag
+23
+FD = CD * r * (V2/2) * A
+=== P24 ===
+FG : Force of gravity
+Forces : Gravity
+24
+FG
+=== P25 ===
+VF : Velocity Final
+VA : Velocity Average
+Forces : Combined
+25
+AL = FL * DL
+AD = FD * |-V|
+AG = FG * -U
+VF = VI + (AL*dt) + (AD*dt) + (AG*dt)
+VA = (VF + VI) / 2
+=== P26 ===
+• Gravity increases overall speed
+• Lift generates forward speed
+• Lift counters fall speed
+Forces : Combined
+26
+
+=== P27 ===
+• Lift can act as a natural brake
+Forces : Combined
+27
+
+=== P28 ===
+• Left stick driven
+• Full yaw control
+• Variable pitch control
+Player Input
+28
+
+=== P29 ===
+• Use left/right stick strength
+Yaw Control
+29
+
+=== P30 ===
+• Use left/right stick strength
+• Accel/Decel/Counter model
+Yaw Control
+30
+
+=== P31 ===
+• Use left/right stick strength
+• Accel/Decel/Counter model
+• Input ramp
+Yaw Control
+31
+
+=== P32 ===
+• Responsive
+• Obey speed-vs-lift
+Pitch Control
+32
+
+=== P33 ===
+• Player can aggressively pitch 
+down
+Pitch Control
+33
+© 2024 MARVEL
+=== P34 ===
+• Player can aggressively pitch 
+down
+• Player can aggressively pull 
+out of a dive
+Pitch Control
+34
+© 2024 MARVEL
+=== P35 ===
+• Player can aggressively pitch 
+down
+• Player can aggressively pull 
+out of a dive – to a point
+Pitch Control
+35
+
+=== P36 ===
+• Player can aggressively pitch 
+down
+• Player can aggressively pull 
+out of a dive – to a point
+• Coefficient manipulation 
+at and above level
+Pitch Control
+36
+© 2024 MARVEL
+=== P37 ===
+37
+PLAYABLE BY ALL
+© 2024 MARVEL
+=== P38 ===
+Deployment
+• R2 was our “go” button, contract with players
+• Most of development was R2 + TRI
+• UX consistently had difficulty
+• Had to be willing to compromise design rules for playability
+• Shipped with just tap of TRI to deploy
+38
+=== P39 ===
+• Act as sort of drag chute
+• Rapidly slow fall speed
+• Convert to horizontal speed
+Playable By All :
+Deploy Vertical Brake
+39
+
+=== P40 ===
+40© 2024 MARVEL
+=== P41 ===
+• Lift requires speed
+• Frequent sub-optimal deployment
+• Give a boost to a minimum speed
+Playable By All:
+Deployment Boost
+41
+
+=== P42 ===
+• Flight controls vs standard
+• Handle stick-back mode changes
+• Built in stick-flip logic for transitions and 
+targeting
+Playable By All:
+Flight Controls
+42
+
+=== P43 ===
+• Wanted feel of skimming ground
+• Players were wiping out repeatedly
+• Slight pitch steering bump near ground
+• Created short duration anti-gravity 
+bubble when near ground
+Playable By All:
+Ground Assist
+43
+© 2024 MARVEL
+=== P44 ===
+• Array of forward/side tests
+• Nudge towards openings
+• Dampen steering towards walls
+Playable By All:
+Wall Assist
+44
+© 2024 MARVEL
+=== P45 ===
+• Traverse city quickly
+• Reward players for reading environment
+• Break up experience cadence
+• Maintain player control
+Slipstreams
+45
+© 2024 MARVEL
+=== P46 ===
+46© 2024 MARVEL
+SPEED BOOST
+=== P47 ===
+Gameplay Benefits
+• Prior speed cap limited range of viable player speed
+• 22 – 30m/s
+• Uncapping speed allows more natural motion
+• 45-60m/s base cap
+• 100m/s max speed
+• Fall speed can translate more directly to horizontal speed
+• Increases skill ceiling as variety of moves can get 
+meaningful rewards
+47
+=== P48 ===
+Gameplay Challenges
+• Too much speed left players out of control
+48
+=== P49 ===
+Gameplay Challenges
+• Too much speed left players out of control
+• Linearly ramped air drag proved insufficient
+49
+=== P50 ===
+Gameplay Challenges
+• Too much speed left players out of control
+• Linearly ramped air drag proved insufficient
+• Players build speed too fast
+50
+=== P51 ===
+Air Drag
+• Move to quadratic air drag model
+▪ Lower drag at lower speeds
+▪ Higher drag at higher speeds
+• Applied on AND off the swing line
+51
+=== P52 ===
+Momentum Meter
+• Governs speed boost potential
+• Maximum speed gained in a single swing
+• Boost provided by a timely point launch
+52
+=== P53 ===
+Momentum Meter
+• Governs speed boost potential
+• Maximum speed gained in a single swing
+• Boost provided by a timely point launch
+• Never slows the player down
+53
+=== P54 ===
+Momentum Meter
+• Governs speed boost potential
+• Maximum speed gained in a single swing
+• Boost provided by a timely point launch
+• Never slows the player down
+• Built through skillful traversal
+• Decays over time
+54
+=== P55 ===
+55© 2024 MARVEL
+=== P56 ===
+Aero Meter
+• Many moves give player large speed boosts
+• Speed is quickly eaten by air drag
+• Building aero meter reduces drag
+• Allows hero to hold speed for long durations
+56
+=== P57 ===
+57© 2024 MARVEL
+=== P58 ===
+© 2024 MARVEL 58
+=== P59 ===
+Lessons Learned
+• The thing that feels right is the right thing to make
+59
+=== P60 ===
+Lessons Learned
+• The thing that feels right is the right thing to make
+• A feature is only good if a target player can and will use it
+60
+=== P61 ===
+Lessons Learned
+• The thing that feels right is the right thing to make
+• A feature is only good if a target player can and will use it
+• Reward loops don’t always have to be seen to be felt
+61
+=== P62 ===
+62
+Images from Marvel’s Spider-Man are copyright © 2024, MARVEL, and are used with permission. SPIDER-MAN® is the registered trademark of Marvel Characters, Inc. All rights reserved. Presentation copyright 
+© 2024, Insomniac Games, Inc. INSOMNIAC® and the INSOMNIAC GAMES Logo® are the registered trademarks of Insomniac Games, Inc. All rights reserved.
+         

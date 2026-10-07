@@ -1,0 +1,264 @@
+[
+ {
+  "url": "https://www.gdcvault.com/play/1025725/",
+  "title": "",
+  "speaker": null,
+  "company": "",
+  "year": "GDC 2019",
+  "slides": [],
+  "iframes": [
+   "https://gdcvault.blazestreaming.com/?id=aefc19d4dd164c95aec9bab3daf25e34"
+  ],
+  "sessionID": "400012931",
+  "track": "Design",
+  "hasSlidesWord": false,
+  "id": "1025725",
+  "label": "Classic Game Design Postmortem: Swinging with Spider-Man (Treyarch, GDC2019)"
+ },
+ {
+  "url": "https://www.gdcvault.com/play/1026422/",
+  "title": "",
+  "speaker": null,
+  "company": "",
+  "year": "GDC 2019",
+  "slides": [],
+  "iframes": [],
+  "sessionID": "400012942",
+  "track": "Programming",
+  "hasSlidesWord": false,
+  "id": "1026422",
+  "label": "Concrete Jungle Gym (Insomniac, GDC2019)"
+ },
+ {
+  "url": "https://www.gdcvault.com/play/1026084/",
+  "title": "",
+  "speaker": null,
+  "company": "",
+  "year": "GDC 2019",
+  "slides": [],
+  "iframes": [
+   "https://gdcvault.blazestreaming.com/?id=ce00f6500b384aeeaef5e2ca6b093b78"
+  ],
+  "sessionID": "400012942",
+  "track": "Programming",
+  "hasSlidesWord": false,
+  "id": "1026084",
+  "label": "Concrete Jungle Gym alt id"
+ },
+ {
+  "url": "https://www.gdcvault.com/play/1035867/",
+  "title": "",
+  "speaker": null,
+  "company": "",
+  "year": "Game Developers Conference 2026",
+  "slides": [],
+  "iframes": [
+   "https://gdcvault.blazestreaming.com/?id=326a835831544e81a7a1e9a08a8a4bdd"
+  ],
+  "sessionID": "400019062",
+  "track": "Independent Development",
+  "hasSlidesWord": false,
+  "id": "1035867",
+  "label": "Grappling with Success: Smooth Movement"
+ },
+ {
+  "url": "https://www.gdcvault.com/play/1034283/",
+  "title": "",
+  "speaker": null,
+  "company": "",
+  "year": "Game Developers Conference 2024",
+  "slides": [],
+  "iframes": [
+   "https://gdcvault.blazestreaming.com/?id=514d7076db864e67ae3032a87a8fc302"
+  ],
+  "sessionID": "400017218",
+  "track": "Programming",
+  "hasSlidesWord": false,
+  "id": "1034283",
+  "label": "Higher Faster Farther: Evolving Traversal"
+ },
+ {
+  "url": "https://www.gdcvault.com/play/1029003/",
+  "title": "",
+  "speaker": null,
+  "company": "",
+  "year": "Game Developers Conference 2023",
+  "slides": [],
+  "iframes": [
+   "https://gdcvault.blazestreaming.com/?id=10733fdffd9d4d90a9471acab862ca88"
+  ],
+  "sessionID": "400016052",
+  "track": "Design",
+  "hasSlidesWord": false,
+  "id": "1029003",
+  "label": "Companion Traversal in God of War"
+ },
+ {
+  "url": "https://www.gdcvault.com/play/1027649/",
+  "title": "",
+  "speaker": null,
+  "company": "",
+  "year": "Game Developers Conference 2022",
+  "slides": [],
+  "iframes": [],
+  "sessionID": "400014803",
+  "track": "Design",
+  "hasSlidesWord": false,
+  "id": "1027649",
+  "label": "NARAKA: BLADEPOINT From Prototype"
+ },
+ {
+  "url": "https://www.gdcvault.com/play/1025208/",
+  "title": "",
+  "speaker": null,
+  "company": "",
+  "year": "GDC 2018",
+  "slides": [],
+  "iframes": [
+   "https://gdcvault.blazestreaming.com/?id=952475165f6a43248370a62c5c80de70"
+  ],
+  "sessionID": "400012336",
+  "track": "Design",
+  "hasSlidesWord": false,
+  "id": "1025208",
+  "label": "Parkour: How to Improve Freedom"
+ },
+ {
+  "url": "https://www.gdcvault.com/play/1024699/",
+  "title": "",
+  "speaker": null,
+  "company": "",
+  "year": "GDC 2017",
+  "slides": [],
+  "iframes": [],
+  "sessionID": "400010103",
+  "track": "Visual Arts",
+  "hasSlidesWord": false,
+  "id": "1024699",
+  "label": "Player Traversal Mechanics in the ..."
+ },
+ {
+  "url": "https://www.gdcvault.com/play/1024117/",
+  "title": "",
+  "speaker": null,
+  "company": "",
+  "year": "GDC 2017",
+  "slides": [],
+  "iframes": [
+   "https://gdcvault.blazestreaming.com/?id=735f366b18144fc1a8cae93fa1db9aa3"
+  ],
+  "sessionID": "400010103",
+  "track": "Visual Arts",
+  "hasSlidesWord": false,
+  "id": "1024117",
+  "label": "Player Traversal Mechanics alt id"
+ },
+ {
+  "url": "https://www.gdcvault.com/play/1019687/",
+  "title": "",
+  "speaker": null,
+  "company": "",
+  "year": "GDC Next 2013",
+  "slides": [],
+  "iframes": [
+   "https://gdcvault.blazestreaming.com/?id=39e4cf8d9c954cbc86abdf9d22e12e8d"
+  ],
+  "sessionID": "400002739",
+  "track": "Smartphone &amp; Tablet Games",
+  "hasSlidesWord": false,
+  "id": "1019687",
+  "label": "The Evolution of Sonic Dashing"
+ },
+ {
+  "url": "https://www.gdcvault.com/play/1014620/",
+  "title": "",
+  "speaker": null,
+  "company": "",
+  "year": "GDC 2011",
+  "slides": [],
+  "iframes": [
+   "https://gdcvault.blazestreaming.com/?id=1cff0accb768473581fde16a9de8fa85"
+  ],
+  "sessionID": "12374",
+  "track": "Game Design",
+  "hasSlidesWord": false,
+  "id": "1014620",
+  "label": "DONKEY KONG: Swinging Across"
+ },
+ {
+  "url": "https://www.gdcvault.com/play/1029215/",
+  "title": "",
+  "speaker": null,
+  "company": "",
+  "year": "Game Developers Conference 2023",
+  "slides": [],
+  "iframes": [
+   "https://gdcvault.blazestreaming.com/?id=43cbaf6807604655ba299b35c75c7238"
+  ],
+  "sessionID": "400016148",
+  "track": "Level Design Summit",
+  "hasSlidesWord": false,
+  "id": "1029215",
+  "label": "Level Design Summit: Moving Mountains"
+ },
+ {
+  "url": "https://www.gdcvault.com/play/1034293/",
+  "title": "",
+  "speaker": null,
+  "company": "",
+  "year": "Game Developers Conference 2024",
+  "slides": [],
+  "iframes": [],
+  "sessionID": "400016992",
+  "track": "Production &amp; Team Leadership",
+  "hasSlidesWord": false,
+  "id": "1034293",
+  "label": "Between Legacy and Modernity (Assassin's Creed)"
+ },
+ {
+  "url": "https://www.gdcvault.com/play/1017767/",
+  "title": "",
+  "speaker": null,
+  "company": "",
+  "year": "GDC 2013",
+  "slides": [],
+  "iframes": [
+   "https://gdcvault.blazestreaming.com/?id=68e326f81c8c44a98fef477d1ccc1519"
+  ],
+  "sessionID": "400002301",
+  "track": "Design",
+  "hasSlidesWord": false,
+  "id": "1017767",
+  "label": "One with Lara: The Croft ..."
+ },
+ {
+  "url": "https://www.gdcvault.com/play/1012661/",
+  "title": "",
+  "speaker": null,
+  "company": "",
+  "year": "GDC 2010",
+  "slides": [],
+  "iframes": [],
+  "sessionID": "10300",
+  "track": "Production",
+  "hasSlidesWord": false,
+  "id": "1012661",
+  "label": "Among Friends: An Uncharted 2 ..."
+ },
+ {
+  "url": "https://www.gdcvault.com/play/1025208/",
+  "title": "",
+  "speaker": null,
+  "company": "",
+  "year": "GDC 2018",
+  "slides": [],
+  "iframes": [
+   "https://gdcvault.blazestreaming.com/?id=952475165f6a43248370a62c5c80de70"
+  ],
+  "sessionID": "400012336",
+  "track": "Design",
+  "hasSlidesWord": false,
+  "id": "1025208",
+  "label": "Parkour"
+ }
+]

@@ -1,0 +1,727 @@
+--- PAGE 1 (len 108)
+It IS Rocket Science!
+The physics and networking of Rocket League
+Jared Cone
+Lead Gameplay Engineer, Psyonix
+--- PAGE 2 (len 50)
+Agenda
+Physics Engine
+Vehicle Tuning
+Networking
+--- PAGE 3 (len 0)
+
+--- PAGE 4 (len 107)
+Rocket League Goals
+Fast, responsive vehicles
+Consistent, controllable physics
+Competitive over internet
+--- PAGE 5 (len 40)
+PHYSICS ENGINE
+VEHICLE TUNING
+NETWORKING
+--- PAGE 6 (len 191)
+Physics Engine
+Bullet Physics Engine
+Open-source: debuggable, modifiable
+Fast single-threaded simulation
+~1 week integration
+Discrete collision detection
+Fixed tick rate (120hz, 8.33ms)
+--- PAGE 7 (len 0)
+
+--- PAGE 8 (len 0)
+
+--- PAGE 9 (len 0)
+
+--- PAGE 10 (len 0)
+
+--- PAGE 11 (len 13)
+Physics Steps
+--- PAGE 12 (len 18)
+Physics Steps
+60hz
+--- PAGE 13 (len 18)
+Physics Steps
+60hz
+--- PAGE 14 (len 18)
+Physics Steps
+60hz
+--- PAGE 15 (len 18)
+Physics Steps
+60hz
+--- PAGE 16 (len 18)
+Physics Steps
+60hz
+--- PAGE 17 (len 18)
+Physics Steps
+60hz
+--- PAGE 18 (len 18)
+Physics Steps
+60hz
+--- PAGE 19 (len 18)
+Physics Steps
+60hz
+--- PAGE 20 (len 18)
+Physics Steps
+60hz
+--- PAGE 21 (len 18)
+Physics Steps
+60hz
+--- PAGE 22 (len 18)
+Physics Steps
+60hz
+--- PAGE 23 (len 18)
+Physics Steps
+60hz
+--- PAGE 24 (len 18)
+Physics Steps
+60hz
+--- PAGE 25 (len 168)
+Physics Framerate
+Slower rate = larger steps = larger 
+penetrations = inconsistent hits
+Higher rate = consistency
+More expensive, especially for network 
+corrections
+--- PAGE 26 (len 136)
+Physics Engine Summary
+Get control of your physics engine
+Fixed tick rate for consistency
+Higher tick rate for consistency, at a cost
+--- PAGE 27 (len 40)
+PHYSICS ENGINE
+VEHICLE TUNING
+NETWORKING
+--- PAGE 28 (len 40)
+PHYSICS ENGINE
+VEHICLE TUNING
+NETWORKING
+--- PAGE 29 (len 98)
+Vehicle Tuning Goals
+Fast acceleration and braking
+Sharp steering
+Stable driving, fast recovery
+--- PAGE 30 (len 31)
+Scenario:
+“Faster Acceleration”
+--- PAGE 31 (len 12)
+Acceleration
+--- PAGE 32 (len 19)
+Torque
+Acceleration
+--- PAGE 33 (len 28)
+Torque
+Friction
+Acceleration
+--- PAGE 34 (len 33)
+Torque
+Friction
+Spin
+Acceleration
+--- PAGE 35 (len 46)
+Torque
+Wheel
+Radius
+Friction
+Spin
+Acceleration
+--- PAGE 36 (len 57)
+Torque
+Wheel
+Radius
+Friction
+Spin
+Suspension
+Acceleration
+--- PAGE 37 (len 71)
+Torque
+Wheel
+Radius
+Gravity, Mass
+Friction
+Spin
+Suspension
+Acceleration
+--- PAGE 38 (len 77)
+Torque
+Wheel
+Radius
+Gravity, Mass
+Gears
+Friction
+Spin
+Suspension
+Acceleration
+--- PAGE 39 (len 77)
+Torque
+Wheel
+Radius
+Gravity, Mass
+Gears
+Friction
+Spin
+Suspension
+Acceleration
+--- PAGE 40 (len 84)
+Reduce Complexity
+Transmission
+Maybe don’t have one
+Use force/accel curve instead
+--- PAGE 41 (len 67)
+Reduce Complexity
+Mass
+Keep constant
+Ignore when applying forces
+--- PAGE 42 (len 99)
+Reduce Complexity
+Tire Friction
+Can live without longitudinal friction
+Simplify lateral friction
+--- PAGE 43 (len 15)
+Simple Friction
+--- PAGE 44 (len 15)
+Simple Friction
+--- PAGE 45 (len 15)
+Simple Friction
+--- PAGE 46 (len 15)
+Simple Friction
+--- PAGE 47 (len 62)
+Ratio =
+SideSpeed / (SideSpeed + ForwardSpeed)
+Simple Friction
+--- PAGE 48 (len 91)
+Ratio =
+SideSpeed / (SideSpeed + ForwardSpeed)
+SlideFriction = Curve(Ratio)
+Simple Friction
+--- PAGE 49 (len 131)
+Ratio =
+SideSpeed / (SideSpeed + ForwardSpeed)
+SlideFriction = Curve(Ratio) 
+GroundFriction = Curve(GroundNormal.Z)
+Simple Friction
+--- PAGE 50 (len 173)
+Ratio =
+SideSpeed / (SideSpeed + ForwardSpeed)
+SlideFriction = Curve(Ratio) 
+GroundFriction = Curve(GroundNormal.Z)
+Friction = SlideFriction * GroundFriction
+Simple Friction
+--- PAGE 51 (len 206)
+Ratio =
+SideSpeed / (SideSpeed + ForwardSpeed)
+SlideFriction = Curve(Ratio) 
+GroundFriction = Curve(GroundNormal.Z)
+Friction = SlideFriction * GroundFriction
+Impulse = Constraint * Friction 
+Simple Friction
+--- PAGE 52 (len 17)
+Friction Location
+--- PAGE 53 (len 17)
+Friction Location
+--- PAGE 54 (len 17)
+Friction Location
+--- PAGE 55 (len 17)
+Friction Location
+--- PAGE 56 (len 17)
+Friction Location
+--- PAGE 57 (len 17)
+Friction Location
+--- PAGE 58 (len 0)
+
+--- PAGE 59 (len 0)
+
+--- PAGE 60 (len 110)
+Possible Workarounds
+Lower friction
+Limit steer angles
+“Stay upright” constraint
+Apply forces at CM height
+--- PAGE 61 (len 12)
+Forces at CM
+--- PAGE 62 (len 12)
+Forces at CM
+--- PAGE 63 (len 0)
+
+--- PAGE 64 (len 0)
+
+--- PAGE 65 (len 0)
+
+--- PAGE 66 (len 0)
+
+--- PAGE 67 (len 15)
+Wheel Positions
+--- PAGE 68 (len 42)
+Axle Width
+Axle Separation
+Wheel Positions
+--- PAGE 69 (len 15)
+Wheel Positions
+--- PAGE 70 (len 20)
+Wheel Positions
++2cm
+--- PAGE 71 (len 125)
+Wheel Positions
+Originally defined by artists
+Big effect on handling
+Long iteration times
+Transitioned to “preset” system
+--- PAGE 72 (len 188)
+Physics Presets
+Divorce physics setup from visuals
+Collision box size & translation
+Wheel positions, radii
+Many vehicles, few presets
+Faster iteration
+Physics and visuals don’t match
+--- PAGE 73 (len 16)
+Stability Forces
+--- PAGE 74 (len 0)
+
+--- PAGE 75 (len 0)
+
+--- PAGE 76 (len 16)
+Stability Forces
+--- PAGE 77 (len 16)
+Stability Forces
+--- PAGE 78 (len 16)
+Stability Forces
+--- PAGE 79 (len 16)
+Stability Forces
+--- PAGE 80 (len 16)
+Stability Forces
+--- PAGE 81 (len 16)
+Stability Forces
+--- PAGE 82 (len 0)
+
+--- PAGE 83 (len 0)
+
+--- PAGE 84 (len 0)
+
+--- PAGE 85 (len 0)
+
+--- PAGE 86 (len 121)
+Vehicle Tuning Summary
+Start simple or reduce complexity
+Fake realism with visuals
+Separate vehicle setup from visuals
+--- PAGE 87 (len 40)
+PHYSICS ENGINE
+VEHICLE TUNING
+NETWORKING
+--- PAGE 88 (len 40)
+PHYSICS ENGINE
+VEHICLE TUNING
+NETWORKING
+--- PAGE 89 (len 191)
+Rocket League Challenges
+Input delay is not an option
+Client prediction for rigid-body vehicles
+Server can’t wait for client input
+Collision with moving objects
+100% server authoritative
+--- PAGE 90 (len 217)
+Wait for client input?
+Player inputs to server suffer jitter, loss
+To compensate, server waits for input before 
+running physics
+Not good for rigid-body simulation
+Can result in de-sync when hitting moving 
+object
+--- PAGE 91 (len 21)
+Wait For Client Input
+--- PAGE 92 (len 28)
+Client
+Wait For Client Input
+--- PAGE 93 (len 28)
+Client
+Wait For Client Input
+--- PAGE 94 (len 28)
+Client
+Wait For Client Input
+--- PAGE 95 (len 28)
+Client
+Wait For Client Input
+--- PAGE 96 (len 28)
+Client
+Wait For Client Input
+--- PAGE 97 (len 28)
+Server
+Wait For Client Input
+--- PAGE 98 (len 28)
+Server
+Wait For Client Input
+--- PAGE 99 (len 28)
+Server
+Wait For Client Input
+--- PAGE 100 (len 28)
+Server
+Wait For Client Input
+--- PAGE 101 (len 28)
+Server
+Wait For Client Input
+--- PAGE 102 (len 28)
+Server
+Wait For Client Input
+--- PAGE 103 (len 28)
+Client
+Wait For Client Input
+--- PAGE 104 (len 28)
+Client
+Wait For Client Input
+--- PAGE 105 (len 0)
+
+--- PAGE 106 (len 165)
+Hit Moving Object?
+Client predicts his vehicle
+Server authoritative ball
+Client interpolates ball
+Client’s vehicle and the ball exist in two 
+different timelines
+--- PAGE 107 (len 17)
+Hit Moving Object
+--- PAGE 108 (len 24)
+Server
+Hit Moving Object
+--- PAGE 109 (len 31)
+Client
+Server
+Hit Moving Object
+--- PAGE 110 (len 31)
+Client
+Server
+Hit Moving Object
+--- PAGE 111 (len 31)
+Client
+Server
+Hit Moving Object
+--- PAGE 112 (len 24)
+Client
+Hit Moving Object
+--- PAGE 113 (len 24)
+Server
+Hit Moving Object
+--- PAGE 114 (len 24)
+Server
+Hit Moving Object
+--- PAGE 115 (len 233)
+Lag Compensation?
+Take idea from FPS lag compensation
+Client predicts shot, server confirms
+How to apply to Rocket League?
+Client predicts hitting the ball
+Server performs lag compensation, 
+confirms hit, updates ball trajectory
+--- PAGE 116 (len 16)
+Lag Compensation
+--- PAGE 117 (len 36)
+200ms Client
+Server
+Lag Compensation
+--- PAGE 118 (len 36)
+200ms Client
+Server
+Lag Compensation
+--- PAGE 119 (len 36)
+200ms Client
+Server
+Lag Compensation
+--- PAGE 120 (len 36)
+200ms Client
+Server
+Lag Compensation
+--- PAGE 121 (len 36)
+200ms Client
+Server
+Lag Compensation
+--- PAGE 122 (len 36)
+200ms Client
+Server
+Lag Compensation
+--- PAGE 123 (len 36)
+200ms Client
+Server
+Lag Compensation
+--- PAGE 124 (len 36)
+200ms Client
+Server
+Lag Compensation
+--- PAGE 125 (len 36)
+200ms Client
+Server
+Lag Compensation
+--- PAGE 126 (len 36)
+200ms Client
+Server
+Lag Compensation
+--- PAGE 127 (len 28)
+10ms Client
+Lag Compensation
+--- PAGE 128 (len 28)
+10ms Client
+Lag Compensation
+--- PAGE 129 (len 28)
+10ms Client
+Lag Compensation
+--- PAGE 130 (len 28)
+10ms Client
+Lag Compensation
+--- PAGE 131 (len 28)
+10ms Client
+Lag Compensation
+--- PAGE 132 (len 0)
+
+--- PAGE 133 (len 82)
+Rocket League Networking
+Server buffers player inputs
+Client predicts everything
+--- PAGE 134 (len 46)
+NETWORKING
+- INPUT BUFFER
+- PREDICT EVERYTHING
+--- PAGE 135 (len 226)
+Input Buffer
+Client sends input for every physics frame
+Client inputs do not arrive at constant rate
+Server buffers client input
+No need to pause for input
+Eliminates some cheats (speed, jitter)
+Increases average latency
+--- PAGE 136 (len 169)
+Input Buffer Requirements
+Try to avoid empty buffer (runs physics 
+using previous player input)
+Try to avoid large buffer (adds latency)
+How to grow or shrink buffer?
+--- PAGE 137 (len 219)
+Upstream Throttle
+Server can tell client to run faster or slower
+Buffer low? Client runs extra physics frames
+Buffer full? Client runs fewer physics frames
+
+‘Overwatch’ Gameplay Architecture and Netcode GDCVault.com
+--- PAGE 138 (len 179)
+Downstream Throttle
+Server consumes 0, 1, or 2 inputs per frame
+Buffer low? Use 1 input for 2 frames
+Buffer full? Consume 2 inputs for 1 frame
+Effective but with minor desyncs
+--- PAGE 139 (len 46)
+NETWORKING
+- INPUT BUFFER
+- PREDICT EVERYTHING
+--- PAGE 140 (len 46)
+NETWORKING
+- INPUT BUFFER
+- PREDICT EVERYTHING
+--- PAGE 141 (len 23)
+Prediction & Correction
+--- PAGE 142 (len 13)
+Client
+Server
+--- PAGE 143 (len 37)
+Client
+Server
+1
+Record input, frame #
+--- PAGE 144 (len 27)
+Client
+Server
+1
+Run physics
+--- PAGE 145 (len 30)
+Client
+Server
+1
+Record history
+--- PAGE 146 (len 35)
+Client
+Server
+Send input, frame #
+1
+--- PAGE 147 (len 35)
+Client
+Server
+Send input, frame #
+1
+--- PAGE 148 (len 17)
+Client
+Server
+2
+1
+--- PAGE 149 (len 41)
+Client
+Server
+2
+1
+Read input, run physics
+--- PAGE 150 (len 41)
+Client
+Server
+3
+1
+Read input, run physics
+--- PAGE 151 (len 52)
+Client
+Server
+3
+1
+Send client frame #,
+physics state
+--- PAGE 152 (len 17)
+Client
+Server
+3
+1
+--- PAGE 153 (len 17)
+Client
+Server
+4
+1
+--- PAGE 154 (len 17)
+Client
+Server
+4
+1
+--- PAGE 155 (len 58)
+Client
+Server
+Compare server physics to
+recorded history
+1
+--- PAGE 156 (len 60)
+Client
+Server
+Compare server physics to
+recorded history
+1
+1
+--- PAGE 157 (len 56)
+Client
+Server
+Large difference requires
+correction
+1
+1
+✔
+--- PAGE 158 (len 42)
+Client
+Server
+Update history to new data
+1
+--- PAGE 159 (len 66)
+Client
+Server
+Revert all physics actors to
+that frame in history
+4
+--- PAGE 160 (len 66)
+Client
+Server
+Revert all physics actors to
+that frame in history
+1
+--- PAGE 161 (len 55)
+Client
+Server
+Run multiple physics frames
+to catch up
+1
+--- PAGE 162 (len 55)
+Client
+Server
+Run multiple physics frames
+to catch up
+2
+--- PAGE 163 (len 55)
+Client
+Server
+3
+Run multiple physics frames
+to catch up
+--- PAGE 164 (len 15)
+Client
+Server
+4
+--- PAGE 165 (len 13)
+Client
+Server
+--- PAGE 166 (len 16)
+Hitting the Ball
+--- PAGE 167 (len 6)
+Client
+--- PAGE 168 (len 13)
+Server
+Client
+--- PAGE 169 (len 27)
+Received Data
+Server
+Client
+--- PAGE 170 (len 27)
+Server
+Client
+Received Data
+--- PAGE 171 (len 27)
+Server
+Client
+Received Data
+--- PAGE 172 (len 27)
+Server
+Client
+Received Data
+--- PAGE 173 (len 35)
+Server
+Client
+Received Data
+History
+--- PAGE 174 (len 37)
+Server
+Client
+History
+Received Data
+✔
+--- PAGE 175 (len 27)
+Server
+Client
+Received Data
+--- PAGE 176 (len 27)
+Server
+Client
+Received Data
+--- PAGE 177 (len 240)
+Predict Everything
+Client drives to where the ball is going to be
+Works well with ball (predictable)
+Not as well with cars (unpredictable)
+No server-side lag compensation.
+Expensive corrections
+200ms ping, 120hz = 24 correction frames
+--- PAGE 178 (len 121)
+Networking Results
+No input delay
+High-ping clients don’t ruin game
+Reliably hit moving objects
+100% server authority
+--- PAGE 179 (len 7)
+SUMMARY
+--- PAGE 180 (len 178)
+Summary
+Reducing complexity can help you reach 
+your design goals
+You do have a choice of physics engine
+Networking is still hard
+Fixed tick rate and client input buffers FTW
+--- PAGE 181 (len 273)
+Resources
+
+Fix Your Timestep GafferOnGames.com
+
+‘Overwatch’ Gameplay Architecture and Netcode GDCVault.com
+
+Client-Side Prediction and Server Reconciliation gabrielgambetta.com
+
+Client Side Prediction and Server Reconciliation gamasutra.com
+
+Rocket Science youtube.com
+--- PAGE 182 (len 10)
+Thank you!
