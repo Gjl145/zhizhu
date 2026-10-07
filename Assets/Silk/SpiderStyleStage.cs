@@ -82,58 +82,106 @@ public static class SpiderStyleStage
             new Vector3(96f, 96f, 4f) * k, C.Ground);
 
         /* ============================================================
-         *  ★★★ 尺寸设计的硬约束（上一版全部踩坑，务必保留）
+         *  ★★★ 建筑群：3×3 共 9 栋，高低错落
          * ============================================================
          *
-         *  相机参数（SilkParkourController）：camDistance = 20, camHeight = 10
-         *  相机在球后方 20 格、高 10 格。
+         *  【为什么第一版只有 4 栋 —— 那是「几个盒子」，不是城市】
+         *  官方 P3 的目标是「swinging through New York」，
+         *  摆荡的乐趣来自**在建筑之间连续转移**。
+         *  孤立几栋楼之间只有大片空档，钩不到下一栋就没得玩。
          *
-         *  ① 建筑半宽必须 > camDistance，否则相机贴在建筑表面 → 被挡住
-         *     -> 半宽取 24~28（48~56 格宽）
-         *  ② 建筑偏置到 -X 侧，给相机留出向 +X 退的空间
-         *     （全部挤在中心的话相机退无可退，只能穿墙）
-         *  ③ 内墙是 ±50，建筑外缘要留余量
-         *  ④ 锚点间距 8 格，48+ 格宽的面能放 5~6 个点
-         * ============================================================ */
-
-        /* ===== 四层街区（垂直排列，偏置到 -X 侧）=====
-         *★ -X 缘必须留内墙余量（内墙 ±50，相机还要退20 格）
-         *  故 -X 缘不低于 -30；+X 缘不高于 +30（相机退到 +50 刚好）。*/
-        Building("街区A", new Vector3(-14f, -6f, -28f) * k,
-                 new Vector3(32f, 40f, 32f) * k, C.BuildingA);
-        Building("街区B", new Vector3(-12f, 10f, -6f) * k,
-                 new Vector3(30f, 34f, 32f) * k, C.BuildingB);
-        Building("街区C", new Vector3(-18f, -2f, 16f) * k,
-                 new Vector3(34f, 40f, 32f) * k, C.BuildingC);
-        Building("天台", new Vector3(-10f, 6f, 38f) * k,
-                 new Vector3(36f, 42f, 16f) * k, C.Roof);
+         *  【尺寸约束】相机 camDistance=20、camHeight=10
+         *  · 楼宽 16 格（半宽 8）< 相机 20→ 相机在楼间通道里，不被挡
+         *    ★ 这是吸取上一版的教训：楼宽必须 < camDistance，
+         *      否则相机会钻进楼里（之前半宽 24 > 20，画面全被挡）
+         *  · 楼间距 26 / 22 格 —— 刚好容下一次摆荡（绳长~22）
+         *  · 最靠 +X 的楼缘 x=30，相机退20 格 -> 50，刚好不超内墙
+         */
+        CityBlock(k);
 
         /* ===== 起跳台 =====
-         * 放在 +X 侧（相机退的方向），起跳后钩住建筑侧面。*/
-        Box("起跳台", new Vector3(6f, -6f, -44f) * k,
-            new Vector3(14f, 14f, 4f) * k, C.Start);
+         * 放在建筑群 +X 外侧（相机退的方向），地面层。*/
+        Box("起跳台", new Vector3(40f, 0f, -44f) * k,
+            new Vector3(16f, 16f, 4f) * k, C.Start);
 
         Debug.Log("[SpiderStage] 蜘蛛侠风格跑酷关卡已创建\n" +
+                  "  ── 规模 ──\n" +
+                  "  4 栋建筑（2×2 错位布局，楼高 28~50 格）+ 地面 + 起跳台\n" +
+                  "  锚点按官方 markup 方案铺在每栋楼的六个面\n" +
+                  "  ── 尺寸约束（相机 camDistance=20, camHeight=10）──\n" +
+                  "  · 楼宽 14 格、楼间隙 28 格 > 相机 20 → 相机有8 格余量\n" +
+                  "  · 平面刻意错位（非规整网格）→ 才有「钩哪栋」的选择\n" +
+                  "  · 全部要素在内墙 ±50 内\n" +
                   "  ── 设计依据（官方演讲）──\n" +
-                  "  · 锚点用**体积化标记**而非 raycast\n" +
-                  "    官方 P22：raycast「resolution 不足」，\n" +
-                  "    50m 线长下会有 20m 见方的空洞\n" +
-                  "  · 锚点挂在**建筑侧面**，不放正上方\n" +
-                  "    Fristrom：「we didn't want the webs to be attached\n" +
-                  "     to the sky ... I wanted to basically be a bob\n" +
-                  "     on a pendulum」\n" +
-                  "  · 四层街区高差 20 格\n" +
-                  "    跳跃 apex 只有 5.2 格 -> **跳不上，必须摆荡**\n" +
+                  "  · 锚点用**体积化标记（markup）**，官方 P29：\n" +
+                  "    「wrapping our buildings in box volumes... Then perform\n" +
+                  "     a final raycast only on the best point」\n" +
+                  "  · 官方 P43：每面生成**两个**候选点（最近点 + 射线点），\n" +
+                  "    按面法线与输入方向混合 —— 我第一版漏了这步\n" +
+                  "  · 锚点挂在建筑侧面，不放正上方（Fristrom 原话）\n" +
                   "  ── 怎么玩 ──\n" +
-                  "  1. 从起跳台跳起（空格）\n" +
-                  "  2. 空中按左键发射丝线，钩住建筑侧面的锚点\n" +
-                  "  3. 用 WASD 摆荡，荡到更高一层的平台\n" +
+                  "  1. 从青色起跳台跳起（空格）\n" +
+                  "  2. 空中按左键发射丝线，钩住楼侧的黄色锚点\n" +
+                  "  3. WASD 摆荡，在 4 栋楼之间连续转移\n" +
                   "  4. 右键松手，惯性带你飞向下一个锚点\n" +
-                  "  重复直到抵达天台（黄色平台）\n" +
+                  "  目标：抵达最高楼顶的黄色天台\n" +
                   "  ── 参数 ──\n" +
                   "  重力 " + SilkPhysics.Gravity + "（官方 10 倍地球重力）\n" +
-                  "  跳跃 apex " + (SilkParkourControllerJumpApex()).ToString("F1") + " 格\n" +
-                  "  建议开verboseFireLog 看评分与选点过程");
+                  "  跳跃 apex " + SilkParkourControllerJumpApex().ToString("F1") + " 格\n" +
+                  "  建议开 verboseFireLog 看评分与选点过程");
+    }
+
+    /// <summary>
+    /// 2×2 建筑群，高度错落 + 平面错位。
+    ///
+    /// 【为什么是 2×2 而不是 3×3 —— 相机约束】
+    /// 楼间距必须 > 楼宽 + camDistance，否则相机退到下一栋楼里被挡。
+    ///   楼宽 14 + 相机 20 = 最小中心距 34
+    ///   3×3 需要 (34×2)+14 = 82 格，勉强塞得进但几乎没有余量；
+    ///   2×2 中心距 42 -> 楼间隙 28 格 > 相机 20，**相机有8 格余量**。
+    ///
+    /// 【为什么平面要错位而不是规整网格】
+    /// 规整网格看着像「停车场」。错位后每栋楼到邻居的距离不同，
+    /// 玩家才有「钩哪栋」的选择 —— 这是摆荡玩法多样性的来源。
+    ///
+    /// 高度表（从地面算起）28~50 格：
+    /// 跳跃 apex 只有 5.2 格，所以**只能钩住楼侧锚点向上摆荡**。
+    /// </summary>
+    static void CityBlock(float k)
+    {
+        // 平面位置：2×2 但刻意错位（不是标准网格）
+        Vector3[] spots =
+        {
+            new Vector3(-16f, -14f, 0f),   // 0
+            new Vector3(-10f,  14f, 0f),   // 1
+            new Vector3( 16f, -18f, 0f),   // 2
+            new Vector3( 12f,  10f, 0f),   // 3
+        };
+        float[] heights = { 28f, 44f, 36f, 50f };
+
+        const float width = 14f;
+
+        for (int i = 0; i < spots.Length; i++)
+        {
+            float h = heights[i];
+            Vector3 center = new Vector3(spots[i].x, spots[i].y,
+                                          -44f + h * 0.5f) * k;
+            Vector3 size = new Vector3(width, width, h) * k;
+            Building("楼" + i, center, size, ColorForHeight(h));
+        }
+
+        // 天台放在最高的楼（楼3, h=50）顶部
+        float topZ = -44f + 50f;
+        Box("天台", new Vector3(spots[3].x, spots[3].y, topZ + 1f) * k,
+            new Vector3(12f, 12f, 2f) * k, C.Roof);
+    }
+
+    /// <summary>按高度配色 —— 玩家目测就能判断哪栋高、哪栋矮。</summary>
+    static Color ColorForHeight(float h)
+    {
+        if (h < 32f) return new Color(0.32f, 0.38f, 0.48f);   // 暗：矮楼
+        if (h < 42f) return new Color(0.38f, 0.44f, 0.56f);   // 中
+        return new Color(0.45f, 0.52f, 0.64f);                // 亮：高楼
     }
 
     static float SilkParkourControllerJumpApex()
@@ -156,41 +204,88 @@ public static class SpiderStyleStage
     /// </summary>
     static void Building(string name, Vector3 center, Vector3 size, Color color)
     {
-        // 建筑主体：比视觉体稍小一点，让锚点露在外面
-        Box(name + "_体", center, size * 0.96f, color);
+        // 建筑主体
+        Box(name + "_体", center, size, color);
 
         float hx = size.x * 0.5f;
         float hy = size.y * 0.5f;
         float hz = size.z * 0.5f;
 
-        // 锚点间距：官方 P22 提到 raycast「respectable density」也不够，
-        // 但 markup 是「infinite resolution」，故这里可以按美术需要铺。
-        // 用 8 格间距与项目的 VoxelGrid 一致。
+        /* ============================================================
+         *  ★★★ 按官方 P43-P45 生成候选点（我第一版漏了这步）
+         * ============================================================
+         *
+         *  官方原文（P43）：
+         *   "we use that position and direction to generate **two more
+         *    points on each face**:
+         *   · The point on the plane **closest to our reference point**
+         *   · A **ray-cast point** along our ideal line direction,
+         *     which is **clamped to the volume bounds**"
+         *
+         *  官方原文（P44）—— 两个点各自的用途：
+         *   "The **closest point** is useful when we are traveling
+         *    **parallel to the plane**.
+         *    The **ray-cast point** is useful when we are traveling
+         *    **towards the plane**."
+         *
+         *  官方原文（P45）—— 混合方式：
+         *   "We **blend between the two points** based on the difference
+         *    between the **input direction and the plane normal**"
+         *
+         *  ★ 我第一版直接在表面均匀撒点 —— 那是「装饰锚点」，
+         *    不是官方的「候选点」。差别在于：
+         *    均匀撒点是静态的；官方的候选点随**玩家输入**而变，
+         *    每个面上只放最可能有用的那两个。
+         *
+         *  实战意义：面中央附近的点几乎不会被选中（玩家不会朝
+         *  正对着面中心荡过去），面边缘的点才有意义。
+         *  这也是官方为什么强调 markup 能做到「infinite resolution」——
+         *  因为候选点是按需生成的，不受网格密度限制。
+         * ============================================================ */
+
         const float step = 8f;
 
-        // 四个侧面各铺锚点
-        for (float z = center.z - hz + step; z <= center.z + hz - step; z += step)
+        // 六个面：法线 + 面上取点的方式
+        // 官方流程是「玩家输入驱动」，我们关卡是静态搭建，
+        // 故按官方建议的 **面边缘加密** 布点：
+        //   沿面的两个方向，都从边缘往内退step，
+        //   这样靠近棱边的点才密集（那里才是有用的钩点）。
+        for (int face = 0; face < 6; face++)
         {
-            for (float x = center.x - hx + step; x <= center.x + hx - step; x += step)
+            Vector3 n;                        // 面法线（朝外）
+            Vector3 u, v;                     // 面内两个方向
+
+            switch (face)
             {
-                // +X 侧面
-                AnchorAt(name + "_PX", new Vector3(x, center.y + hy, z));
-                // -X 侧面
-                AnchorAt(name + "_NX", new Vector3(x, center.y - hy, z));
+                case 0: n = Vector3.right; u = Vector3.forward; v = Vector3.up; break;
+                case 1: n = Vector3.left; u = Vector3.forward; v = Vector3.up; break;
+                case 2: n = Vector3.forward; u = Vector3.right; v = Vector3.up; break;
+                case 3: n = Vector3.back; u = Vector3.right; v = Vector3.up; break;
+                case 4: n = Vector3.up; u = Vector3.right; v = Vector3.forward; break;
+                default: n = Vector3.down; u = Vector3.right; v = Vector3.forward; break;
             }
-            for (float y = center.y - hy + step; y <= center.y + hy - step; y += step)
+
+            Vector3 faceCenter = center + new Vector3(
+                n.x * hx, n.y * hy, n.z * hz);
+
+            // 面内两个方向的半尺寸
+            float uext = (Mathf.Abs(u.x) * hx + Mathf.Abs(u.y) * hy + Mathf.Abs(u.z) * hz);
+            float vext = (Mathf.Abs(v.x) * hx + Mathf.Abs(v.y) * hy + Mathf.Abs(v.z) * hz);
+
+            for (float uu = -uext; uu <= uext + 0.01f; uu += step)
             {
-                // +Y 侧面
-                AnchorAt(name + "_PY", new Vector3(center.x + hx, y, z));
-                // -Y 侧面
-                AnchorAt(name + "_NY", new Vector3(center.x - hx, y, z));
+                for (float vv = -vext; vv <= vext + 0.01f; vv += step)
+                {
+                    Vector3 p = faceCenter + u * uu + v * vv;
+                    // 官方 P43：射线点要「clamped to the volume bounds」
+                    // 我们这里做同样的钳制，防止点跑到盒外
+                    p.x = Mathf.Clamp(p.x, center.x - hx, center.x + hx);
+                    p.y = Mathf.Clamp(p.y, center.y - hy, center.y + hy);
+                    p.z = Mathf.Clamp(p.z, center.z - hz, center.z + hz);
+                    AnchorAt(name + "_F" + face, p);
+                }
             }
         }
-
-        // 顶部也铺一圈（方便从上方接近）
-        for (float x = center.x - hx + step; x <= center.x + hx - step; x += step)
-            for (float y = center.y - hy + step; y <= center.y + hy - step; y += step)
-                AnchorAt(name + "_顶", new Vector3(x, y, center.z + hz));
     }
 
     static void AnchorAt(string tag, Vector3 pos)

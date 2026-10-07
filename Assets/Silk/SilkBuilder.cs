@@ -4052,7 +4052,18 @@ public class SilkParkourController : MonoBehaviour
         body.name = "Body";
         body.transform.SetParent(visual, false);   // 同上：不能保持世界位置
         body.transform.localPosition = Vector3.zero;
-        body.transform.localScale = Vector3.one * visualRadius;
+        /* ★ 缩放要乘 2：Unity Sphere 原型的**半径是 0.5**，
+         * 不是 1.0。
+         *
+         * 原代码 `localScale = Vector3.one * visualRadius` 让
+         * 实际半径 = 0.5 × 4.5 = **2.25 格**，而 groundRadius 用的是 4.5。
+         * 结果：球「浮空」4.5 格（ResolveGround: surface = hit.point + radius）
+         * 但看起来只有 2.25 格 —— 视觉与物理差了 2 倍。
+         *
+         * 用户反馈「连球都看不到了」——
+         * 球直径 4.5 格 vs 建筑 32 格宽（14%），在相机 20 格外就是个小点。
+         */
+        body.transform.localScale = Vector3.one * (visualRadius * 2f);
         var bc = body.GetComponent<Collider>();
         if (bc != null) Object.Destroy(bc);   // 位置由脚本控制，物理碰撞会打架
         Paint(body, freeColor);
@@ -4118,7 +4129,27 @@ public class SilkParkourController : MonoBehaviour
         Shader sh = Shader.Find("Universal Render Pipeline/Lit");
         if (sh == null) sh = Shader.Find("Standard");
         if (sh == null) sh = Shader.Find("Sprites/Default");
-        if (sh != null) mr.material = new Material(sh) { color = c };
+        if (sh == null) return;
+
+        var mat = new Material(sh) { color = c };
+
+        /* ★ 让球自发光 —— 否则在建筑堆里根本看不见。
+         *
+         * 用户反馈「连球都看不到了」：
+         *   URP/Lit 是 PBR 材质，只靠场景光照。
+         *   而球在建筑之间的阴影区里 -> 没有直接光-> 渲染成黑点。
+         *
+         * 自发光让它在任何光照条件下都有稳定亮度，
+         * 这与官方文档里「给可交互物加自发光」的做法一致
+         * （见 Docs/逆向资料/README.md —— 蜘蛛侠2 的可钩点也用高亮）。*/
+        if (mat.HasProperty("_EmissionColor"))
+        {
+            mat.EnableKeyword("_EMISSION");
+            mat.SetColor("_EmissionColor", c * 0.6f);
+            mat.globalIlluminationFlags =
+                MaterialGlobalIlluminationFlags.RealtimeEmissive;
+        }
+        mr.material = mat;
     }
 
     /// <summary>
