@@ -4550,8 +4550,9 @@ public class SilkParkourController : MonoBehaviour
 
             case SilkBuilder.ParkourStageKind.SpiderStyle:
                 SpiderStyleStage.Create(h);
-                // 起跳台顶面 z=-38，球心 = -38 + 半径 4.5 = -33.5
-                startPosition = new Vector3(-18f, -14f, -33.5f);
+                // 起跳台 center(6,-6,-44) size(20,20,4) -> 顶面 z=-42
+                // 球心 = 顶面 + 半径 4.5 = -37.5
+                startPosition = new Vector3(6f, -6f, -37.5f);
                 break;
 
             default:  // Basic

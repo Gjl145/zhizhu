@@ -77,30 +77,40 @@ public static class SpiderStyleStage
         float k = h / 50f;
 
         /* ===== 地面 =====
-         * 唯一的实体大平面。玩家从这里开始。*/
-        Box("地面", new Vector3(0f, 0f, -44f) * k,
-            new Vector3(120f, 120f, 4f) * k, C.Ground);
+         * 覆盖整个内墙（±48），保证相机在任何位置都有地面参照。*/
+        Box("地面", new Vector3(0f, 0f, -46f) * k,
+            new Vector3(96f, 96f, 4f) * k, C.Ground);
 
-        /* ===== 四层街区 =====
-         * 每层 = 一块「建筑体」（带 markup）+ 平台 + 侧面锚点。
+        /* ============================================================
+         *  ★★★ 尺寸设计的硬约束（上一版全部踩坑，务必保留）
+         * ============================================================
          *
-         * 设计要点（据官方 P22）：
-         *   锚点撒在建筑的**各个面**上，而不是靠 raycast 探测 ——
-         *   这样点密度与分辨率无关，长距离也不会有空洞。*/
-        Building("街区A", new Vector3(-18f, 0f, -20f) * k,
-                 new Vector3(24f, 24f, 40f) * k, C.BuildingA);
-        Building("街区B", new Vector3(10f, 8f, 0f) * k,
-                 new Vector3(20f, 20f, 40f) * k, C.BuildingB);
-        Building("街区C", new Vector3(-8f, -14f, 20f) * k,
-                 new Vector3(22f, 22f, 36f) * k, C.BuildingC);
-        Building("天台", new Vector3(14f, 4f, 40f) * k,
-                 new Vector3(20f, 20f, 8f) * k, C.Roof);
+         *  相机参数（SilkParkourController）：camDistance = 20, camHeight = 10
+         *  相机在球后方 20 格、高 10 格。
+         *
+         *  ① 建筑半宽必须 > camDistance，否则相机贴在建筑表面 → 被挡住
+         *     -> 半宽取 24~28（48~56 格宽）
+         *  ② 建筑偏置到 -X 侧，给相机留出向 +X 退的空间
+         *     （全部挤在中心的话相机退无可退，只能穿墙）
+         *  ③ 内墙是 ±50，建筑外缘要留余量
+         *  ④ 锚点间距 8 格，48+ 格宽的面能放 5~6 个点
+         * ============================================================ */
+
+        /* ===== 四层街区（垂直排列，偏置到 -X 侧）=====
+         *★ -X 缘必须留内墙余量（内墙 ±50，相机还要退20 格）
+         *  故 -X 缘不低于 -30；+X 缘不高于 +30（相机退到 +50 刚好）。*/
+        Building("街区A", new Vector3(-14f, -6f, -28f) * k,
+                 new Vector3(32f, 40f, 32f) * k, C.BuildingA);
+        Building("街区B", new Vector3(-12f, 10f, -6f) * k,
+                 new Vector3(30f, 34f, 32f) * k, C.BuildingB);
+        Building("街区C", new Vector3(-18f, -2f, 16f) * k,
+                 new Vector3(34f, 40f, 32f) * k, C.BuildingC);
+        Building("天台", new Vector3(-10f, 6f, 38f) * k,
+                 new Vector3(36f, 42f, 16f) * k, C.Roof);
 
         /* ===== 起跳台 =====
-         * 官方 P85：「平均速度需低于 30 m/s 以避免流式加载卡顿」。
-         * 我们 25 格/秒 ≈ 90 km/h，与该量级一致。
-         * 起跳台放在地面，方便起跳后钩住街区 A 的侧面。*/
-        Box("起跳台", new Vector3(-18f, -14f, -40f) * k,
+         * 放在 +X 侧（相机退的方向），起跳后钩住建筑侧面。*/
+        Box("起跳台", new Vector3(6f, -6f, -44f) * k,
             new Vector3(14f, 14f, 4f) * k, C.Start);
 
         Debug.Log("[SpiderStage] 蜘蛛侠风格跑酷关卡已创建\n" +
