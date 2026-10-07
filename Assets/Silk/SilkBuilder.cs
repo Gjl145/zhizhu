@@ -1089,8 +1089,10 @@ public class SilkLine
          * 若在它之前设置会被新建覆盖。*/
         EnsureChain(builder);
 
-        // 每次新的摆荡都允许再收缩一次
-        ResetReelIn();
+        // 每次新的摆荡都允许再收缩一次。
+        // ★ 必须通过 chain 调用 —— ResetReelIn 定义在 SilkChain 里，
+        //而这段代码在 SilkLine 类内，直接裸调会CS0103（项目已犯 3 次同类错误）。
+        if (chain != null) chain.ResetReelIn();
 
         // 通过 chain 解引用：末端不 Drive，让它自由摆动。
         // 这与 Attach 的唯一区别。
@@ -1912,8 +1914,13 @@ public class SilkChain : MonoBehaviour
                       "理论新速度 ≈ " + (speed / scale).ToString("F0") + " 格/秒）");
     }
 
-    /// <summary>起摆时重置「本次已收缩」标记 —— 每次新的摆荡都能再收缩一次。</summary>
-    void ResetReelIn()
+    /// <summary>起摆时重置「本次已收缩」标记 —— 每次新的摆荡都能再收缩一次。
+    ///
+    /// 【为什么是 public】被 SilkLine.AttachSelf() 调用 ——
+    /// 那段代码在 SilkLine 类里，必须通过 chain.ResetReelIn() 访问。
+    /// 若写成 private 会出现 CS0103「方法不可访问」。
+    /// </summary>
+    public void ResetReelIn()
     {
         reeledThisSwing = false;
         lastReelInAmount = 0f;

@@ -516,6 +516,78 @@ if bad:
 else:
     ok('无跨类字段直接访问（%d 个类的字段均通过实例访问）' % len(CLASS_FIELDS))
 
+# ---------- 14b. 裸方法调用的类归属（防 CS0103「方法不存在」）
+# 【曾发生的真实错误 · 一天内栽了 3 次同类问题】
+#   · endTarget       —— SilkChain 的字段，在 SilkLine 里裸访问
+#   · verboseFireLog  —— SilkParkourController 的字段，在 SilkChain 里用
+#   · ResetReelIn     —— SilkChain 的方法，在 SilkLine 里裸调用（本次）
+# 共同点：**方法/字段的定义与使用不在同一个类**，
+#        而语法完全合法，括号配平与 API 存在性都查不出来。
+#
+# 【为什么这一项比 14 更可靠】
+# 14 号项试图比对「字段名在哪个类」，结果 53 条误报 ——
+# 它分不清「访问他类字段」（错）与「访问局部变量的同名字段」（对）。
+# 本项只检查**裸调用**（前面没有 `.`），而局部变量必然带 `.` 或无，
+# 因此可以配合「本类方法表」精确判定。
+for cname in ('SilkChain', 'SilkLine'):
+    m = re.search(r'\npublic class ' + cname + r'\b', s)
+    if not m:
+        continue
+    seg = s[m.start():]
+    nxt = re.search(r'\npublic (?:static )?class \w+', seg[10:])
+    if nxt:
+        seg = seg[:10 + nxt.start()]
+    seg_start = m.start()
+
+    # 本类定义的方法名
+    own_methods = set(re.findall(
+        r'\n    (?:public |private |protected )?(?:static )?[\w<>\[\],.]+ '
+        r'(\w+)\s*\([^)]*\)\s*(?:=>|\{)', seg))
+    # 本类继承来的（MonoBehaviour 的方法不用管，只查本文件定义的）
+    if cname == 'SilkChain':
+        own_methods |= {'resetAll'}   # Unity 生命周期，非本文件定义
+
+    # 其他类定义的方法名（本文件内的 MonoBehaviour 类）
+    other_methods = set()
+    for oc in ('SilkLine', 'SilkChain', 'SilkParkourController',
+               'SilkBuilder', 'AnchorPoint', 'SilkSegment'):
+        if oc == cname:
+            continue
+        mo = re.search(r'\npublic class ' + oc + r'\b', s)
+        if not mo:
+            continue
+        so = s[mo.start():]
+        no = re.search(r'\npublic (?:static )?class \w+', so[10:])
+        if no:
+            so = so[:10 + no.start()]
+        for mm in re.finditer(
+                r'\n    (?:public |private |protected )?(?:static )?[\w<>\[\],.]+ '
+                r'(\w+)\s*\([^)]*\)\s*(?:=>|\{)', so):
+            nm = mm.group(1)
+            if nm not in ('Start', 'Update', 'Awake', 'FixedUpdate',
+                          'LateUpdate', 'OnDestroy', 'OnEnable', 'OnDisable'):
+                other_methods.add((nm, oc))
+
+    blank = lambda t: re.sub(r'[^\n]', ' ', t)
+    code = re.sub(r'/\*.*?\*/', lambda mm: blank(mm.group(0)), seg, flags=re.S)
+    code = re.sub(r'//[^\n]*', lambda mm: blank(mm.group(0)), code)
+    code = re.sub(r'"(?:\\.|[^"\\])*"', lambda mm: blank(mm.group(0)), code)
+
+    cross = []
+    for nm, oc in sorted(other_methods):
+        if nm in own_methods:
+            continue
+        for mm in re.finditer(r'(?<![.\w])' + re.escape(nm) + r'\s*\(', code):
+            ln = s[:seg_start + mm.start()].count('\n') + 1
+            cross.append('%s:%d 裸调用 %s.%s() —— 应写成 chain.%s() 或同类实例访问'
+                         % (cname, ln, oc, nm, nm))
+    if cross:
+        seen = set()
+        for c in cross:
+            if c not in seen:
+                err(c)
+                seen.add(c)
+
 # ---------- 15. 跑酷世界键位表（防误改）----------
 # 【用户 2026-10-07 精简后的最终键位】
 #   WASD/QE 移动升降 / 空格 跳跃 / 左键 发射丝线 / 右键 松开丝线
