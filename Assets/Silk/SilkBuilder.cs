@@ -2502,15 +2502,17 @@ public class SilkBuilder : MonoBehaviour
     {
         Basic = 0,        // SilkParkourStage：渐进教学的 4 段基础区
         SwingTest = 1,    // SilkSwingTestStage：5 个绳长梯度的摆荡点
-        SwingUnit = 2,    // ★ SilkSwingUnitStage：最小摆荡单元（4 个正方体节点）
+        SwingUnit = 2,    // SilkSwingUnitStage：最小摆荡单元（4 个正方体节点）
+        House = 3,        // ★ HouseBlockout：两层四间住宅（按中国住宅规范）
     }
 
     [Tooltip("跑酷世界用哪套关卡。\n"
         + "Basic     = 渐进教学 4 段（平地/高台/宽桥/终点）\n"
         + "SwingTest = 摆荡测试 5 点（绳长 14~34 格，用于定位摆荡问题）\n"
-        + "SwingUnit = ★最小摆荡单元：4 个正方体节点，摆荡一次到一个\n"
+        + "SwingUnit = 最小摆荡单元：4 个正方体节点，摆荡一次到一个\n"
+        + "House     = ★两层四间住宅白盒（按 GB 50096/55038 国家规范）\n"
         + "★ 改这个值后要按 Tab 重新切一次模式才会重建。")]
-    public ParkourStageKind parkourStage = ParkourStageKind.SwingUnit;
+    public ParkourStageKind parkourStage = ParkourStageKind.House;
 
     /* ★ 注意：重建关卡的实际执行在 SilkParkourController.RebuildParkourStage()。
      *
@@ -4607,10 +4609,11 @@ public class SilkParkourController : MonoBehaviour
         SilkParkourStage.Clear();
         SilkSwingTestStage.Clear();
         SilkSwingUnitStage.Clear();
+        HouseBlockout.Clear();
 
         var kind = builder != null
             ? builder.parkourStage
-            : SilkBuilder.ParkourStageKind.SwingUnit;
+            : SilkBuilder.ParkourStageKind.House;
 
         /* ============================================================
          *  ★ 关卡创建失败时的兜底
@@ -4644,6 +4647,21 @@ public class SilkParkourController : MonoBehaviour
                 catch (System.Exception e)
                 {
                     Debug.LogError("[Stage] SwingUnit 关卡创建失败（" + e.Message +
+                                   "），退回基础关卡。原因：" + e);
+                    SilkParkourStage.Create(h);
+                    startPosition = fallbackStart;
+                }
+                break;
+
+            case SilkBuilder.ParkourStageKind.House:
+                try
+                {
+                    HouseBlockout.Create(h);
+                    startPosition = HouseBlockout.StartPosition;
+                }
+                catch (System.Exception e)
+                {
+                    Debug.LogError("[Stage] House 关卡创建失败（" + e.Message +
                                    "），退回基础关卡。原因：" + e);
                     SilkParkourStage.Create(h);
                     startPosition = fallbackStart;
