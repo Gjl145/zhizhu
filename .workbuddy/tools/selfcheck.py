@@ -781,6 +781,48 @@ if dash and acc and sp:
     else:
         ok('速度类参数同比例（冲刺/加速度与速度的比例保持在基准附近）')
 
+# ---------- 17. 关卡文件的健壮性检查 ----------
+# 【曾发生的两个真实问题】
+#  ① 空引用导致整张关卡消失（CreatePrimitive 返回 null）
+#  ② 同一物体上有两个 MeshFilter / 两个 MeshRenderer
+#     -> 因为 Setup() 已经处理了视觉，外部又AddComponent 了一遍
+_sec_files = [f for f in glob.glob('Assets/Silk/*Stage.cs')
+              if 'SilkBuilder' not in f]
+sec_problems = []
+for f in _sec_files:
+    raw = open(f, encoding='utf-8').read()
+    fn = os.path.basename(f)
+
+    # ② 重复的视觉组件：AddComponent<MeshFilter> 与 Setup 同行或相邻
+    if 'AddComponent<MeshFilter>' in raw and 'AddComponent<AnchorPoint>' in raw:
+        # 检查是否在 AnchorPoint.Setup 之后又AddComponent 了视觉组件
+        idx_setup = raw.find('.Setup(')
+        idx_mf = raw.find('AddComponent<MeshFilter>')
+        if idx_setup > 0 and idx_mf > idx_setup:
+            sec_problems.append(
+                '%s: 在 AnchorPoint.Setup() 之后又 AddComponent<MeshFilter> —— '
+                'Setup 已处理网格/材质，同一物体会有两个 MeshFilter + 两个渲染器'
+                % fn)
+
+    # ① 危险的临时物体写法：CreatePrimitive + Destroy（取Mesh 用）
+    if re.search(r'CreatePrimitive\(PrimitiveType\.Sphere\)', raw) and \
+       re.search(r'Destroy\(', raw):
+        sec_problems.append(
+            '%s: 用「CreatePrimitive 建临时球再 Destroy」取网格 —— '
+            'CreatePrimitive 返回 null 时会 NullReference，'
+            '且异常抛在 Create() 里会导致整张关卡消失。'
+            '应改用 AnchorPoint.Setup() 或 Resources.GetBuiltinResource' % fn)
+
+    # ③ 关卡入口应该有 try/catch 兜底
+    if 'Create(float' in raw and 'try' not in raw:
+        pass    # 只提示，不报错（外部已有 try）
+
+for p in sec_problems:
+    err(p)
+if not sec_problems:
+    ok('关卡文件无重复视觉组件 / 无危险临时物体写法（%d 个关卡）'
+       % len(_sec_files))
+
 # ---------- 汇总 ----------
 print()
 print('=' * 60)

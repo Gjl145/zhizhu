@@ -176,6 +176,9 @@ public static class SilkSwingUnitStage
         go.transform.localScale = size;
         go.transform.rotation = Quaternion.identity;
 
+        // 标记组件：靠它识别归属（名字前缀已足够，但仍加上更保险）
+        go.AddComponent<SwingUnitMarker>();
+
         var mr = go.GetComponent<MeshRenderer>();
         if (mr == null) return;
         Shader sh = Shader.Find("Universal Render Pipeline/Lit");
@@ -193,66 +196,70 @@ public static class SilkSwingUnitStage
         mr.material = mat;
     }
 
-    /// <summary>放一个锚点（可钩挂点）。名字统一带 SwingUnit 前缀，
-    /// 这样 <see cref="Clear"/> 只删自己这套的，不会误删其他关卡的锚点。</summary>
+    /// <summary>
+    /// 放一个锚点（可钩挂点）。
+    ///
+    /// 【★ 极简：视觉全部由 AnchorPoint.Setup() 处理】
+    ///
+    /// 初版我在 Setup 之后又AddComponent 了 MeshFilter / MeshRenderer，
+    /// 结果：
+    ///   · 同一物体上有**两个** MeshFilter，两个渲染器 -> 视觉混乱
+    ///   · 且 Setup() 内第 524 行会把物体名改成 "Anchor_" + type，
+    ///我给的前缀被覆盖 -> Clear() 按前缀删不到它们
+    ///
+    /// Setup() 已经做了：MeshFilter(内置球网格) / MeshRenderer(共享材质)
+    /// / localScale / SphereCollider / 自发光。这里只需调它。
+    /// </summary>
     static void AnchorAt(string tag, Vector3 pos)
     {
         var go = new GameObject("SwingUnit_Anchor_" + tag);
         go.transform.position = pos;
 
+        // 标记组件：Setup 会覆盖名字，靠它识别归属（见 Clear 的注释）
+        go.AddComponent<SwingUnitMarker>();
+
         var anchor = go.AddComponent<AnchorPoint>();
+        // Setup 会处理网格、材质、碰撞体、自发光，并重命名物体为Anchor_xxx。
+        // 这里**不再**重复 AddComponent(MeshFilter/MeshRenderer)——
+        //   否则同一物体上有两个 MeshFilter / 两个渲染器，视觉会乱。
         anchor.Setup(pos, Vector3Int.RoundToInt(pos), AnchorType.Wall);
 
-        /* ★ 视觉球：用 AnchorPoint自带的 Mesh 属性。
-         *
-         * 【踩过的坑】原先写的是「建一个临时球，取它的 Mesh，然后 Destroy」：
-         *     var tmp = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-         *     mf.sharedMesh = tmp.GetComponent<MeshFilter>().sharedMesh;
-         *     Object.Destroy(tmp);
-         * Unity 的 Destroy 是**延迟销毁**（本帧末才真正销毁），
-         * 所以严格来说 tmp 那一刻还在 —— 但这写法极其脆弱：
-         * 一旦 CreatePrimitive 返回 null（编辑器里某些情况）就NullReference，
-         * 而 Create() 崩了 -> 整个关卡没建出来 -> 画面全空。
-         *
-         * AnchorPoint.Mesh 内部用 Resources.GetBuiltinResource 取内置网格，
-         * 不创建任何临时物体，稳定性高得多。
-         * 锚点小球只是视觉，可有可无，出错时宁可没有也不能崩掉整个关卡。*/
-        var mf = go.AddComponent<MeshFilter>();
-        var mesh = AnchorPoint.Mesh;
-        if (mesh != null) mf.sharedMesh = mesh;
-
-        var mr = go.AddComponent<MeshRenderer>();
-        Shader sh = Shader.Find("Universal Render Pipeline/Lit");
-        if (sh == null) sh = Shader.Find("Standard");
-        if (sh == null) sh = Shader.Find("Sprites/Default");
-        if (sh != null)
-        {
-            var col = new Color(1f, 0.85f, 0.25f);
-            var mat = new Material(sh) { color = col };
-            if (mat.HasProperty("_EmissionColor"))
-            {
-                mat.EnableKeyword("_EMISSION");
-                mat.SetColor("_EmissionColor", col * 0.8f);
-            }
-            mr.material = mat;
-        }
+        // 放大锚点球，让远距离也能看见（Setup 里用的是 VisualScale）
         go.transform.localScale = Vector3.one * 2.4f;
     }
 
-    /// <summary>移除关卡物件。只删本套（统一前缀 SwingUnit_）。</summary>
+    /// <summary>
+    /// 移除本关卡物件。
+    ///
+    /// 【★ 为什么用组件标记而不是名字】
+    /// `AnchorPoint.Setup()`（SilkBuilder.cs 第 524 行）会把物体重命名为
+    /// "Anchor_" + type + "_" + voxel —— 前缀被吃掉。
+    /// 而原版网格生成的墙锚点**也叫** Anchor_Wall_xxx
+    ///（SilkBuilder.cs 第 1375 行附近建BreakNode 与网格锚点），
+    /// 若按名字前缀删除会**误删原版网格的锚点**。
+    ///
+    /// 解决：给本关卡的锚点挂一个专属标记组件，Clear 只认它。
+    /// </summary>
     public static void Clear()
     {
         int n = 0;
         foreach (var t in Object.FindObjectsOfType<Transform>())
         {
             if (t == null) continue;
-            if (t.name.StartsWith("SwingUnit_"))
+            bool mine = t.GetComponent<SwingUnitMarker>() != null;
+            if (t.name.StartsWith("SwingUnit_") || mine)
             {
                 Object.Destroy(t.gameObject);
                 n++;
             }
         }
         Debug.Log("[SwingUnit] 已清理 " + n + " 个物件");
+    }
+
+    /// <summary>本关卡物件的标记组件。
+    /// 用它而不是名字来识别，因为 AnchorPoint.Setup() 会覆盖名字。</summary>
+    public class SwingUnitMarker : MonoBehaviour
+    {
     }
 
     static class C

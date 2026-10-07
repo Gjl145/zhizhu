@@ -473,16 +473,15 @@ public class AnchorPoint : MonoBehaviour
 
     static Mesh _mesh;
 
-    /// <summary>锚点的视觉网格（内置球体）。
+    /// <summary>锚点的视觉网格（内置球体），用 Resources 取，不创建临时物体。
     ///
-    /// 【为什么改成 public】外部关卡文件（SilkSwingUnitStage 等）也要用它
-    /// 来给新建的锚点配视觉。原实现是 private static，
-    /// 导致外部只能走「CreatePrimitive 建临时球再取Mesh」的弯路 ——
-    /// 那条路在 CreatePrimitive 返回 null 时会NullReference，
-    /// 一崩就导致整个关卡没建出来（画面全空）。
-    ///
-    /// 内部用 Resources.GetBuiltinResource，不创建临时物体。</summary>
-    public static Mesh Mesh
+    /// 【保持private】曾改成 public 让外部关卡直接用，
+    /// 但后来发现外部其实**只需调用 AnchorPoint.Setup()**
+    /// —— 它内部已经处理了网格/材质/碰撞体/自发光。
+    /// 外部再自己 AddComponent 反而会产生重复的 MeshFilter。
+    /// 故改回 private，避免留下会误用的公开接口。
+    /// </summary>
+    static Mesh Mesh
     {
         get
         {
