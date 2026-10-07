@@ -265,7 +265,25 @@ for i in range(len(plats)):
             err('平台 %s 与 %s 重叠' % (n1, n2))
 ok('关卡几何：无越界、无重叠（%d 块平台）' % len(plats))
 
-basic = [n for n in sorted(B.keys()) if not re.match(r'Plat_[45]', n)]
+# 基础区 = 「沿 +X 前进且 y 与起点邻近」的那几段。
+# 【踩过的坑】曾写 Plat_[45] 排除进阶区，但平台名是 "4_钩爪高台"，
+# Plat_ 前缀是 Plat() 内部加的、不在 B 的键里 -> 过滤失效，
+# 把进阶区也算进路线检查，报出「落差 28 格超过跳跃上限」的假错误。
+# 现在改用「y 方向是否与基础区重叠」来判断，更本质 ——
+# 进阶区在 y 上错开，无论它叫什么都不会混进来。
+start_y = None
+_plat0 = [n for n in B if n.startswith('0_')]
+if _plat0:
+    start_y = (B[_plat0[0]][1][0] + B[_plat0[0]][1][1]) / 2
+
+basic = []
+for n in sorted(B.keys()):
+    y0, y1 = B[n][1]
+    # 与基础区 y 范围完全分离 -> 独立区段（进阶区），跳过
+    if start_y is not None and (y1 < start_y - 20 or y0 > start_y + 20):
+        continue
+    basic.append(n)
+
 apex = jv * jv / (2 * g)
 reach = sp * airtime
 for i in range(len(basic) - 1):
@@ -276,7 +294,40 @@ for i in range(len(basic) - 1):
         err('%s->%s 落差 %.1f 超过跳跃上限 %.1f' % (a, b, dz, apex))
     if gap > reach:
         err('%s->%s 间隙 %.1f 超过跳跃跨度 %.0f' % (a, b, gap, reach))
-ok('基础区路线可通关（跳跃上限 %.1f 格 / 跨度 %.0f 格）' % (apex, reach))
+ok('基础区路线可通关（%d 段，跳跃上限 %.1f 格 / 跨度 %.0f 格）'
+   % (len(basic), apex, reach))
+
+# ---------- 9b. 平台宽度 vs 球直径（比例检查）----------
+# 参考视频 2：「前期未能建立正确的比例，后续修改成本极高」。
+# 球直径 = 2 × visualRadius。基础区平台若窄于球径，玩家会卡住 ——
+# 本项目曾出现「窄道 8 格 vs 球直径 9 格」的荒谬比例。
+BASIC_RE = re.compile(r'Plat_\d')      # 只查基础区（0/1/2/3...）
+WARN_RATIO = 1.3                        # 低于 1.3 倍球径即警告
+for n, c, sz in plats:
+    if not BASIC_RE.match('Plat_' + n):
+        continue
+    if re.match(r'Plat_[45]', n):        # 4/5 是进阶区，不参与
+        continue
+    width = min(sz[0], sz[1])# 取较小的那个水平尺寸
+    ratio = width / (rad * 2)
+    if ratio < WARN_RATIO:
+        err('%s 宽 %.0f 格 = %.2f 倍球径 —— 窄于球的宽度，玩家会卡住/需要精确控制'
+            % (n, width, ratio))
+    elif ratio < 1.05:
+        err('%s 宽 %.0f 格 = %.2f 倍球径 —— 球几乎塞不进' % (n, width, ratio))
+ok('平台宽度均≥ %.1f 倍球径（球径 %.0f 格）' % (WARN_RATIO, rad * 2))
+
+# ---------- 9c. 掉落兜底是否存在 ----------
+# 没有掉落兜底时，玩家掉出关卡会无限下坠、永远回不来 ——
+# 对基础关卡是致命的（参考视频：「失败要快、重生要快」）。
+if 'fallRespawnZ' not in s:
+    err('缺少掉落自动重生机制（fallRespawnZ）—— 玩家掉下去会永远回不来')
+elif 'CheckFallRespawn' not in s:
+    err('定义了 fallRespawnZ 但没有调用点 —— 掉落不会触发重生')
+else:
+    m = re.search(r'public float fallRespawnZ = (-?[\d.]+)f;', s)
+    z = float(m.group(1)) if m else None
+    ok('掉落自动重生已接入（触发线 z=%.0f）' % z)
 
 # ---------- 11. 跨文件类型引用（防 CS0103）----------
 # 改名类时最容易漏：文件里的类叫 A，调用处还写旧名 B -> CS0103。

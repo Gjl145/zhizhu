@@ -3664,6 +3664,7 @@ public class SilkParkourController : MonoBehaviour
         {
             HandleKeys();
             TickDashCooldown(dt);   // 冲刺冷却与物理同频递减
+            CheckFallRespawn();     // 掉出关卡自动回起点（必须在移动之后判断）
 
             /* 【调度重构】移动不再依赖 isFlying。
              *
@@ -4761,16 +4762,7 @@ public class SilkParkourController : MonoBehaviour
 
         if (Input.GetKeyDown(KeyCode.R))
         {
-            DoRelease();
-            transform.position = startPosition;
-            flightVel = Vector3.zero;
-            flatVel = Vector3.zero;   // 地面速度也要清，否则带着上一世界的惯性
-            vertVel = 0f;         // 垂直速度同理
-            grounded = false;
-            ResetDashState();
-            isFlying = true;
-            if (builder != null) builder.CancelPendingNode();
-            FollowCamera();
+            RespawnAtStart("玩家按 R");
         }
 
         // 右键：取消待连线的起点
@@ -4807,6 +4799,66 @@ public class SilkParkourController : MonoBehaviour
         Debug.Log("[Parkour] 已固化节点 " + node.position +
                   "（当前线 " + builder.Lines.Count + " 条）");
     }
+
+    /// <summary>
+    /// 回到起点并清空所有速度与状态。
+    ///
+    /// 【为什么要抽成方法】原先这段逻辑内联在 R 键处理里，
+    /// 但「掉落自动重生」也需要完全相同的一整套清理 ——
+    /// 若复制一份，将来加新状态时必然漏改其中一处
+    /// （本项目已因「重置漏清垂直状态」踩过坑）。
+    /// </summary>
+    void RespawnAtStart(string reason)
+    {
+        DoRelease();
+        transform.position = startPosition;
+
+        // 四种速度/状态全清 —— 任何一项残留都会导致刚重生就异常：
+        //   flightVel  飞行惯性 -> 带着上一段的速度冲出起点
+        //   flatVel    地面速度 -> 同上
+        //   vertVel    垂直速度 -> 卡在跳跃中或悬空
+        //   grounded   接地标志 -> 空中能误跳
+        flightVel = Vector3.zero;
+        flatVel = Vector3.zero;
+        vertVel = 0f;
+        grounded = false;
+        ResetDashState();       // 冲刺冷却
+        isFlying = true;
+
+        if (builder != null) builder.CancelPendingNode();
+        FollowCamera();
+
+        if (verboseFireLog) Debug.Log("[Respawn] " + reason);
+    }
+
+    /// <summary>掉出关卡时自动重生。
+    ///
+    /// 【为什么必须有】原先没有任何掉落兜底 —— 玩家从窄道掉下去后
+    /// 会无限下坠，**永远回不到关卡**，只能重启程序。
+    /// 对基础关卡来说这是致命的：参考视频反复强调
+    /// 「失败要快、重生要快，鼓励不断尝试」，
+    /// 连幽灵行者的做法都是「死亡瞬间重生、失败不惩罚」。
+    ///
+    /// 触发线取「内墙底部再往下 20 格」——
+    /// 内墙范围是 ±50，平台顶面在 -30 左右，
+    /// 掉到 -70 就说明已经彻底离开关卡，此时拉回起点最合理。
+    /// </summary>
+    void CheckFallRespawn()
+    {
+        if (transform.position.z > fallRespawnZ) return;
+
+        if (verboseFireLog)
+            Debug.Log("[Respawn] 掉出关卡（z=" +
+                      transform.position.z.ToString("F1") + " < " +
+                      fallRespawnZ.ToString("F0") + "），自动回起点");
+        RespawnAtStart("掉落自动重生");
+    }
+
+    [Tooltip("掉到比这个高度更低就自动回起点（格）。"
+        + "内墙范围 ±50、平台顶面约 -30，取 -70 意味着"
+        + "「已彻底离开关卡」，此时重生最合理。"
+        + "设为正数可关闭该功能")]
+    public float fallRespawnZ = -70f;
 
     /// <summary>
     /// 要求玩家当前处于「空中」才允许发射钩爪。
