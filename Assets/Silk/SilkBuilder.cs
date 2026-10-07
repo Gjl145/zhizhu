@@ -4485,7 +4485,11 @@ public class SilkParkourController : MonoBehaviour
     [Tooltip("地面减速度（格/秒²）。略低于加速度，松开后有短暂余韵")]
     public float groundDecel = 420f;
 
-    [Tooltip("按住左Shift 的速度倍率。1.8 × 50 = 90 格/秒，属于快跑档位")]
+    [Tooltip("按住左 Shift 的速度倍率（加速跑）。\n"
+        + "★ 与冲刺共用左 Shift，这是**有意为之**：\n"
+        + "   按下瞬间 -> 冲刺给一个瞬时速度冲量（DoDash）\n"
+        + "   按住期间 -> 持续加速到 moveSpeed × 本倍率\n"
+        + "两者叠加手感连贯：先「弹」出去，再「推」着走。")]
     public float sprintMultiplier = 1.8f;
 
     [Tooltip("超出 moveSpeed 的动量每秒衰减多少（格/秒）。"
@@ -4634,16 +4638,16 @@ public class SilkParkourController : MonoBehaviour
     bool grounded = true;
 
     /// <summary>
-    /// 空格：**上下文感知** —— 地面跳 / 空中抓丝线。
+    /// ⚠ **当前无调用点**（键位精简后未接线）—— 保留待用。
     ///
-    /// 【为什么这样分工】
-    /// 蜘蛛侠2 的空格是上下文键：地面按是普通跳，空中按是抓蛛丝。
-    /// 本作复刻这个设计，因为玩家在地面跑酷时最需要的���普通跳跃」，
-    /// 而抓丝线只在空中才需要。
+    /// 【原职责】空格作为上下文键：地面跳 / 空中抓丝线。
+    /// 【为何不再接线】用户精简键位时明确「空格只保留跳跃」，
+    /// 空中抓线改由**左键**承担（与发射同一套自动瞄准，语义更统一）。
     ///
-    /// 注意与旧版的区别：原来空格统一是「抓/放」，
-    /// 地面按空格会去TryGrab 找附近的丝线 —— 地面上没有丝线可抓，
-    /// 结果就是「按了没反应」，玩家自然会觉得「没有跳跃键」。
+    /// 【何时重新启用】若日后想让空中能「抓已有的丝线」而不是发射新线，
+    /// 把调用点加回 HandleKeys 即可（前提是再引入一个独立按键）。
+    ///
+    /// 依赖：<see cref="TryGrab"/>。
     /// </summary>
     void HandleJumpOrGrab()
     {
@@ -4814,44 +4818,57 @@ public class SilkParkourController : MonoBehaviour
     /* ---------- 按键 ---------- */
     void HandleKeys()
     {
-        /* 空格：**上下文感知**（蜘蛛侠2 的做法）
-         *   地面按-> 普通跳跃
-         *   空中按 -> 抓丝线（自动瞄准）
+        /* ============================================================
+         *  跑酷世界按键表（经用户精简，2026-10-07）
+         * ============================================================
+         *   WASD / QE  移动 / 升降
+         *   空格跳跃
+         *   鼠标左键   发射丝线（必须在空中）
+         *   鼠标右键   松开丝线
+         *   左 Shift   冲刺（按住则持续加速）
+         *   C          固化当前位置为节点
+         *   R          回起点
+         *   Tab        切换 FreeFly / Parkour
+         *   鼠标移动   改变视角（无需按键）
          *
-         * 【为什么要改】原来空格统一是「抓/放」。但地面上没有丝线可抓，
-         * 玩家在平台跑酷时按空格会去TryGrab 找附近的线 —— 结果「按了没反应」，
-         * 自然会觉得「没有跳跃键」。这是键位设计问题，不是 bug。
-         *
-         * 松手改用 G（与「断视线中心的线」分工）：
-         *   G = 断线（原本就有）
-         *   Shift 或右键 = 松手
-         */
-        if (Input.GetKeyDown(KeyCode.Space))
-        {
-            HandleJumpOrGrab();
-        }
+         *  【已按用户要求移除】
+         *   B  斜上发射 —— 与左键功能重叠
+         *   V  结网     —— 暂不需要
+         *   X  断自发线 —— 断裂不归玩家控制
+         *   G  断视线线 —— 同上
+         *  上述方法体均**保留**（未删），只是不再有调用点，
+         *  日后若要恢复玩法直接加回调用即可。
+         * ============================================================ */
 
-        // 抓着丝线时按 Shift松手（蜘蛛侠2 里松手是独立操作）
-        if (Input.GetKeyDown(KeyCode.LeftShift) && grabbed != null)
-        {
-            DoRelease();
-        }
+        /* 空格：**只保留跳跃**。
+         * 原先是上下文键（地面跳 / 空中抓丝线），用户精简时明确只要跳跃。
+         * 空中抓线若日后需要，用左键（与发射同一套自动瞄准）。*/
+        if (Input.GetKeyDown(KeyCode.Space)) DoJump();
 
-        /* 右 Shift：冲刺（Dash）—— 瞬时速度冲量，地面/空中都能用。
+        /* 左 Shift：冲刺（Dash）——瞬时速度冲量，地面/空中都能用。
          *
-         * 【为什么用右 Shift 而不是左 Shift】
-         * 左 Shift 已经是「加速跑」+「抓着丝线时松手」两用。
-         * 若冲刺也用它，一个按键会有三种语义，逻辑上互相打架。
-         * 左右手分离是《蜘蛛侠2》等动作游戏的惯例，也更符合直觉。
+         * 【为什么用左 Shift】原本左 Shift 是「加速跑」+「松手」两用、
+         * 右 Shift 才是冲刺。用户精简后要求「Shift 保留冲刺就够了」，
+         * 于是统一到左 Shift，一个键一种语义。
          *
-         * 【空中冲刺的额外价值】
-         * 摆荡时想「拉高一点再松手」就需要上冲的��量 ——
-         * 只给水平冲量是不够的，故空中会额外附加 dashLift 的上升速度。*/
-        if (Input.GetKeyDown(KeyCode.RightShift)) DoDash();
+         * 【按住 Shift 时仍会加速跑】那是 moveSpeed × sprintMultiplier 的
+         * 持续加速（见 UpdateFreeMove），与按下瞬间的冲刺冲量叠加，
+         * 手感连贯：先「弹」出去，再「推」着走。*/
+        if (Input.GetKeyDown(KeyCode.LeftShift)) DoDash();
 
-        /* 左键：**自动瞄准**并抓住最优锚点（不再需要玩家点选）。
-         * 详见 FireAtAnchor / PickBestAnchor 的注释 ——
-         * 手动点击在 100³ 网格 + 高速移动下几乎不可用。
+        /* 鼠标右键：松开丝线。
+         *
+         * 【为什么用右键】参考《消逝的光芒2》——右键松手是动作游戏惯例。
+         * 且右键拖拽转视角与滚轮缩放都只在 FreeFly 分支生效，
+         * 在跑酷世界本来空着，正好拿来用。*/
+        if (Input.GetMouseButtonDown(1)) DoRelease();
+
+        /* 鼠标左键：**自动瞄准**并发射丝线（不再需要玩家点选）。
+         * 详见 FireAtAnchor / PickBestAnchor 的注释——
+         * 手动点击在100³ 网格 + 高速移动下几乎不可用。
+         *
+         * 【本作是「丝线」不是钩爪】玩家发射的是蛛丝，
+         * 末端连到锚点后可以摆荡。
          *
          * 【必须在空中才能发射 —— 参考《消逝的光芒2》的操作契约】
          * 官方操作说明原文：「**在跳跃过程中**按 L2/LT 释放抓钩，
@@ -4859,29 +4876,12 @@ public class SilkParkourController : MonoBehaviour
          *
          * 为什么这条约束重要：它让每次发射都对应一次**主动的跳跃决策**。
          * 若允许站在平台上手指发射，玩家就会退化成「站在原地按左键」，
-         * 摆荡的节奏感（起跳→勾住→摆→松手→再起跳）完全消失 ——
+         * 摆荡的节奏感（起跳→勾住→摆→松手→再起跳）完全消失——
          * 那正是消光2 与我们当前最大的体感差别。*/
         if (Input.GetMouseButtonDown(0) && RequireAirborne("左键"))
             FireAtAnchor();
 
-        // B：蜘蛛侠式发射（斜上勾住并摆荡）—— 走另一条路径
-        // 同样遵守「空中才能发射」的契约（见 RequireAirborne）
-        if (Input.GetKeyDown(KeyCode.B) && RequireAirborne("B 键斜上发射"))
-            TryFireAndHook();
-
-        // X：断开自己发射的第一根丝线
-        // X = 断自己发射的线（Parkour 世界专属；
-        // FreeFly 世界的 X 是「老化」，两者语义不同，各自独立声明）
-        if (Input.GetKeyDown(KeyCode.X)) CutFirstFiredLine();
-
-        // G = 断「视线指向」的丝线（Parkour 世界的划断操作）
-        if (Input.GetKeyDown(KeyCode.G)) CutLineUnderCrosshair();
-
         /* C：把**当前所在位置**固化成玩家节点。
-         *
-         * 「固化当前位置为节点」此前按用户要求暂不接线，后端
-         * ExecutePinNode / CreateAnchorAt / MarkAsPlayerNode 已完整可用，
-         * 这里接上即可。
          *
          * 语义（与两个世界约定一致）：固化的是「玩家此刻悬停的那个点」，
          * 位置取球的当前位置由 CreateAnchorAt 吸附到网格并做 5 格去重
@@ -4891,22 +4891,10 @@ public class SilkParkourController : MonoBehaviour
          * 既能作为后续发射/摆荡的挂点，也能被静态丝线连起来结网。*/
         if (Input.GetKeyDown(KeyCode.C)) PinCurrentNode();
 
-        /* V：把已固化的节点两两连起来（静态结网）。
-         * 后端 TrySpanNodes 早已实现，此处接线。
-         *
-         * 用途：玩家在空中用 C 固化几个节点后，按 V 就能把它们连成网 ——
-         * 这是「自己构建挂点网络」的能力，也是本作的核心玩法之一
-         * （用户原话：构建静态丝线，方便结网）。*/
-        if (Input.GetKeyDown(KeyCode.V)) TrySpanNodes();
-
         if (Input.GetKeyDown(KeyCode.R))
         {
             RespawnAtStart("玩家按 R");
         }
-
-        // 右键：取消待连线的起点
-        if (Input.GetMouseButtonDown(1) && builder != null && builder.HasPendingNode)
-            builder.CancelPendingNode();
     }
 
     /// <summary>

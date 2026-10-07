@@ -148,11 +148,15 @@ for idx in range(len(decls) - 1):
 ok('无重复方法定义（CS0111），已按类区间精确切分')
 
 # ---------- 7. 关键方法的调用点存在性 ----------
-must_call = ['ResolveGround', 'HandleJumpOrGrab', 'PickBestAnchor', 'DoJump',
+must_call = ['ResolveGround', 'PickBestAnchor', 'DoJump',
              'AdoptFlightMomentum', 'ApplyRotation', 'HandleLookOnly',
              'OrbitAround', 'ConnectForParkour', 'ClearRenderClaim',
+             'DoDash', 'DoRelease', 'RequireAirborne', 'CheckFallRespawn',
              # 诊断类也要检查 —— 曾因移出 LateUpdate 而变成死代码
-             'ScanHealth', 'ScanRenderers', 'ScanDuplicates', 'ScanDuplicates']
+             'ScanHealth', 'ScanRenderers', 'ScanDuplicates']
+# 注：HandleJumpOrGrab / TryGrab / TrySpanNodes / TryFireAndHook /
+#     CutFirstFiredLine / CutLineUnderCrosshair 已按用户要求解除绑定
+#     （键位精简），它们保留但无调用点，故不列入本清单。
 for name in must_call:
     n = len(re.findall(r'\b' + name + r'\s*\(', s))
     if n < 2:
@@ -511,6 +515,60 @@ if bad:
             seen.add(b)
 else:
     ok('无跨类字段直接访问（%d 个类的字段均通过实例访问）' % len(CLASS_FIELDS))
+
+# ---------- 15. 跑酷世界键位表（防误改）----------
+# 【用户 2026-10-07 精简后的最终键位】
+#   WASD/QE 移动升降 / 空格 跳跃 / 左键 发射丝线 / 右键 松开丝线
+#   左Shift 冲刺 / C 固化节点 / R 回起点 / Tab 切模式 / 鼠标移动 转视角
+# 【已移除】B 斜上发射、V 结网、X 断自发线、G 断视线线
+#
+# 检查方式：只扫HandleKeys 方法体（跑酷世界的按键都在这里），
+# 确认已移除的键不再出现，且保留的键都在。
+_hk = re.search(r'void HandleKeys\(\)\s*\{(.*?)\n    \}', s, re.S)
+if not _hk:
+    err('找不到 HandleKeys —— 键位检查无法进行')
+else:
+    body_hk = _hk.group(1)
+    #剥注释，避免注释里提到键名被误判
+    blank = lambda t: re.sub(r'[^\n]', ' ', t)
+    code_hk = re.sub(r'/\*.*?\*/', lambda mm: blank(mm.group(0)),
+                     body_hk, flags=re.S)
+    code_hk = re.sub(r'//[^\n]*', lambda mm: blank(mm.group(0)), code_hk)
+
+    MUST_HAVE = {
+        'KeyCode.Space': '空格=跳跃',
+        'KeyCode.LeftShift': '左Shift=冲刺',
+        'KeyCode.C': 'C=固化节点',
+        'KeyCode.R': 'R=回起点',
+    }
+    MUST_NOT = {
+        'KeyCode.B': 'B 斜上发射（已移除）',
+        'KeyCode.V': 'V 结网（已移除）',
+        'KeyCode.X': 'X 断自发线（已移除）',
+        'KeyCode.G': 'G 断视线线（已移除）',
+        'KeyCode.RightShift': '右 Shift（已并入左 Shift）',
+    }
+    miss = []
+    for k, d in MUST_HAVE.items():
+        if k not in code_hk:
+            miss.append('缺少 %s' % d)
+    if miss:
+        for d in miss:
+            err(d)
+    left = [d for k, d in MUST_NOT.items() if k in code_hk]
+    if left:
+        for d in left:
+            err('已移除的键仍在 HandleKeys 里：%s' % d)
+    if not miss and not left:
+        ok('跑酷键位符合精简后的约定（%d 个必备键，无已移除键）'
+           % len(MUST_HAVE))
+    # 右键必须是「松手」而不是旧的「取消待连线」
+    if 'GetMouseButtonDown(1)) DoRelease()' in code_hk.replace(' ', ' '):
+        ok('鼠标右键 = 松开丝线')
+    elif 'GetMouseButtonDown(1)' in code_hk:
+        err('鼠标右键有绑定，但不是 DoRelease —— 期望右键用于松手')
+    if 'GetMouseButtonDown(0)' in code_hk:
+        ok('鼠标左键 = 发射丝线')
 
 # ---------- 汇总 ----------
 print()
