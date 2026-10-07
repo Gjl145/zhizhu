@@ -647,12 +647,44 @@ else:
         ok('跑酷键位符合精简后的约定（%d 个必备键，无已移除键）'
            % len(MUST_HAVE))
     # 右键必须是「松手」而不是旧的「取消待连线」
-    if 'GetMouseButtonDown(1)) DoRelease()' in code_hk.replace(' ', ' '):
+    if 'GetMouseButtonDown(1)) DoRelease()' in code_hk:
         ok('鼠标右键 = 松开丝线')
     elif 'GetMouseButtonDown(1)' in code_hk:
         err('鼠标右键有绑定，但不是 DoRelease —— 期望右键用于松手')
     if 'GetMouseButtonDown(0)' in code_hk:
         ok('鼠标左键 = 发射丝线')
+
+    # ---------- 15b. ★ 硬约束：禁止擅自新增按键 ----------
+    # 【用户硬约束，原话】
+    #   「保持现在的按键不变。其他的，包括之后我不明白说明的情况下
+    #     不准再新增加按键。」
+    # 一旦有人给HandleKeys 加了新键，这一项会立刻报错。
+    _hk2 = re.search(r'void HandleKeys\(\)\s*\{(.*?)\n    \}', s, re.S)
+    if _hk2:
+        _blank2 = lambda t: re.sub(r'[^\n]', ' ', t)
+        _code2 = re.sub(r'/\*.*?\*/', lambda mm: _blank2(mm.group(0)),
+                        _hk2.group(1), flags=re.S)
+        _code2 = re.sub(r'//[^\n]*', lambda mm: _blank2(mm.group(0)), _code2)
+
+        # 允许出现在 HandleKeys 里的键（=已定稿的 8 个）
+        ALLOWED = {
+            'KeyCode.W', 'KeyCode.A', 'KeyCode.S', 'KeyCode.D',
+            'KeyCode.Q', 'KeyCode.E',
+            'KeyCode.Space', 'KeyCode.LeftShift',
+            'KeyCode.C', 'KeyCode.R', 'KeyCode.Tab',
+            'GetMouseButtonDown(0)', 'GetMouseButtonDown(1)',
+        }
+        found = set(re.findall(r'KeyCode\.\w+', _code2))
+        found |= set(re.findall(r'GetMouseButton(?:Down)?\(\d+\)', _code2))
+        extra = sorted(found - ALLOWED)
+        if extra:
+            for e in extra:
+                err('★ HandleKeys 里出现了未经批准的按键：%s\n'
+                    '     用户硬约束「不准再新增加按键」。\n'
+                    '     若确需新键，必须先问用户 —— 它同时也在 must_call 检查之外，'
+                    '很可能是有意不接线的保留方法。' % e)
+        else:
+            ok('键位未擅自新增（%d 个已定稿键，无越界）' % len(found))
 
 # ---------- 16. 速度类参数的比例一致性 ----------
 # 【为什么会失衡】用户把moveSpeed 砍半时，若只改它一个，
