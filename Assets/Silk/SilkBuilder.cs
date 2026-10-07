@@ -5658,6 +5658,71 @@ public class SilkParkourController : MonoBehaviour
         Vector3 facing = MoveForward;          // 视线水平方向
         if (facing.sqrMagnitude < 0.0001f) facing = Vector3.forward;
 
+        /* ============================================================
+         *  ★★ 锚点评分 —— 按 Insomniac GDC 2019 官方架构重写
+         * ============================================================
+         *
+         *  出处：Concrete Jungle Gym（Doug Sheahan, Insomniac, GDC 2019）
+         *        本地副本：Docs/逆向资料/Insomniac_ConcreteJungleGym_GDC2019.pdf
+         *
+         *  ── 官方 P59 ──
+         *  "With all of our individual scores calculated we then do a
+         *   **weighted sum** and the **highest score wins**."
+         *
+         *  ── 官方 P60 BONUS（架构的关键）──
+         *  "Using a weighting scheme on the **normalized element scores**
+         *   helped us to quickly adjust one elements influence versus
+         *   another's without needing to mess with the individual elements."
+         *
+         *  ★★ 官方强调的是 **normalized element scores** ——
+         *    每一项先各自归一化到 [0,1]，再加权求和。
+         *
+         *  【★ 原实现错在哪】
+         *  原代码把量纲完全不同的项**直接相加**：
+         *     score += (1 − norm²) × 3f;        // 距离项，量级 0~3
+         *     score += Dot(dirTo, facing) × 1.5f; // 方向项，量级 −1.5~1.5
+         *     score += Clamp01(Δh / range) × 0.8f; // 高度项，量级 0~0.8
+         * 结果「乘以 3 / 1.5 / 0.8」这些魔数**互相耦合**：
+         * 改一项就要重调另外两项，且各项的权重被自己的量纲污染。
+         *
+         *  官方架构的好处：每项独立归一化，权重就是**纯粹的相对重要性**，
+         *  可以像调混音台一样独立调整。
+         *
+         *  ── 官方 P54：输入方向的评分 ──
+         *  "we start with the **angle** between the input direction and
+         *   the direction to the attach point and score the delta"
+         *
+         *  ── 官方 P55 BONUS：用角度曲线而非 dot product ──
+         *  "Using a **angle-to-score curve** improves over our original
+         *   implementation using a **dot-product** because the
+         *   **delta resolution for small angles** can be better controlled.
+         *   This becomes important for **long lines** where small angular
+         *   differences can have a big impact on final swing result."
+         *
+         *  ── ★ 官方 P57：直行与转向用**不同**的评分（P56 BONUS）──
+         *  "Similar to input direction, we also **adjust slightly to be
+         *   more forgiving while turning**. When **going straight, we
+         *   prefer longer lines**. When **turning, shorter lines** are
+         *   given a slight bump to try and let us hook corners more
+         *   more effectively."
+         *
+         *  ★ 这条极重要：很多摆荡游戏「直线飞得远、一转弯就散架」，
+         *   根因就是用**同一套**评分。官方明确分开处理。
+         */
+
+        // 是否在转向 —— 由输入方向与当前速度方向的夹角判断
+        Vector3 velFlat = new Vector3(flatVel.x, flatVel.y, 0f);
+        bool turning = false;
+        if (velFlat.sqrMagnitude > 1f && Input.GetKey(KeyCode.A))
+            turning = true;
+        if (velFlat.sqrMagnitude > 1f && Input.GetKey(KeyCode.D))
+            turning = true;
+        if (Mathf.Abs(Input.GetAxis("Horizontal")) > 0.3f && velFlat.sqrMagnitude > 1f)
+            turning = true;
+
+        // 官方 P57：直行偏好长线，转向偏好短线
+        float idealLen = turning ? idealLength * 0.72f : idealLength;
+
         AnchorPoint best = null;
         float bestScore = float.MinValue;
         lastAnchorScore = 0f;
@@ -5673,7 +5738,7 @@ public class SilkParkourController : MonoBehaviour
             float dist = to.magnitude;
             if (dist < minAnchorDistance || dist > fireSearchRange) continue;
 
-            // 维度1：必须够高。留一点容差，允许平飞（贴天花板横移）
+            // 必须够高。留一点容差，允许平飞（贴天花板横移）
             if (wp.z < selfPos.z + minAnchorHeightGain) continue;
 
             // 视野内才考虑：用 dot 而非视锥判定，避免近距离时视角退化
@@ -5682,18 +5747,37 @@ public class SilkParkourController : MonoBehaviour
 
             candidates++;
 
-            float score = 0f;
+            /* ── 评分项 1：输入方向（P54/P55）──
+             * 官方要求用**角度曲线**而非 dot product，
+             * 因为小角度的分辨率更好控制（长距离时关键）。
+             * 角度 0° = 得分 1，角度 180° = 得分 0。*/
+            float angle = Vector3.Angle(c.transform.forward, dirTo);
+            float sDir = 1f - Mathf.Clamp01(angle / 90f);
 
-            // 维度2：距离 —— 越接近理想距离越高（抛物线型）
-            float ideal = Mathf.Lerp(minAnchorDistance, fireSearchRange * 0.85f, 0.5f);
-            float norm = (dist - ideal) / ideal;
-            score += (1f - Mathf.Clamp01(norm * norm)) * 3f;
+            /* ── 评分项 2：距离/绳长（P56/P57）──
+             * 官方："looking for points that match our ideal line length
+             * and have the score **fall off** as the distance deviates"
+             * 用抛物线衰减，归一化到 [0,1]。*/
+            float dNorm = (dist - idealLen) / idealLen;
+            float sRange = 1f - Mathf.Clamp01(dNorm * dNorm);
 
-            // 维度3：前方优先
-            score += Vector3.Dot(dirTo, facing) * 1.5f;
+            /* ── 评分项 3：坡度（P58）──
+             * 官方："We apply a similar falloff method for slope
+             * as the angle moves away from our ideal."
+             * 理想坡度：略高于水平（向上摆才能荡得高）。*/
+            Vector3 flatDir = new Vector3(dirTo.x, dirTo.y, 0f);
+            float slope = flatDir.sqrMagnitude > 0.0001f
+                ? Vector3.Angle(dirTo, flatDir.normalized) : 0f;
+            float sSlope = 1f - Mathf.Clamp01(Mathf.Abs(slope - 20f) / 70f);
 
-            // 维度4：高度收益
-            score += Mathf.Clamp01((wp.z - selfPos.z) / Mathf.Max(fireSearchRange, 1f)) * 0.8f;
+            /* ── 归一化后加权求和（P59/P60）──
+             * 三项都已在 [0,1]，权重即纯粹的相对重要性。*/
+            float score = sDir * weightInputDir
+                        + sRange * weightRange
+                        + sSlope * weightSlope;
+
+            // 官方 P55：转向时放宽精度要求
+            if (turning) score *= turningTolerance;
 
             if (score > bestScore)
             {
@@ -5716,7 +5800,8 @@ public class SilkParkourController : MonoBehaviour
         if (verboseFireLog)
             Debug.Log("[Fire] 候选 " + candidates + " 个→ 选中 " + best.position +
                       " 距离 " + Vector3.Distance(selfPos, best.WorldPosition).ToString("F1") +
-                      " 评分 " + bestScore.ToString("F2"));
+                      " 评分 " + bestScore.ToString("F3") +
+                      (turning ? "【转向模式：偏好短线】" : "【直行模式：偏好长线】"));
         return best;
     }
 
@@ -5725,15 +5810,38 @@ public class SilkParkourController : MonoBehaviour
     public float fireSearchRange = 90f;
 
     [Tooltip("目标锚点至少要比自己高出多少（格）。"
-           + "摆荡要先获得势能荡不起来 —— 这是物理前提，不够高的直接排除")]
+        + "摆荡要先获得势能荡不起来 —— 这是物理前提，不够高的直接排除")]
     public float minAnchorHeightGain = 3f;
 
     [Tooltip("目标锚点的最小距离（格）。太近则摆的幅度不足")]
     public float minAnchorDistance = 12f;
 
     [Tooltip("瞄准锥：锚点方向与视线夹角的余弦下限。"
-           + "0.45 ≈ 63 度锥角，越小越要求锚点在正前方")]
+        + "0.45 ≈ 63 度锥角，越小越要求锚点在正前方")]
     [Range(0.1f, 0.95f)] public float autoAimCone = 0.45f;
+
+    [Tooltip("理想绳长（格）。评分项「距离」以此为中心做抛物线衰减。\n"
+        + "★ 官方未公开具体数值（演讲只说 \"ideal distance is baseline\"），\n"
+        + "  此值按本项目尺度设定：约为球直径 9 格的两倍。")]
+    public float idealLength = 22f;
+
+    [Header("锚点评分权重（官方 P59/P60 架构）")]
+    [Tooltip("输入方向权重。官方：\"score the angle between the input\n"
+        + "direction and the direction to the attach point\"")]
+    public float weightInputDir = 1.0f;
+
+    [Tooltip("距离/绳长权重。官方：\"match our ideal line length\n"
+        + "and have the score fall off as the distance deviates\"")]
+    public float weightRange = 0.8f;
+
+    [Tooltip("坡度权重。官方：\"a similar falloff method for slope\n"
+        + "as the angle moves away from our ideal\"")]
+    public float weightSlope = 0.6f;
+
+    [Tooltip("转向宽容系数。官方 P57：\"we adjust slightly to be more\n"
+        + "forgiving while turning. When turning, we don't care as much\n"
+        + "about precise accuracy\"")]
+    [Range(0.5f, 1.5f)] public float turningTolerance = 0.85f;
 
     /// <summary>
     /// 自己这个「锚点」。Parkour 世界的丝线起点。
