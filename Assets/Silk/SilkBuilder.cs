@@ -472,7 +472,17 @@ public class AnchorPoint : MonoBehaviour
     public Vector3 WorldPosition => transform.position;
 
     static Mesh _mesh;
-    static Mesh Mesh
+
+    /// <summary>锚点的视觉网格（内置球体）。
+    ///
+    /// 【为什么改成 public】外部关卡文件（SilkSwingUnitStage 等）也要用它
+    /// 来给新建的锚点配视觉。原实现是 private static，
+    /// 导致外部只能走「CreatePrimitive 建临时球再取Mesh」的弯路 ——
+    /// 那条路在 CreatePrimitive 返回 null 时会NullReference，
+    /// 一崩就导致整个关卡没建出来（画面全空）。
+    ///
+    /// 内部用 Resources.GetBuiltinResource，不创建临时物体。</summary>
+    public static Mesh Mesh
     {
         get
         {
@@ -4569,6 +4579,19 @@ public class SilkParkourController : MonoBehaviour
             ? builder.parkourStage
             : SilkBuilder.ParkourStageKind.SwingUnit;
 
+        /* ============================================================
+         *  ★ 关卡创建失败时的兜底
+         *
+         *  用户经历：SilkSwingUnitStage.AnchorAt 抛 NullReferenceException
+         *  -> Create() 中断 -> **整个关卡没建出来** -> 画面全空，
+         *  只看到一条异常信息。
+         *
+         *  一个装饰性的锚点小球出问题，不该让整张关卡消失。
+         *  故：先记住 fallback 起点，try 创建，
+         *  失败则退回基础关卡（至少有东西可看）并给出明确提示。
+         * ============================================================ */
+        Vector3 fallbackStart = new Vector3(-30f, 0f, -29.5f);
+
         switch (kind)
         {
             case SilkBuilder.ParkourStageKind.SwingTest:
@@ -4580,8 +4603,18 @@ public class SilkParkourController : MonoBehaviour
                 break;
 
             case SilkBuilder.ParkourStageKind.SwingUnit:
-                SilkSwingUnitStage.Create(h);
-                startPosition = SilkSwingUnitStage.StartPosition;
+                try
+                {
+                    SilkSwingUnitStage.Create(h);
+                    startPosition = SilkSwingUnitStage.StartPosition;
+                }
+                catch (System.Exception e)
+                {
+                    Debug.LogError("[Stage] SwingUnit 关卡创建失败（" + e.Message +
+                                   "），退回基础关卡。原因：" + e);
+                    SilkParkourStage.Create(h);
+                    startPosition = fallbackStart;
+                }
                 break;
 
             default:  // Basic

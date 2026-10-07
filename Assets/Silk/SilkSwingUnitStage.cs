@@ -203,10 +203,23 @@ public static class SilkSwingUnitStage
         var anchor = go.AddComponent<AnchorPoint>();
         anchor.Setup(pos, Vector3Int.RoundToInt(pos), AnchorType.Wall);
 
+        /* ★ 视觉球：用 AnchorPoint自带的 Mesh 属性。
+         *
+         * 【踩过的坑】原先写的是「建一个临时球，取它的 Mesh，然后 Destroy」：
+         *     var tmp = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+         *     mf.sharedMesh = tmp.GetComponent<MeshFilter>().sharedMesh;
+         *     Object.Destroy(tmp);
+         * Unity 的 Destroy 是**延迟销毁**（本帧末才真正销毁），
+         * 所以严格来说 tmp 那一刻还在 —— 但这写法极其脆弱：
+         * 一旦 CreatePrimitive 返回 null（编辑器里某些情况）就NullReference，
+         * 而 Create() 崩了 -> 整个关卡没建出来 -> 画面全空。
+         *
+         * AnchorPoint.Mesh 内部用 Resources.GetBuiltinResource 取内置网格，
+         * 不创建任何临时物体，稳定性高得多。
+         * 锚点小球只是视觉，可有可无，出错时宁可没有也不能崩掉整个关卡。*/
         var mf = go.AddComponent<MeshFilter>();
-        var tmp = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        mf.sharedMesh = tmp.GetComponent<MeshFilter>().sharedMesh;
-        Object.Destroy(tmp);
+        var mesh = AnchorPoint.Mesh;
+        if (mesh != null) mf.sharedMesh = mesh;
 
         var mr = go.AddComponent<MeshRenderer>();
         Shader sh = Shader.Find("Universal Render Pipeline/Lit");
