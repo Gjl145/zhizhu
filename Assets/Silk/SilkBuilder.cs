@@ -1089,6 +1089,9 @@ public class SilkLine
          * 若在它之前设置会被新建覆盖。*/
         EnsureChain(builder);
 
+        // 每次新的摆荡都允许再收缩一次
+        ResetReelIn();
+
         // 通过 chain 解引用：末端不 Drive，让它自由摆动。
         // 这与 Attach 的唯一区别。
         if (chain != null)
@@ -1810,10 +1813,139 @@ public class SilkChain : MonoBehaviour
             drivenVelocity = (want - cur) / dt;
         }
 
-        // 4. 渲染：把物理算出的节点位置写进那一个 SilkSegment。
+        /* ============================================================
+         *  4. ★ 最低点绳长收缩（Reel-In）
+         * ============================================================
+         *
+         * 【为什么需要这一步 —— 对标蜘蛛侠2 / 消逝之光2】
+         *
+         * 纯单摆在数学上**能量守恒**：荡到最高点动能全部转成势能，
+         * 再荡回来势能全部转回动能，**永远荡不高**。
+         * 那为什么蜘蛛侠能越荡越高？
+         *
+         * 因为他在**最低点**（速度最大的瞬间）主动收绳：
+         *     角动量守恒 L = m·v·r = 常数
+         * 半径 r 减小 -> 线速度 v 增大：v' = v × (r / r')
+         * 收缩 20% -> 速度提升 25%。这是「荡得又高又远」的真实机制。
+         *
+         * 【与约束求解器的关系】
+         * 上面的约束求解器**只处理拉伸**（len > rest*(1+maxStrain)），
+         * 明确「松弛时不修正，让重力自然下垂」。
+         * 所以收缩必须在这里**独立实现** —— 通过缩短 restLengths。
+         *
+         * 【为什么不能直接拉末端位置】
+         * 那样会凭空注入能量（位置突变，速度飙升），玩家会被甩飞。
+         * 改 restLengths 是「改变绳子的自然长度」，
+         * 由约束求解器温柔地把末端拉回来 —— 速度增益是物理的，不是伪造的。
+         */
+        ApplyReelIn(dt);
+
+        // 5. 渲染：把物理算出的节点位置写进那一个 SilkSegment。
         //    一根线，形状完全由上面的重力/阻尼/约束决定。
         ApplyNodesToRender();
     }
+
+    /* ---------- 最低点绳长收缩 ---------- */
+
+    /// <summary>
+    /// 荡到最低点时自动收绳，靠角动量守恒换取速度。
+    ///
+    /// 【★ 触发条件：垂直速度接近零】
+    ///
+    /// 【踩过的坑】最初用「末端到锚点的距离 / 总绳长 > 0.92」判断最低点，
+    /// Python 实算证明这是**错的**：
+    ///     单摆过程中绳长恒等于自然长度，dist/totalLen 永远是 1.0，
+    ///     该条件在任何角度都成立 —— 等于没有条件，
+    ///     球在空中乱飞时也会误触发收缩。
+    ///
+    /// 【正确的判据】最低点的物理特征是「速度方向水平」：
+    ///     垂直分量 v.z ≈ 0（此刻重力全部用于改变速度方向，不做功）
+    /// 配合「必须足够快」，才精确对应摆荡的底部。
+    /// </summary>
+    void ApplyReelIn(float dt)
+    {
+        if (reelInRatio <= 0f || nodes.Count < 2 || root == null) return;
+        if (endDriven && endTarget != null) return;   // 被挂载物驱动时不干预
+
+        int last = nodes.Count - 1;
+
+        Vector3 v = velocities[last];
+
+        // 条件 1：速度足够大（没有动能就无从放大）
+        float speed = v.magnitude;
+        if (speed < reelInMinSpeed) return;
+
+        // 条件 2：垂直分量接近 0 —— 即「摆到了最低点」
+        //         用相对阈值：|v.z| / |v| < 0.3 表示速度以水平为主
+        float vRatio = speed > 0.0001f ? Mathf.Abs(v.z) / speed : 1f;
+        if (vRatio > reelInMaxVerticalRatio) return;
+
+        // 条件 3：本次滞空只收缩一次（避免连续收缩把绳缩到极短）
+        if (reeledThisSwing) return;
+
+        /* 执行收缩：按比例缩短每段 restLengths。
+         *
+         * 【为什么不直接拉末端位置】
+         * 那样会凭空注入能量（位置突变，速度飙升），玩家会被甩飞。
+         * 改 restLengths 是「改变绳子的自然长度」，
+         * 由约束求解器温柔地把末端拉回来 —— 速度增益是物理的，
+         * 且下一帧的 a = v²/r 会自然生效，玩家能感到「越荡越快」。
+         *
+         * 均匀收缩以保持弧线形状稳定，避免视觉抖动。*/
+        float totalLen = 0f;
+        for (int i = 0; i < restLengths.Count; i++) totalLen += restLengths[i];
+        if (totalLen < 0.0001f) return;
+
+        float target = totalLen * (1f - reelInRatio);
+        float scale = target / totalLen;
+        for (int i = 0; i < restLengths.Count; i++)
+            restLengths[i] *= scale;
+
+        reeledThisSwing = true;
+        lastReelInAmount = reelInRatio;
+
+        if (verboseFireLog)
+            Debug.Log("[ReelIn] 最低点收缩 " + (reelInRatio * 100f).ToString("F0") +
+                      "%：" + totalLen.ToString("F1") + " → " + target.ToString("F1") +
+                      " 格（末端速度 " + speed.ToString("F0") + " 格/秒，" +
+                      "垂直占比 " + (vRatio * 100f).ToString("F0") + "%，" +
+                      "理论新速度 ≈ " + (speed / scale).ToString("F0") + " 格/秒）");
+    }
+
+    /// <summary>起摆时重置「本次已收缩」标记 —— 每次新的摆荡都能再收缩一次。</summary>
+    void ResetReelIn()
+    {
+        reeledThisSwing = false;
+        lastReelInAmount = 0f;
+    }
+
+    /// <summary>本次滞空是否已收缩过（防止连缩到绳断）。</summary>
+    bool reeledThisSwing = false;
+
+    /// <summary>最近一次收缩的比例（供 UI/调试读取）。</summary>
+    float lastReelInAmount = 0f;
+
+    [Header("最低点收缩")]
+    [Tooltip("荡到最低点时收绳的比例（0 = 关闭，0.15~0.2 推荐）。\n"
+        + "原理：角动量守恒 L = m·v·r，收缩 r 会放大 v。\n"
+        + "  收缩 15% -> 速度 ×1.18，周期缩短 8%\n"
+        + "  收缩 20% -> 速度 ×1.25，周期缩短 11%\n"
+        + "这是《蜘蛛侠2》「越荡越高」的真实机制 ——\n"
+        + "纯单摆能量守恒，永远荡不高，必须靠收绳注入额外动能。\n"
+        + "收缩太猛会让玩家被甩飞，建议从 0.15 试起。")]
+    [Range(0f, 0.4f)] public float reelInRatio = 0.15f;
+
+    [Tooltip("触发收缩所需的最小末端速度（格/秒）。\n"
+        + "速度太低时收缩没有意义（无动能可放大），还会让绳莫名变短。")]
+    public float reelInMinSpeed = 15f;
+
+    [Tooltip("触发收缩的速度垂直占比上限（|v.z| / |v|）。\n"
+        + "「摆到最低点」= 速度方向变为水平，垂直分量≈ 0。\n"
+        + "  0.3 = 速度与水平夹角约 17° 以内算「到底部」（推荐）\n"
+        + "  0.5 = 约 30°，触发更早，收缩更频繁\n"
+        + "★ 曾用「dist/totalLen > 0.92」判断最低点，实算证明是错的 ——\n"
+        + "   单摆全程 dist/totalLen 恒等于 1.0，条件形同虚设。")]
+    [Range(0.05f, 0.9f)] public float reelInMaxVerticalRatio = 0.3f;
 
     /// <summary>把 nodes 的位置写进 LineRenderer 顶点。
     /// 只有一个渲染源，所以永远不会出现「两条线」。</summary>
