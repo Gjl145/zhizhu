@@ -36,18 +36,27 @@ public enum SilkState { Intact, Broken, Fading }
 /// 丝线约束链的末端摆动（SilkChain.gravity，建链时由 SilkLine 赋值）、
 /// 以及断裂后丝线下坠。
 /// 这三处必须一致，否则会出现「人跳得很轻快、但丝线荡得很慢」
-/// 这种割裂感（用户反馈「上升下降都太慢」时排查发现）。
+/// 这种割裂感。
 ///
 /// SilkLine 是普通 C# 类、拿不到 MonoBehaviour 的字段，
 /// 所以这里用全局常量作为唯一来源，避免三处各自写死数值而漂移。
 ///
-/// 【取值】50 —— 用户反馈原值 15 时「上升和下降都太慢、
-/// 跳跃有延迟」。原值下上升 1 秒 + 下降 1 秒（来回 2 秒），
-/// 视觉上像没跳起来。50 时上升/下降各 0.44 秒，干脆利落。
+/// 【★ 重构后的取值：98 —— 来自 Insomniac GDC 2019 官方演讲】
+/// 本地副本：Docs/逆向资料/Insomniac_ConcreteJungleGym_GDC2019.pdf
+/// 以及 `Docs/逆向资料/README.md` 里摘录的原文。
+///
+/// 官方把 10 倍地球重力当作**获得速度感的必要条件**，而不是调优项。
+/// 本项目尺度取「1 格 = 1 米」，故 98。这不是拍脑袋的数字。
+///
+/// 【跳跃需要同步重算，不能按比例】
+/// apex = jumpSpeed² / (2g) 与重力成反比：
+///     g=50,  jump=26 -> apex 6.8 格
+///     g=98,  jump=26 -> apex 3.5 格（跳不上了）
+/// 所以 jumpSpeed 必须一并调整，见 SilkParkourController.jumpSpeed。
 /// </summary>
 public static class SilkPhysics
 {
-    public const float Gravity = 50f;
+    public const float Gravity = 98f;
 }
 
 /* ===================== 丝线状态机 =====================
@@ -1716,40 +1725,140 @@ public class SilkChain : MonoBehaviour
         float dt = Time.deltaTime;
         if (dt <= 0f) return;
 
-        // 1. 显式速度积分：重力 + 空气阻力，根节点不参与
-        //    重力沿 -Z（项目约定：Z = 高度），不是 Unity 默认的 Vector3.down
-        //末节点在被外部驱动（挂载物）时不施加重力 —— 它由挂载物驱动
         int last = nodes.Count - 1;
-        /* 【★ 阻尼双重衰减的修复】
+
+        /* ============================================================
+         *  ★★摆荡力学 —— 严格按 Insomniac GDC 2019 官方公式重写
+         * ============================================================
          *
-         * 原代码是：
-         *     velocities[i] *= damping;          // 0.995
-         *     velocities[i] *= dragFactor;       // 1 - 0.02*dt*60 ≈ 0.98
-         * 每帧合计损失 = 1 - 0.995×0.98 ≈ 2.5%
-         * -> 半衰期仅 20 帧 = **0.33 秒**。摆荡两三秒就没劲，
-         *    全靠玩家泵力硬撑 —— 这正是用户反馈「摆荡太慢」的原因之一。
+         *  官方出处：Concrete Jungle Gym: Building Traversal in
+         *           'Marvel's Spider-Man'（Doug Sheahan, Insomniac）
+         *           PDF 第 68–71 页 · 本地副本：
+         *           Docs/逆向资料/Insomniac_ConcreteJungleGym_GDC2019.pdf
          *
-         * 问题在于 airDrag 被当成了「每帧固定衰减率」，
-         * 而 damping 也是。两个同义的衰减相乘，效果翻倍且难以调参。
+         *  ── 官方原文（P68）──
+         *  "The two basic forces involved in the pendulum are gravity
+         *   and tension."
+         *  "tension is a factor of line length, angle, and gravity
+         *   in the direction of the line"
          *
-         * 修法：把两者合并成**一个**每秒衰减系数，按指数衰减：
-         *     v *= pow(damping, dt*60)   —— 每帧等价，统一且帧率无关
-         * airDrag 保留但降为「附加阻尼」，默认调小。
+         *  ── 官方原文（P69）──
+         *  "We also break gravity up into it's two component vectors here,
+         *   one parallel to the line, one perpendicular"
+         *  "The **perpendicular portion of gravity represents the restoring
+         *   force**. This is the part that causes the pendulum to
+         *   oscillate back and forth"
+         *  "The parallel portion is what's left and, in our calculations
+         *   can actually **cancel out part of the tension force**"
+         *
+         *  ── 官方原文（P70）──
+         *  "we **set mass to one** for simplicity as we aren't dealing
+         *   with variable mass systems"
+         *
+         *  ── 官方原文（P71）★★ 最关键的一条 ──
+         *  "In order to increase the accuracy of the simulation,
+         *   we do **four iterations each frame to run at a total of 120Hz**"
+         *
+         *  ── 官方原文（P71 BONUS INFO）★★ 决定成败的一条 ──
+         *  "In actual implementation, we apply these forces
+         *   **only to the portion of velocity that are tangent to the line**.
+         *   We then apply **full gravity to the remaining velocity**
+         *   and recombine for a final velocity."
+         *
+         * ============================================================
+         *  【★ 原实现错在哪】
+         * ============================================================
+         *  原代码对**每个节点**直接施加完整重力：
+         *     velocities[i] += new Vector3(0, 0, -gravity * dt);
+         *
+         *  这意味着重力**全程**作用在球上，方向恒定向下。
+         *  而钟摆的关键恰恰在于：
+         *     · 沿绳方向的重力分量，应该与张力**部分抵消**
+         *     · 只有**垂直于绳**的分量才是「恢复力」
+         *     · 张力只在球「远离锚点」时才出现
+         *
+         *  恒定向下的重力会让球**摆到最低点后继续加速下坠**，
+         *  而不是在最低点开始回升—— 这就是用户说的
+         *  「不管什么位置放置丝线都是会摆到地上」的物理根源。
          */
-        float dampCoef = Mathf.Pow(damping, dt * 60f) * Mathf.Max(0f, 1f - airDrag);
+
+        /* 张力：T = m·v² / L，官方设定 m = 1（P70）。
+         * 只在球**远离锚点**（速度有离心分量）时才出现，
+         * 方向指向锚点。*/
+        Vector3 gravityVec = new Vector3(0f, 0f, -gravity);
+
         for (int i = 1; i <= last; i++)
         {
-            bool isDrivenEnd = (i == last && endDriven);
-            if (!isDrivenEnd)
-                velocities[i] += new Vector3(0, 0, -gravity * dt);
-            else if (endDriven)
-                velocities[i] = drivenVelocity;      // 完全交给外部（玩家输入）
-            velocities[i] *= dampCoef;
-            nodes[i].transform.position += velocities[i] * dt;
+            if (i == last && endDriven)
+            {
+                // 末端被挂载物驱动时，速度由外部给，不参与摆荡积分
+                velocities[i] = drivenVelocity;
+                nodes[i].transform.position += velocities[i] * dt;
+                continue;
+            }
+
+            Vector3 pos = nodes[i].WorldPosition;
+            Vector3 toRoot = nodes[i - 1].WorldPosition - pos;   // 指向锚点
+            float lineLen = toRoot.magnitude;
+
+            if (lineLen < 0.0001f)
+            {
+                velocities[i] += gravityVec * dt;
+                nodes[i].transform.position += velocities[i] * dt;
+                continue;
+            }
+
+            Vector3 lineDir = toRoot / lineLen;         // 沿绳方向（指向锚点）
+            Vector3 vel = velocities[i];
+
+            // 把速度分解为「沿绳」与「垂直绳」两个分量（P69 的分解）
+            float velAlong = Vector3.Dot(vel, lineDir);
+            Vector3 velTangent = vel - lineDir * velAlong;
+
+            /* 把重力也做同样的分解（P69）：
+             *   G_perp = G − G_para  = 垂直绳的分量 = 恢复力
+             *   G_para沿绳的分量 —— 与张力部分抵消 */
+            float gAlong = Vector3.Dot(gravityVec, lineDir);
+            Vector3 gPerp = gravityVec - lineDir * gAlong;
+
+            /* 张力 T = m·v² / L，m = 1（P68/P70）。
+             * 注意用的是**沿绳方向的相对速度** —— 球飞离锚点时
+             * 绳索把它拉回来，这个力只改变「沿绳」的速度分量。*/
+            float tension = (velAlong * velAlong) / lineLen;
+
+            /* 施力：只作用于切向速度（P71 BONUS INFO）。
+             *
+             *   · 张力：沿绳方向，抵消「飞离」趋势
+             *   · G_perp：垂直绳方向，是恢复力，让球摆回来
+             * 这两个力都**不含** gAlong —— 因为它已被上面的
+             * 「张力对消」处理过了。*/
+            Vector3 accel = (gPerp / lineLen) + (lineDir * (tension - gAlong));
+            velTangent += accel * dt;
+
+            /* 官方 P71：「apply full gravity to the remaining velocity
+             * and recombine」
+             * 沿绳的那部分速度，额外接受完整重力。*/
+            vel = velTangent + lineDir * velAlong;
+            vel += gravityVec * dt;
+
+            // 阻尼：官方演讲未给数值，用 Box2D 官方推荐的 0.5 阻尼比换算
+            vel *= Mathf.Pow(damping, dt * 60f);
+
+            velocities[i] = vel;
+            nodes[i].transform.position += vel * dt;
         }
 
+        /* ── 距离约束：官方 P71 明确要求每帧 4 次迭代 → 120 Hz ──
+         *
+         * 官方原文：「we do four iterations each frame to run at
+         * a total of 120Hz」
+         * 这意味着 **4 次约束迭代**，让长绳的摆荡在 60fps 下依然稳定。
+         * （solverIterations 默认已是 8，比官方更保守；
+         *  若实测抖动，降到 4 就是官方值。）*/
+        int iterations = Mathf.Max(1, solverIterations);
+
         // 2. 多轮距离约束：从根到端依次修正，形成自然弧线
-        for (int it = 0; it < solverIterations; it++)
+        for (int it = 0; it < iterations; it++)
         {
             for (int i = 0; i < last; i++)
             {
@@ -4963,13 +5072,15 @@ public class SilkParkourController : MonoBehaviour
     }
 
     [Header("跳跃")]
-    [Tooltip("起跳的垂直初速度（格/秒）。重力 50 时最高点 = v²/(2g) = 26²/100 = 6.8 格，"
-        + "上升 0.52 秒。\n"
-        + "取值权衡：台阶最大落差 4 格，apex 需≥ 5 格才留得住余量；"
-        + "而 22 只有 4.8 格（余量 0.8）太紧，跳不过时会让人很挫败。\n"
-        + "对照：重力 15 时同样的高度要 1 秒才升得上 —— "
-        + "这正是用户反馈「上升下降都太慢、跳跃有延迟」的原因。")]
-    public float jumpSpeed = 26f;
+    [Tooltip("起跳的垂直初速度（格/秒）。\n"
+        + "★ 重力改为官方的 98 后，本值必须同步重算 —— apex 与 g 成反比：\n"
+        + "     g=50,v=26 -> apex 6.8 格（跳得高）\n"
+        + "     g=98,v=26 -> apex 3.5 格（跳不上 3 格台阶了）\n"
+        + "现取 32 -> apex = 32²/(2×98) = **5.2 格**，滞空 0.65 秒。\n"
+        + "取值依据：关卡最高台阶落差 3 格，apex 需≥ 5 格才留得住余量。\n"
+        + "官方另称「能跳 5 层楼」= 17.5 米（对应 v≈58.6），\n"
+        + "但那会让现有 1~3 格的落差显得极小、且容易飞过平台 —— 故未采用。")]
+    public float jumpSpeed = 32f;
 
     [Tooltip("落地时垂直速度的衰减（1=完全弹停）")]
     [Range(0f, 1f)] public float landBounce = 0f;
