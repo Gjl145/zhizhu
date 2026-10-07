@@ -1147,7 +1147,26 @@ public class SilkLine
         chain.slackScale = 1.15f;
         chain.maxStrain = 0.25f;
 
-        chain.Build(rootFrom, rootTo, this, 1f);
+        /* ★ 建链顺序：锚点在前，球在后。
+         *
+         * 【为什么必须这样】SilkChain.Build(highAnchor, breakNode, ...) 的
+         * 第二个参数是**末端**（自由端），GetEndPosition() 读的就是它。
+         *
+         * 本方法原先写成 Build(rootFrom, rootTo) —— 末端成了**锚点**。
+         * 而 UpdateSwing 里球跟随 GetEndPosition()，于是：
+         *     球瞬移到锚点位置 -> 再从这个位置建新线 -> 又是新锚点
+         * 这正是用户反馈的「小球瞬移到锚点位置，并在新旧位置间建线」。
+         *
+         * 正确的物理关系（摆荡）：
+         *     锚点（固定端，高处）
+         *       └─ 丝线（约束链）
+         *          └─ 球（自由端，挂在下面荡）
+         * 所以固定端=锚点、末端=球。
+         *
+         * 注意与 SplitSegment 的区别：那里 Build(high, node) 的末端是
+         * 「断点」——断裂产生的自由端，本来就该垂下来摆。
+         * 两处语义不同，顺序也不同，别混用。*/
+        chain.Build(rootTo, rootFrom, this, 1f);
         /* 渲染归属显式指定。
          *
          * Build() 不再自动认领 segments[0]（那会误伤别的段），
@@ -5036,6 +5055,21 @@ public class SilkParkourController : MonoBehaviour
          * 键位仍不与 FreeFly 共享：
          *   FreeFly 左键点选（关卡编辑要精确）
          *   Parkour 左键自动瞄准（游戏要顺手）*/
+        /* 摆荡中不允许再发射 —— 必须先松手。
+         *
+         * 【为什么】参考《消逝的光芒2》与蜘蛛侠2：一次只挂一根丝。
+         * 若摆荡中还能发射，玩家会不断在锚点间「瞬移」，
+         * 既不是摆荡也不是飞行，完全失去「荡出去」的手感 ——
+         * 用户反馈的「点击其他锚点会建新线」正是这个问题。
+         *
+         * 正确节奏是：发射 → 摆荡 → 松手 → 再发射。*/
+        if (grabbed != null)
+        {
+            if (verboseFireLog)
+                Debug.Log("[Fire] 已在摆荡中 —— 先按左Shift 松手再发射");
+            return;
+        }
+
         var target = PickBestAnchor();
         if (target == null) return;   // PickBestAnchor 内部已说明原因
 
@@ -5290,14 +5324,26 @@ public class SilkParkourController : MonoBehaviour
 
     /// <summary>
     /// 自己这个「锚点」。Parkour 世界的丝线起点。
-    /// 随玩家移动 —— 每次发射时重新取当前位置对应/新建的锚点。
+    /// **每次访问都重新按当前位置解析** —— 玩家一直在移动，
+    /// 若缓存一个锚点不更新，建线起点就会停在初始位置。
+    ///
+    /// 【曾发生的 bug】原先是「存在即返回」的缓存写法：
+    ///     if (_selfNode != null && _selfNode.AnchorAlive) return _selfNode;
+    /// 结果球移动后 selfNode 仍指向最初那个锚点 —— 用户反馈
+    /// 「在新旧位置之间构建一条线」正是这个原因：
+    /// 线看起来从「上次的位置」连到「新锚点」。
+    ///
+    /// 【为什么仍要复用而不是每次新建】
+    /// CreateAnchorAt 有 5 格去重逻辑，同一位置反复调用会返回
+    /// 已有的锚点，不会堆出一堆重合点。所以每次调用它是安全的。
     /// </summary>
     AnchorPoint selfNode
     {
         get
         {
-            if (_selfNode != null && _selfNode.AnchorAlive) return _selfNode;
             if (builder == null) return null;
+            // 不再缓存 —— 每次都按当前位置解析/新建。
+            // CreateAnchorAt 内部有距离去重，同位置会复用同一锚点。
             _selfNode = builder.CreateAnchorAt(transform.position);
             return _selfNode;
         }

@@ -409,6 +409,46 @@ else:
 if ok_msg:
     ok('摆荡一致性：%s' % ' / '.join(ok_msg))
 
+# ---------- 13b. 建链顺序：末端必须是「球」而不是「锚点」----------
+# 【曾发生的真实 bug】EnsureChain 里写成
+#     chain.Build(rootFrom, rootTo, this, 1f);
+# 而 Build(highAnchor, breakNode) 的**第二个参数是末端（自由端）**。
+# 球跟随 GetEndPosition() -> 球瞬移到 rootTo（锚点）——
+# 用户反馈「小球瞬移到锚点，并在新旧位置之间建线」。
+#
+# 正确顺序：锚点当固定端，球当末端
+#     锚点(固定) ──丝线── 球(自由端，挂在下面荡)
+if re.search(r'chain\.Build\(\s*rootTo\s*,\s*rootFrom\s*,', s):
+    ok('EnsureChain 建链顺序正确：锚点为固定端，球为末端')
+else:
+    err('EnsureChain 建链顺序错误 —— Build 的第二个参数才是末端，'
+        '必须传球（rootFrom）而不是锚点（rootTo），否则球会瞬移到锚点')
+
+# ---------- 13c. selfNode 不能缓存 ----------
+# 【曾发生的真实 bug】selfNode 写成「存在即返回」的缓存：
+#     if (_selfNode != null && _selfNode.AnchorAlive) return _selfNode;
+# 球移动后它仍指向初始锚点 -> 表现为「在新旧位置之间建线」。
+m_self = re.search(r'AnchorPoint selfNode\s*\{\s*get\s*\{(.*?)\n    \}', s, re.S)
+if not m_self:
+    warn('找不到 selfNode 属性 —— 建线起点可能有问题')
+elif '_selfNode != null' in m_self.group(1):
+    err('selfNode 仍是「存在即返回」的缓存 —— 球移动后建线起点会停在初始位置，'
+        '表现为「在新旧位置之间建线」')
+else:
+    ok('selfNode 每次按当前位置解析（无缓存）')
+
+# ---------- 13d. 摆荡中不得再发射 ----------
+# 参考消逝之光2/蜘蛛侠2：一次只挂一根丝。允许连发会让玩家
+# 在锚点间「瞬移」，既不是摆荡也不是飞行。
+_fire = re.search(r'void FireAtAnchor\(\)\s*\{(.*?)\n    \}', s, re.S)
+if not _fire:
+    warn('找不到 FireAtAnchor')
+elif re.search(r'grabbed\s*!=\s*null', _fire.group(1)):
+    ok('摆荡中拒绝再次发射（须先松手）')
+else:
+    warn('FireAtAnchor 缺少「摆荡中拒绝发射」守卫 —— '
+        '玩家可能在锚点间瞬移，失去摆荡手感')
+
 # ---------- 14. 跨类字段访问（防 CS0103）----------
 # 【曾发生的真实错误】在 SilkLine 的 AttachSelf 里写了
 #     endTarget = null; endDriven = false;
