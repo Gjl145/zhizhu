@@ -2459,15 +2459,15 @@ public class SilkBuilder : MonoBehaviour
     {
         Basic = 0,        // SilkParkourStage：渐进教学的 4 段基础区
         SwingTest = 1,    // SilkSwingTestStage：5 个绳长梯度的摆荡点
-        SpiderStyle = 2,  // SpiderStyleStage：垂直城市，必须摆荡才能上楼
+        SwingUnit = 2,    // ★ SilkSwingUnitStage：最小摆荡单元（4 个正方体节点）
     }
 
     [Tooltip("跑酷世界用哪套关卡。\n"
-        + "Basic       = 渐进教学 4 段（平地/高台/宽桥/终点）\n"
-        + "SwingTest   = 摆荡测试 5 点（绳长 14~34 格，用于定位摆荡问题）\n"
-        + "SpiderStyle = ★垂直城市四层街区，跳跃上不去、必须摆荡\n"
+        + "Basic     = 渐进教学 4 段（平地/高台/宽桥/终点）\n"
+        + "SwingTest = 摆荡测试 5 点（绳长 14~34 格，用于定位摆荡问题）\n"
+        + "SwingUnit = ★最小摆荡单元：4 个正方体节点，摆荡一次到一个\n"
         + "★ 改这个值后要按 Tab 重新切一次模式才会重建。")]
-    public ParkourStageKind parkourStage = ParkourStageKind.SpiderStyle;
+    public ParkourStageKind parkourStage = ParkourStageKind.SwingUnit;
 
     /* ★ 注意：重建关卡的实际执行在 SilkParkourController.RebuildParkourStage()。
      *
@@ -4563,11 +4563,11 @@ public class SilkParkourController : MonoBehaviour
         // 先清掉所有关卡，避免几套台子叠在一起
         SilkParkourStage.Clear();
         SilkSwingTestStage.Clear();
-        SpiderStyleStage.Clear();
+        SilkSwingUnitStage.Clear();
 
         var kind = builder != null
             ? builder.parkourStage
-            : SilkBuilder.ParkourStageKind.SpiderStyle;
+            : SilkBuilder.ParkourStageKind.SwingUnit;
 
         switch (kind)
         {
@@ -4579,11 +4579,9 @@ public class SilkParkourController : MonoBehaviour
                 startPosition = SilkSwingTestStage.StartPosition;
                 break;
 
-            case SilkBuilder.ParkourStageKind.SpiderStyle:
-                SpiderStyleStage.Create(h);
-                // 起跳台 center(6,-6,-44) size(20,20,4) -> 顶面 z=-42
-                // 球心 = 顶面 + 半径 4.5 = -37.5
-                startPosition = new Vector3(6f, -6f, -37.5f);
+            case SilkBuilder.ParkourStageKind.SwingUnit:
+                SilkSwingUnitStage.Create(h);
+                startPosition = SilkSwingUnitStage.StartPosition;
                 break;
 
             default:  // Basic
