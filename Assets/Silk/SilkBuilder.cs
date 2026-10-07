@@ -1904,7 +1904,7 @@ public class SilkChain : MonoBehaviour
         reeledThisSwing = true;
         lastReelInAmount = reelInRatio;
 
-        if (verboseFireLog)
+        if (verboseReelInLog)
             Debug.Log("[ReelIn] 最低点收缩 " + (reelInRatio * 100f).ToString("F0") +
                       "%：" + totalLen.ToString("F1") + " → " + target.ToString("F1") +
                       " 格（末端速度 " + speed.ToString("F0") + " 格/秒，" +
@@ -1946,6 +1946,12 @@ public class SilkChain : MonoBehaviour
         + "★ 曾用「dist/totalLen > 0.92」判断最低点，实算证明是错的 ——\n"
         + "   单摆全程 dist/totalLen 恒等于 1.0，条件形同虚设。")]
     [Range(0.05f, 0.9f)] public float reelInMaxVerticalRatio = 0.3f;
+
+    [Tooltip("输出最低点收缩的诊断日志（调Reel-In 手感时临时开启）。\n"
+        + "★ 注意：本开关属于 SilkChain 自己的字段，不能用\n"
+        + "  SilkParkourController.verboseFireLog —— 那是别的类的成员，\n"
+        + "  跨类访问会CS0103（编译错误）。")]
+    public bool verboseReelInLog = false;
 
     /// <summary>把 nodes 的位置写进 LineRenderer 顶点。
     /// 只有一个渲染源，所以永远不会出现「两条线」。</summary>
