@@ -1079,11 +1079,22 @@ public class SilkLine
         if (!TryTransition(SilkLifeState.Anchored, "挂载 " + label)) return false;
 
         attachedBody = null;
-        // 末端不Drive ——让它自由摆动。这与 Attach 的唯一区别。
-        endTarget = null;
-        endDriven = false;
 
+        /* 先建链，再解链。
+         *
+         * 【踩过的坑】原先写成直接改`endTarget = null; endDriven = false;`，
+         * 但那是 **SilkChain 的字段**，而这段代码在 SilkLine 类里 ——
+         * 跨类直接访问别人的私有字段编译不过（CS0103）。
+         * 而且顺序也错了：EnsureChain 可能新建一条链（默认就是自由末端），
+         * 若在它之前设置会被新建覆盖。*/
         EnsureChain(builder);
+
+        // 通过 chain 解引用：末端不 Drive，让它自由摆动。
+        // 这与 Attach 的唯一区别。
+        if (chain != null)
+        {
+            chain.DriveEndTo(null);   // 传 null 即解除驱动
+        }
         return true;
     }
 

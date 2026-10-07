@@ -409,6 +409,69 @@ else:
 if ok_msg:
     ok('摆荡一致性：%s' % ' / '.join(ok_msg))
 
+# ---------- 14. 跨类字段访问（防 CS0103）----------
+# 【曾发生的真实错误】在 SilkLine 的 AttachSelf 里写了
+#     endTarget = null; endDriven = false;
+# 而这两个字段属于 **SilkChain** 类 -> CS0103。
+# 【为什么自检抓不到】括号配平、API 存在性都正常 ——
+# 因为语法合法，只是访问了当前类不存在的成员。
+#
+# 做法：收集 SilkChain 的字段名，然后检查 SilkLine / SilkBuilder
+#       的方法体内是否直接访问了这些字段（而非经 chain.xxx）。
+CLASS_FIELDS = {}
+for cname in ('SilkChain', 'SilkLine', 'SilkAnchor'):
+    m = re.search(r'\npublic class ' + cname + r'\b', s)
+    if not m:
+        continue
+    seg = s[m.start():]
+    nxt = re.search(r'\npublic (?:static )?class \w+', seg[10:])
+    if nxt:
+        seg = seg[:10 + nxt.start()]
+    for fm in re.finditer(
+            r'\n    (?:public|private|protected)(?: static)?(?: readonly)? '
+            r'[\w<>\[\],. ]+? (\w+)\s*(?:=|;)', seg):
+        CLASS_FIELDS.setdefault(cname, set()).add(fm.group(1))
+
+bad = []
+for cname, flds in CLASS_FIELDS.items():
+    m = re.search(r'\npublic class ' + cname + r'\b', s)
+    seg = s[m.start():]
+    nxt = re.search(r'\npublic (?:static )?class \w+', seg[10:])
+    if nxt:
+        seg = seg[:10 + nxt.start()]
+    seg_start = m.start()
+
+    # 【关键】必须先剥离注释 —— 否则「注释里解释这个坑」的文字
+    # 会被误报成真实代码访问（本项目就误报过一次：
+    # AttachSelf 的注释里写了 `endTarget = null;` 作为反面例子）。
+    # 【关键】用**等长空格**替换注释，只去掉换行。
+    # 若长度不一致，后面所有匹配位置都会偏移（踩过一次：
+    # 报出来的行号指向注释里的示例代码，而非真实代码）。
+    blank = lambda t: re.sub(r'[^\n]', ' ', t)
+    seg_code = re.sub(r'/\*.*?\*/', lambda mm: blank(mm.group(0)), seg, flags=re.S)
+    seg_code = re.sub(r'//[^\n]*', lambda mm: blank(mm.group(0)), seg_code)
+    seg_code = re.sub(r'"(?:\\.|[^"\\])*"',
+                      lambda mm: ' ' * len(mm.group(0)), seg_code)
+
+    for other, oflds in CLASS_FIELDS.items():
+        if other == cname:
+            continue
+        for f in oflds:
+            # 形如 `endTarget = ` / `endTarget +=` 且前面不是 `.`
+            pat = r'(?<![.\w])' + re.escape(f) + r'\s*(=[^=]|\+=|-=|\*=)'
+            for mm in re.finditer(pat, seg_code):
+                line = s[:seg_start + mm.start()].count('\n') + 1
+                bad.append('%s:%d 直接访问 %s.%s（应通过 chain.%s 访问）'
+                           % (cname, line, other, f, f))
+if bad:
+    seen = set()
+    for b in bad:
+        if b not in seen:
+            err(b)
+            seen.add(b)
+else:
+    ok('无跨类字段直接访问（%d 个类的字段均通过实例访问）' % len(CLASS_FIELDS))
+
 # ---------- 汇总 ----------
 print()
 print('=' * 60)
