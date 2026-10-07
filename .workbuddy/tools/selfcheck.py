@@ -823,6 +823,27 @@ if not sec_problems:
     ok('关卡文件无重复视觉组件 / 无危险临时物体写法（%d 个关卡）'
        % len(_sec_files))
 
+# ---------- 18. 绳长必须「等于实际距离」，不得有固定倍率 ----------
+# 【用户要求】「能不能动态的，根据两个锚点之间的距离来计算，
+#   而不是某一个固定值，一旦固定了就没有意思了」
+#
+# slackScale 是「在直线距离上额外加百分之多少」。
+# >1 会让摆荡半径短于视觉距离，且压缩不同距离的节奏差异。
+_slock = []
+for _m in re.finditer(r'chain\.slackScale\s*=\s*([\d.]+)f', s):
+    if abs(float(_m.group(1)) - 1.0) > 0.001:
+        _ln = s[:_m.start()].count('\n') + 1
+        _slock.append('第 %d 行 slackScale = %s（应为 1.0 = 绳长等于实际距离）'
+                      % (_ln, _m.group(1)))
+_d = re.search(r'public float slackScale = ([\d.]+)f', s)
+if _d and abs(float(_d.group(1)) - 1.0) > 0.001:
+    _slock.append('字段默认值 slackScale = %s（应为 1.0）' % _d.group(1))
+if _slock:
+    for _x in _slock:
+        err(_x)
+else:
+    ok('绳长 = 两锚点实际距离（slackScale = 1.0），随距离动态变化')
+
 # ---------- 汇总 ----------
 print()
 print('=' * 60)

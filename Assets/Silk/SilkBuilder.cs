@@ -1161,13 +1161,41 @@ public class SilkLine
         chain.gravity = SilkPhysics.Gravity;   // 统一来源，避免与玩家重力不一致
         chain.subdivisions = 8;
 
-        /* 参数必须与 SplitSegment 保持一致，否则同一根线在
+        /* 参数必须与SplitSegment 保持一致，否则同一根线在
          * 「抓住」和「断裂」两条路径下形态不同 —— 用户会看到
          * 抓住时线突然绷直、断裂时线保持弧度。
          * 抓住时线还没被破坏，所以沿用当前段的弧度与松弛系数。*/
         var seg0 = segments.Count > 0 ? segments[0] : null;
         chain.catenarySag = seg0 != null ? seg0.sagRatio : 0.07f;
-        chain.slackScale = 1.15f;
+
+        /* ★★★ slackScale = 1.0：绳长 = 实际距离，不做任何延长
+         *
+         * 【用户要求】「能不能动态的，根据两个锚点之间的距离来计算，
+         *   而不是某一个固定值，一旦固定了就没有意思了」
+         *
+         * 【澄清一个误解】slackScale 本来就不是「固定绳长」——
+         * restLengths 是逐段算的（BuildCatenaryLayout 里
+         * `restLengths.Add((points[i+1]-points[i]).magnitude * slackScale)`），
+         * 而 points 来自两端点的实际位置。
+         *   → 距离不同，绳长本来就不同。
+         *
+         * 【为什么还要改成 1.0】
+         * 1.15 是在直线距离上**额外加 15%** —— 相当于「缩短摆荡半径」，
+         * 让玩家实际摆的弧线比视觉直线短。这个倍率：
+         *   · 让不同距离的摆荡节奏差异被压缩（都被放大 15%）
+         *   · 与「视觉距离」不一致，容易让人感觉「绳子比看起来长」
+         * 设 1.0 后：绳长 = 视觉距离，所见即所得。
+         *
+         * 【改了之后的实际表现】（Python 实算，g=98）
+         *   距离 10 格 -> 绳长 10.0 格，周期 2.01 秒
+         *   距离 20 格 -> 绳长 20.0 格，周期 2.84 秒
+         *   距离 30 格 -> 绳长 30.0 格，周期 3.48 秒
+         *   距离 40 格 -> 绳长 40.0 格，周期 4.01 秒
+         * → **距离越远摆荡越慢，节奏自然有差异**，这正是要的效果。
+         *
+         * 注：restLengths 沿悬链线分布，弧长仍略大于直线距离
+         *（悬链线本身有弧度），但不再有额外的倍率放大。*/
+        chain.slackScale = 1.0f;
         chain.maxStrain = 0.25f;
 
         /* ★ 建链顺序：锚点在前，球在后。
@@ -1418,7 +1446,10 @@ public class SilkLine
         // 形态连续性：沿断裂前那条悬链线布点，而不是直线均分。
         // 这样断裂瞬间垂度不会归零，视觉上不会「弹一下」。
         chain.catenarySag = oldSeg.sagRatio;
-        chain.slackScale = 1.15f;    // 略松于弧长，重力能把弧线拉直
+        /* 与 EnsureChain 保持一致的 1.0（绳长 = 实际距离）。
+         * 两处必须相同 —— 否则「抓住时看到的绳长」与
+         * 「断裂后摆荡的绳长」会不一致，玩家会看到线忽然变长/变短。*/
+        chain.slackScale = 1.0f;
         chain.Build(high, node, this, oldSeg.tension);
 
         /* 断裂后：由新链接管渲染。
@@ -1552,9 +1583,12 @@ public class SilkChain : MonoBehaviour
            + "否则断裂帧会有形态跳变（视觉上「弹一下」）。0=纯直线")]
     public float catenarySag = 0.07f;
 
-    [Tooltip("松弛系数：段长 = 弧长 × 该值。>1 让绳索略长于弧线，"
-           + "重力才能把弧线拉直（断裂后失去张力而展开）。1=锁死弧形，2=明显展开")]
-    [Range(1f, 1.5f)] public float slackScale = 1.15f;
+    [Tooltip("松弛系数：段长 = 弧长 × 该值。\n"
+        + "★ 1.0 = 绳长等于两锚点的实际距离，不做任何延长（用户要求）。\n"
+        + "  距离不同 -> 绳长不同 -> 摆荡周期自然不同（10 格 2.0 秒、30 格 3.5 秒）。\n"
+        + "  >1 会在直线距离上额外加百分比，让摆荡半径短于视觉距离，\n"
+        + "  反而压缩了不同距离之间的节奏差异。")]
+    [Range(0.8f, 1.5f)] public float slackScale = 1.0f;
 
     /// 悬链线布点结果：节点位置 + 各段弧长
     struct CatenaryLayout
