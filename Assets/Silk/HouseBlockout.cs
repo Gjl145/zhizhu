@@ -46,23 +46,44 @@
  *  ★ 坐标系（项目约定）：X = 左右   Y = 前后   Z = 高度（重力沿-Z）
  *  ============================================================================
  *
- *    平面布局（俯视，X 向右，Y 向上为后）
+ *    平面布局（俯视，X 向右 = 东西，Y 向上 = 南北）
  *
- *        x=-4.4        -0.9   +0.9                +4.4
- *    y=+3.8┌──────────┬──────┬───────────────────┐
- *          │          │      │                   │
- *          │ 杂物室    │ 楼梯 │     主卧室         │  2F
- *          │ 3.5×3.5   │ 井   │     3.5×3.5        │
- *          │ (z高层)   │      │                   │
- *    y=+0.4├──────────┼──────┤                   │
- *          │          │平台 │                   │
- *          │   次卧室  │      │     厨房           │  1F
- *          │  3.5×3.5  │ 厕所 │     3.5×3.5        │
- *    y=-3.1└──────────┴──────┴───────────────────┘
+ *           x=-4.5     -2.11  +2.11      +4.5
+ *   y=+2.25 ┌──────────┬──────┬──────────┐
+ *           │          │      │          │
+ *           │  杂物室  │ 楼梯 │  主卧室  │  2F
+ *           │  4.5×4.5 │ 井   │  4.5×4.5 │
+ *           │          │      │          │
+ *   y= 0.00 ├──────────┤ 厕所 ├──────────┤
+ *           │          │(楼梯下)│         │
+ *           │  次卧室  │      │   厨房   │  1F
+ *           │  4.5×4.5 │      │  4.5×4.5 │
+ *   y=-2.25 └──────────┴──────┴──────────┘
  *
- *    · 四间房**都是 3.5 × 3.5 m**（用户要求大小相同）
- *    · 楼梯井在中间 1.8 m 宽，两跑折返（**两次拐角**= 两个 90° 转弯）
- *    · 楼梯下方 1F 层高 2.60 m 处即**厕所**
+ *    · 四间房**都是 4.5 × 4.5 m**（用户要求「大小相同」）
+ *    · 楼梯井 4.22(X) × 1.42(Y)，在中间
+ *    · 楼梯下方 = **厕所**
+ *
+ *    ★ 为什么房间是 4.5 而不是 3.5 m：
+ *      楼梯两跑纵跑合计 14 级 × 0.28 = 3.92 m，
+ *      加余量后楼梯井需4.22 m —— **3.5 m 的房间放不下**。
+ *      这是楼梯段数决定的下限，不是随便选的。
+ *
+ *  ============================================================================
+ *  ★ 楼梯几何：9 + 4 + 5 = 18 级，两个 90° 转角
+ *  ============================================================================
+ *
+ *    俯视（楼梯井内）：
+ *
+ *        ┌───────────────────────────┐
+ *        │                    跑1 →  │  第 1 跑：沿 X（南侧），9 级
+ *        │  跑3↑            ├──────  │  长 9 × 0.28 = 2.52 m
+ *        │      │            │ 跑2 ↑│
+ *        │      │            │      │  第 2 跑：沿 Y（东端），4 级
+ *        │──────┘            │      │  横向连接，长 1.12 m
+ *        └───────────────────────────┘  第 3 跑：沿 X（北侧），5 级
+ *                                           长 1.40 m
+ *      总爬高 18 × 0.16 = 2.88 m ≈ 层高 2.82 m
  *
  *  ============================================================================
  *  ★ 关于「套内尺寸」与「玩家角色」的匹配
@@ -129,27 +150,71 @@ public static class HouseBlockout
 
     // ===================== 本关卡的布局参数 =====================
 
-    /// <summary>四间房统一边长 3.5 m（用户要求「大小都相同」）。</summary>
-    public const float RoomSize = 3.5f;
+    /// <summary>四间房统一边长（用户要求「大小都相同」）。
+    ///
+    /// ★ 【必须 ≥ 4.22 m】—— 由楼梯井的X 向尺寸决定：
+    ///   楼梯两跑纵跑合计 14 级 × 0.28 = 3.92 m，加余量 = 4.22 m。
+    ///   若房间只有 3.5 m，楼梯井放不下 —— 这就是为什么
+    ///   「3.5 m 的房间 + 9+4+5 的楼梯」在几何上不成立。
+    ///
+    /// 取 4.5 m：满足楼梯井要求，且仍符合住宅开间的常见范围
+    /// （1980 年代砖混住宅标准开间 3.3/3.6 m，4.5 m 属于稍宽但合理）。
+    /// </summary>
+    public const float RoomSize = 4.5f;
 
-    /// <summary>楼梯井宽度 = 梯段净宽 + 两侧余量。</summary>
-    public const float ShaftWidth = 2.40f;
+    /// <summary>楼梯的跑数分段（用户指定 9+4+5 = 18 级）。
+    ///
+    /// 【为什么是 9+4+5 而不是 9+9】
+    /// 用户明确要求「两个转角，所以应该是 9+4+5」。
+    /// 实际住宅里两跑往往**不等长** —— 第一跑长（起步空间大），
+    /// 折返后到顶层的距离由剩余层高决定。
+    ///
+    /// ★ 关键约束：两跑纵跑的**总长是固定的**
+    ///   跑1 沿 X：9 × 0.28 = 2.52 m
+    ///   跑3 沿 X：5 × 0.28 = 1.40 m（反向，叠在跑1 的另一侧）
+    ///   合计 X 向跨度 = (9+5) × 0.28 = **3.92 m**
+    ///   —— 无论怎么分配级数，只要两跑都是纵向，这个值都不变。
+    ///   所以「房间 3.5 m」放不下，必须 ≥ 3.92 m。
+    ///
+    /// 【第 2 跑是横向连接段】沿 Y：4 × 0.28 = 1.12 m
+    /// </summary>
+    public const int Flight1Steps = 9;      // 沿 X（西侧），纵跑
+    public const int Flight2Steps = 4;      // 沿 Y（北端），横向连接
+    public const int Flight3Steps = 5;      // 沿 X（东侧），纵跑
 
-    /// <summary>楼梯每跑级数。层高 2.82 / (2×0.16) ≈ 8.8 → 9 级。
-    /// 两跑合计 18 级，爬高 2.88 m。</summary>
-    public const int StepsPerFlight = 9;
+    /// <summary>总级数（三跑之和）= 18。</summary>
+    public const int TotalSteps = Flight1Steps + Flight2Steps + Flight3Steps;
 
-    /// <summary>每跑水平长度 = 9 × 0.28 = 2.52 m。</summary>
-    public const float FlightLength = StepsPerFlight * StepTread;
+    /// <summary>总爬高 = 18 × 0.16 = 2.88 m。</summary>
+    public const float TotalRise = TotalSteps * StepRise;
+
+    /// <summary>
+    /// 楼梯井的 X 向尺寸（东西方向）—— **由两跑纵跑的级数决定**。
+    /// (Flight1Steps + Flight3Steps) × StepTread = 14 × 0.28 = **3.92 m**
+    /// 再加两端各 0.15 余量 -> 4.22 m。
+    /// ★ 这是「房间必须 ≥ 4.22 m」的根源。
+    /// </summary>
+    public const float ShaftLengthX = (Flight1Steps + Flight3Steps) * StepTread + 0.30f;
+
+    /// <summary>楼梯井的 Y 向尺寸（南北方向）= 第 2 跑横向段 + 余量。</summary>
+    public const float ShaftWidthY = Flight2Steps * StepTread + 0.30f;
 
     /// <summary>玩家角色直径（可调）。建议 0.7~0.8 m。</summary>
     public const float PlayerDiameter = 0.75f;
 
     // ===================== 派生坐标 =====================
 
-    // 房间中心偏移（从原点向 ±X）
-    static float RoomOffsetX => RoomSize * 0.5f + ShaftWidth * 0.5f;   // 1.75 + 1.20 = 2.95
-    static float RoomOffsetY => RoomSize * 0.5f;                        // 1.75
+    /// <summary>楼梯井 X 向尺寸（东西）= 4.22 m。
+    /// 由两跑纵跑的级数决定：14 级 × 0.28 = 3.92，加余量。</summary>
+    public static float ShaftSizeX => ShaftLengthX;
+
+    /// <summary>楼梯井 Y 向尺寸（南北）= 1.42 m。第 2 跑横向段。</summary>
+    public static float ShaftSizeY => ShaftWidthY;
+
+    // 房间中心偏移：从原点向 ±X（左右两间房）
+    static float RoomOffsetX => RoomSize * 0.5f + ShaftSizeX * 0.5f;
+    // 房间中心偏移：从原点向 ±Y（前后两间房）
+    static float RoomOffsetY => RoomSize * 0.5f;
 
     /// <summary>1F 楼板顶面高度（z）。地面在 z=0。</summary>
     public static float Floor1Z => 0f;
@@ -158,9 +223,9 @@ public static class HouseBlockout
     /// 2F 楼板顶面 = + SlabThickness。</summary>
     public static float Floor2Z => MinNetHeight;
 
-    /// <summary>本关卡的球心起点（在 1F 主卧里）。</summary>
+    /// <summary>本关卡的球心起点（在 1F 东南角的房间里）。</summary>
     public static Vector3 StartPosition
-        => new Vector3(RoomOffsetX, RoomOffsetY, PlayerDiameter * 0.5f + 0.05f);
+        => new Vector3(RoomOffsetX, -RoomOffsetY, PlayerDiameter * 0.5f + 0.05f);
 
     // ================================================================
     //  构建
@@ -243,7 +308,7 @@ public static class HouseBlockout
     }
 
     /// <summary>整体平面尺寸（X = 东西，Y = 南北）。</summary>
-    public static float OverallWidth => RoomSize * 2 + ShaftWidth;   // 3.5*2+2.4 = 9.4
+    public static float OverallWidth => RoomSize * 2 + ShaftSizeX;
     public static float OverallDepth => RoomSize * 2;                // 7.0
 
     // ================================================================
@@ -251,60 +316,108 @@ public static class HouseBlockout
     // ================================================================
 
     /// <summary>
-    /// 两跑折返楼梯 —— 这就是「两次拐角」。
+    /// 三跑折返楼梯 —— 9 + 4 + 5 = 18 级，**两个 90° 拐角**。
     ///
-    /// 【几何】
-    ///   第 1 跑：从南往北，贴着楼梯井西侧，上 9 级
-    ///          到达中间休息平台（z = 9 × 0.16 = 1.44）
-    ///   90° 拐角
-    ///   第 2 跑：从西往东，贴着井的北端，继续上 9 级
-    ///          到达 2F 楼板（z = 1.44 + 1.44 = 2.88 ≈ 层高 2.82）
+    /// 【几何 —— 按用户指定的分段】
+    ///   第 1 跑：南 → 北，贴井的**西侧**，上 9 级
+    ///          到达标高 9 × 0.16 = **1.44 m**
+    ///   ▼ 第一个 90° 拐角（转向东）
+    ///   第 2 跑：西 → 东，贴井的**北端**，上 4 级
+    ///          到达标高 13 × 0.16 = **2.08 m**
+    ///   ▼ 第二个 90° 拐角（转向南）
+    ///   第 3 跑：东 → 南，贴井的**东侧**，上 5 级
+    ///          到达标高 18 × 0.16 = **2.88 m** ≈ 层高 2.82
+    ///
+    /// 【为什么第 2 跑只有 4 级】
+    /// 两跑不等长是真实住宅的常态—— 第一跑要跨越较大的进深，
+    /// 折返后到顶层的剩余距离由第 2、3 跑分配。
+    /// ★ 总级数不变（18），所以**总爬高与层高的关系不受影响**。
     ///
     /// 【为什么楼梯底下是厕所】
-    ///   第 1 跑下方（z < 1.44、井的南部空间）净高只有 1.44 m ——
-    ///   正好是**厕所**需要的空间（本该更高，但1.44 m 也能塞下
-    ///   马桶和洗手台，符合「楼梯下储物/厕所」的真实做法）。
+    ///   第 1 跑下方（z &lt; 1.44、井的南部）净高只有 1.44 m ——
+    ///   正好塞得下马桶与洗手台。
+    ///   这符合真实做法：楼梯下是「层高最低、面积最小」的空间，
+    ///   常被用作厕所或储藏。
     /// </summary>
     static void BuildStair(float k)
     {
-        // 井的中心
-        float sx = 0f;
-        float sy = 0f;
+        float sx = 0f;      // 井中心 x
+        float sy = 0f;      // 井中心 y
+        float tread = StepTread;
+        float rise = StepRise;
+        const float slabT = 0.06f;      // 踏步板厚度
 
-        // ---------- 第 1 跑：南→北，西侧 ----------
-        // 梯段中心 x = -ShaftWidth/2 + StairWidth/2
-        float flight1X = sx - ShaftWidth * 0.5f + StairWidth * 0.5f;
-        float stepTread = StepTread;
-        float stepRise = StepRise;
+        /* ★ 两跑的朝向不同 —— 这是「两次90° 转角」的关键
+         *
+         *   第 1 跑（9 级）：沿 **X** 方向（西侧），长 2.52 m
+         *      ▼ 90° 转角
+         *   第 2 跑（4 级）：沿 **Y** 方向（北端），长 1.12 m  ← 横向连接
+         *      ▼ 90° 转角
+         *   第 3 跑（5 级）：沿 **X** 方向（东侧），长 1.40 m
+         *
+         *  → 所以 X 向需要容纳两跑：2.52 + 1.40 = 3.92 m
+         *  → Y 向只需容纳中间的横向段：1.12 m
+         */
+        float sizeX = ShaftSizeX;        // 4.22 m（沿 X）
+        float sizeY = ShaftSizeY;        // 1.42 m（沿 Y）
 
-        for (int i = 0; i < StepsPerFlight; i++)
+        // 梯段中心线
+        float westX = sx - sizeX * 0.5f + StairWidth * 0.5f;   // 跑1 在西侧
+        float eastX = sx + sizeX * 0.5f - StairWidth * 0.5f;   // 跑3 在东侧
+        float northY = sy + sizeY * 0.5f - StairWidth * 0.5f;   // 跑2 在北端
+        float southY = sy - sizeY * 0.5f + StairWidth * 0.5f;   // 起步区
+
+        // ============================================================
+        //  第 1 跑：沿 -X → +X（西侧），9 级
+        // ============================================================
+        float xStart1 = sx - sizeX * 0.5f + tread * 0.5f;
+        for (int i = 0; i < Flight1Steps; i++)
         {
-            float z = (i + 0.5f) * stepRise;         // 每级中心高度
-            float y = sy - FlightLength * 0.5f + (i + 0.5f) * stepTread;
-            // 踏步板（薄板：厚 0.06，模拟真实踏步）
-            Slab("楼梯1跑_" + i,
-                 new Vector3(flight1X, y, z) * k,
-                 new Vector3(StairWidth, stepTread, 0.06f) * k, C.Stair);
+            float z = (i + 0.5f) * rise;                          // 0.08 .. 1.36
+            float x = xStart1 + i * tread;
+            Slab("楼梯_跑1_" + (i + 1),
+                 new Vector3(x, southY, z) * k,
+                 new Vector3(tread, StairWidth, slabT) * k, C.Stair);
         }
 
-        // ---------- 中间休息平台（在第 1 跑顶端）----------
-        float midZ = StepsPerFlight * stepRise;
-        float midY = sy + FlightLength * 0.5f - stepTread * 0.5f;
-        Slab("楼梯_中间平台",
-             new Vector3(sx, midY, midZ) * k,
-             new Vector3(ShaftWidth, stepTread, 0.06f) * k, C.Stair);
+        // ---------- 拐角 1 的休息平台（井的西南角）----------
+        float z1 = Flight1Steps * rise;                              // 1.44
+        float xPlat1 = sx - sizeX * 0.5f + StairWidth * 0.5f;
+        Slab("楼梯_平台1",
+             new Vector3(xPlat1, sy, z1) * k,
+             new Vector3(StairWidth, sizeY, slabT) * k, C.Stair);
 
-        // ---------- 第 2 跑：西→东，北端 ----------
-        //拐角后方向变了（+X），所以第 2 跑沿 X 方向排布
-        float flight2Y = sy + ShaftWidth * 0.5f - StairWidth * 0.5f;
-        float startX = sx - ShaftWidth * 0.5f;
-        for (int i = 0; i < StepsPerFlight; i++)
+        // ============================================================
+        //  第 2 跑：沿 +Y（北端），横向连接，4 级
+        // ============================================================
+        float yStart2 = sy - sizeY * 0.5f + tread * 0.5f;
+        for (int i = 0; i < Flight2Steps; i++)
         {
-            float z = midZ + (i + 0.5f) * stepRise;
-            float x = startX + (i + 0.5f) * stepTread;
-            Slab("楼梯2跑_" + i,
-                 new Vector3(x, flight2Y, z) * k,
-                 new Vector3(stepTread, StairWidth, 0.06f) * k, C.Stair);
+            float z = z1 + (i + 0.5f) * rise;                        // 1.52 .. 2.00
+            float y = yStart2 + i * tread;
+            Slab("楼梯_跑2_" + (i + 1),
+                 new Vector3(xPlat1, y, z) * k,
+                 new Vector3(StairWidth, tread, slabT) * k, C.Stair);
+        }
+
+        // ---------- 拐角 2 的休息平台（井的西北角）----------
+        float z2 = (Flight1Steps + Flight2Steps) * rise;             // 2.08
+        float yPlat2 = sy + sizeY * 0.5f - tread * 0.5f;
+        Slab("楼梯_平台2",
+             new Vector3(xPlat1, yPlat2, z2) * k,
+             new Vector3(StairWidth, tread, slabT) * k, C.Stair);
+
+        // ============================================================
+        //  第 3 跑：沿 +X（东侧），5 级，抵达 2F
+        // ============================================================
+        float xStart3 = sx - sizeX * 0.5f + tread * 0.5f;
+        for (int i = 0; i < Flight3Steps; i++)
+        {
+            float z = z2 + (i + 0.5f) * rise;                      // 2.16 .. 2.80
+            float x = xStart3 + i * tread;
+            Slab("楼梯_跑3_" + (i + 1),
+                 new Vector3(x, northY, z) * k,
+                 new Vector3(tread, StairWidth, slabT) * k, C.Stair);
         }
     }
 
