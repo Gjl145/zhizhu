@@ -582,7 +582,10 @@ else:
 # 它分不清「访问他类字段」（错）与「访问局部变量的同名字段」（对）。
 # 本项只检查**裸调用**（前面没有 `.`），而局部变量必然带 `.` 或无，
 # 因此可以配合「本类方法表」精确判定。
-for cname in ('SilkChain', 'SilkLine'):
+# ★ 必须包含 SilkBuilder 与 SilkParkourController ——
+#   两者最容易互相插错代码（本次 RebuildParkourStage 被插进 SilkBuilder，
+#   引用了控制器的 StageHalfSize / startPosition -> 三个 CS0103）。
+for cname in ('SilkChain', 'SilkLine', 'SilkBuilder', 'SilkParkourController'):
     m = re.search(r'\npublic class ' + cname + r'\b', s)
     if not m:
         continue
@@ -631,6 +634,9 @@ for cname in ('SilkChain', 'SilkLine'):
         if nm in own_methods:
             continue
         for mm in re.finditer(r'(?<![.\w])' + re.escape(nm) + r'\s*\(', code):
+            # 排除构造函数调用：`new SilkLine(...)` 是合法的
+            if code[max(0, mm.start() - 4):mm.start()] == 'new ':
+                continue
             ln = s[:seg_start + mm.start()].count('\n') + 1
             cross.append('%s:%d 裸调用 %s.%s() —— 应写成 chain.%s() 或同类实例访问'
                          % (cname, ln, oc, nm, nm))

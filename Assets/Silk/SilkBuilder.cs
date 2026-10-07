@@ -2274,27 +2274,13 @@ public class SilkBuilder : MonoBehaviour
         + "★ 改这个值后要按 Tab 重新切一次模式才会重建。")]
     public ParkourStageKind parkourStage = ParkourStageKind.SwingTest;
 
-    /// <summary>按 <see cref="parkourStage"/> 的选择重建跑酷关卡。</summary>
-    void RebuildParkourStage()
-    {
-        float h = StageHalfSize();
-        // 先清掉另一套，避免两套台子叠在一起
-        SilkParkourStage.Clear();
-        SilkSwingTestStage.Clear();
-
-        if (parkourStage == ParkourStageKind.SwingTest)
-        {
-            SilkSwingTestStage.Create(h);
-            // 两个关卡的起跳台高度不同，起点必须跟着改 ——
-            // ResolveGround 只在下落时吸附，出生在空中会「悬空掉一截」。
-            startPosition = SilkSwingTestStage.StartPosition;
-        }
-        else
-        {
-            SilkParkourStage.Create(h);
-            startPosition = new Vector3(-30f, 0f, -29.5f);
-        }
-    }
+    /* ★ 注意：重建关卡的实际执行在 SilkParkourController.RebuildParkourStage()。
+     *
+     * 【为什么不在这里做】
+     * 重建需要改 `startPosition` 与调用 `StageHalfSize()`，
+     * 两者都是 **SilkParkourController 的成员** ——
+     * 若把逻辑写在 SilkBuilder 里会CS0103（跨类访问）。
+     * 这个类关系是本项目第三次栽在跨类访问上，故在此明确标注。*/
 
     /// <summary>第三人称跑酷模式。为 true 时本组件不响应鼠标左键与 R，
     /// 避免与玩家的「发射丝线」「重置」冲突。由控制器在切模式时设置。</summary>
@@ -3833,6 +3819,10 @@ public class SilkParkourController : MonoBehaviour
          * 导致 FreeFly 下也能看到球。*/
         if (mode == SilkControlMode.Parkour)
         {
+            // 先建关卡再摆球 —— startPosition 由 RebuildParkourStage 设定，
+            // 顺序反了会用到旧关卡的起点（见 HandleModeSwitch 的同处注释）。
+            if (builder != null && builder.createTestLevel) RebuildParkourStage();
+
             transform.position = startPosition;
             CreateVisual();
             UpdateVisualColor();
@@ -4289,7 +4279,19 @@ public class SilkParkourController : MonoBehaviour
         {
             /* 进游戏世界：建球（之前是 Start 里无条件建，
              * 导致 FreeFly 下也能看到球 —— 两个世界被混在一起了）。*/
-            transform.position = startPosition;
+
+            /* ★ 顺序很重要：先重建关卡，再摆球。
+             *
+             * 原来把 `transform.position = startPosition` 放在最前面，
+             * 而 RebuildParkourStage() 在最后才调用 ——
+             * 于是球被摆到**旧关卡**的起点，等关卡建好后起点已经不对了。
+             *
+             * 两个关卡的起跳台高度不同（基础区顶面 -34，
+             * 摆荡测试区顶面 20），顺序错了球就会埋进地里或悬空。*/
+            // 测试关卡属于游戏世界，FreeFly 下不该存在
+            if (builder != null && builder.createTestLevel) RebuildParkourStage();
+
+            transform.position = startPosition;   // 用新关卡的起点
             flightVel = Vector3.zero;
             flatVel = Vector3.zero;   // 地面速度也要清，否则带着上一世界的惯性
             vertVel = 0f;         // 垂直速度同理，否则切回来时悬空或卡在跳跃中
@@ -4301,8 +4303,6 @@ public class SilkParkourController : MonoBehaviour
             logFollowOnce = true; // 每次切模式重打一次诊断
             lookAlignedOnce = false;   // 新世界需重新对齐一次视角
             FollowCamera();       // 立刻摆相机，当帧就能看到球
-            // 测试关卡属于游戏世界，FreeFly 下不该存在
-            if (builder != null && builder.createTestLevel) RebuildParkourStage();
         }
         else
         {
@@ -4319,6 +4319,38 @@ public class SilkParkourController : MonoBehaviour
         }
         Debug.Log("[Mode] 切换为 " + mode + " | 球 " +
                   (visual != null ? "存在" : "已销毁"));
+    }
+
+    /// <summary>
+    /// 按 <see cref="SilkBuilder.parkourStage"/> 的选择重建跑酷关卡。
+    ///
+    /// 【为什么这个方法必须在 SilkParkourController 里】
+    /// 它要读写 `startPosition`、调用 `StageHalfSize()`，
+    /// 两者都是**本类的成员** ——
+    /// 若写在 SilkBuilder 里会CS0103（跨类访问）。
+    /// 曾因此把代码插错类，编译报三个 CS0103。
+    /// </summary>
+    void RebuildParkourStage()
+    {
+        float h = StageHalfSize();
+
+        // 先清掉另一套，避免两套台子叠在一起
+        SilkParkourStage.Clear();
+        SilkSwingTestStage.Clear();
+
+        if (builder != null && builder.parkourStage == SilkBuilder.ParkourStageKind.SwingTest)
+        {
+            SilkSwingTestStage.Create(h);
+            // 两个关卡的起跳台高度不同，起点必须跟着改 ——
+            // ResolveGround 只在下落时吸附，出生在空中（vertVel=0）
+            // 不会吸附，球会「悬空掉一截」才落地。
+            startPosition = SilkSwingTestStage.StartPosition;
+        }
+        else
+        {
+            SilkParkourStage.Create(h);
+            startPosition = new Vector3(-30f, 0f, -29.5f);   // 基础区平地顶面 -34 + 半径 4.5
+        }
     }
 
     /// <summary>测试关卡用的立方体半高。从 SilkBuilder 拿，保持与网格一致。</summary>
