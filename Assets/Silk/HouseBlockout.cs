@@ -199,33 +199,82 @@ public static class HouseBlockout
     /// <summary>楼梯井的 Y 向尺寸（南北方向）= 第 2 跑横向段 + 余量。</summary>
     public const float ShaftWidthY = Flight2Steps * StepTread + 0.30f;
 
-    /// <summary>玩家角色直径（可调）。建议 0.7~0.8 m。</summary>
+    /// <summary>玩家角色直径（米）。
+    /// 参照 Bungie 官方 Halo Metrics —— 玩家碰撞体最小通过宽度 1.22 m，
+    /// 我们取 0.75 m（明显小于所有门洞与梯段，有余量）。</summary>
     public const float PlayerDiameter = 0.75f;
+
+    // ================================================================
+    //  ★★★ 尺度换算：米 -> 格
+    // ================================================================
+
+    /// <summary>
+    /// 1 米 = 多少 Unity 单位（格）。
+    ///
+    /// 【★ 为什么必须显式换算 —— 这是本关卡最大的坑】
+    /// 本文件里的所有建筑尺寸都来自国家规范，单位是**米**
+    /// （层高 2.60、门宽 0.90、踏步 0.28…）。
+    /// 而 Unity 世界的球半径是 **visualRadius = 4.5 格**，
+    /// 球心悬空高度、地心引力加速度也都是「格」制。
+    ///
+    /// 如果直接把 4.5 当成 Unity 单位：
+    ///   球视觉直径 = 9 格，而房间只有 4.5 —— **球比房间还大**
+    ///   → 玩家会卡在墙里、看不到自己、或被地面判定反复弹飞。
+    ///
+    /// 【取值依据】
+    /// 球直径 9 格若要等于「1.75 米的人」（巨人尺度），
+    /// 则 1 米 = 9/1.75 ≈ **5.1 格**。取整为 5。
+    /// 于是：房间 4.5 米 = 22.5 格，球直径 9 格 = 1.8 米
+    /// → 球占房间宽度 40%，是「巨型生物挤进房间」的观感。
+    ///
+    /// 【为什么不改球的尺寸】
+    /// visualRadius 同时影响跳跃跨度、摆荡绳长、地面吸附 ——
+    /// 改它会连带影响所有已调好的手感参数。
+    /// 改建筑的换算系数则只影响本关卡，副作用最小。
+    /// </summary>
+    public const float UnitsPerMeter = 5f;
+
+    /// <summary>米 -> Unity 单位。</summary>
+    public static float M(float meters) => meters * UnitsPerMeter;
+
+    // ===================== 换算后的常量（Unity 单位 / 格）=====================
+
+    /// <summary>房间边长（格）。4.5 米 × 5 = 22.5 格。</summary>
+    public const float RoomLength = (float)(4.5 * 5.0);
+
+    /// <summary>梯段净宽（格）。1.20 米 × 5 = 6 格。</summary>
+    public const float StairWidthM = (float)(1.20 * 5.0);
+
+    /// <summary>墙厚（格）。0.24 米 × 5 = 1.2 格。</summary>
+    public const float WallThicknessM = (float)(0.24 * 5.0);
 
     // ===================== 派生坐标 =====================
 
-    /// <summary>楼梯井 X 向尺寸（东西）= 4.22 m。
-    /// 由两跑纵跑的级数决定：14 级 × 0.28 = 3.92，加余量。</summary>
-    public static float ShaftSizeX => ShaftLengthX;
+    /// <summary>楼梯井 X 向尺寸（东西）= 4.22 米 = 21.1 格。
+    /// 由两跑纵跑的级数决定：14 级 × 0.28 = 3.92 米，加余量。</summary>
+    public static float ShaftSizeX => M(ShaftLengthX);
 
-    /// <summary>楼梯井 Y 向尺寸（南北）= 1.42 m。第 2 跑横向段。</summary>
-    public static float ShaftSizeY => ShaftWidthY;
+    /// <summary>楼梯井 Y 向尺寸（南北）= 1.42 米 = 7.1 格。第 2 跑横向段。</summary>
+    public static float ShaftSizeY => M(ShaftWidthY);
 
     // 房间中心偏移：从原点向 ±X（左右两间房）
-    static float RoomOffsetX => RoomSize * 0.5f + ShaftSizeX * 0.5f;
+    static float RoomOffsetX => RoomLength * 0.5f + ShaftSizeX * 0.5f;
     // 房间中心偏移：从原点向 ±Y（前后两间房）
-    static float RoomOffsetY => RoomSize * 0.5f;
+    static float RoomOffsetY => RoomLength * 0.5f;
 
-    /// <summary>1F 楼板顶面高度（z）。地面在 z=0。</summary>
+    /// <summary>1F 楼板顶面高度（格）。地面在 z=0。</summary>
     public static float Floor1Z => 0f;
 
-    /// <summary>2F 楼板底面高度（z）= 1F 净高。
-    /// 2F 楼板顶面 = + SlabThickness。</summary>
-    public static float Floor2Z => MinNetHeight;
+    /// <summary>2F 楼板底面高度（格）= 1F 净高。</summary>
+    public static float Floor2Z => M(MinNetHeight);
 
     /// <summary>本关卡的球心起点（在 1F 东南角的房间里）。</summary>
     public static Vector3 StartPosition
-        => new Vector3(RoomOffsetX, -RoomOffsetY, PlayerDiameter * 0.5f + 0.05f);
+        => new Vector3(RoomOffsetX, -RoomOffsetY,
+                       visualRadiusPlayer + 0.5f);
+
+    /// <summary>玩家球心应悬空的高度（格）= 球视觉半径。</summary>
+    const float visualRadiusPlayer = 4.5f;
 
     // ================================================================
     //  构建
@@ -247,41 +296,46 @@ public static class HouseBlockout
     /// </summary>
     public static void Create(float h)
     {
-        float k = h / 50f;
+        // ★ 缩放固定为 1.0 —— 米->格的换算已由 M()（UnitsPerMeter）负责。
+        //   旧代码用 k = h/50 是把「米」当「格」用，导致球比房间还大。
+        const float k = 1f;
 
         // ---------- 1F楼板（地面）----------
-        Slab("1F_地面", new Vector3(0f, 0f, -SlabThickness * 0.5f) * k,
-             new Vector3(OverallWidth, OverallDepth, SlabThickness) * k, C.Slab);
+        Slab("1F_地面", new Vector3(0f, 0f, -M(SlabThickness) * 0.5f) * k,
+             new Vector3(OverallWidth, OverallDepth, M(SlabThickness)) * k, C.Slab);
 
         // ---------- 1F 天花板 = 2F 楼板 ----------
-        Slab("2F_楼板", new Vector3(0f, 0f, (Floor2Z + SlabThickness * 0.5f) * k),
-             new Vector3(OverallWidth, OverallDepth, SlabThickness) * k, C.Slab);
+        Slab("2F_楼板", new Vector3(0f, 0f, Floor2Z + M(SlabThickness) * 0.5f),
+             new Vector3(OverallWidth, OverallDepth, M(SlabThickness)) * k, C.Slab);
 
         // ---------- 屋顶（2F 天花板之上）----------
-        Slab("屋顶", new Vector3(0f, 0f, (Floor2Z + MinNetHeight + SlabThickness * 0.5f) * k),
-             new Vector3(OverallWidth, OverallDepth, SlabThickness) * k, C.Slab);
+        Slab("屋顶", new Vector3(0f, 0f, Floor2Z + M(MinNetHeight) + M(SlabThickness) * 0.5f),
+             new Vector3(OverallWidth, OverallDepth, M(SlabThickness)) * k, C.Slab);
 
         // ---------- 外墙（4 面）----------
-        float hWall = StoreyHeight;   // 一层高
-        float zCenter = Floor2Z + MinNetHeight * 0.5f;
+        // ★ 所有规范尺寸（米）都要过 M() 转成格
+        float hWall = M(StoreyHeight);          // 一层高 2.82 米
+        float zCenter = Floor2Z + M(MinNetHeight) * 0.5f;
+        const float wallT = WallThicknessM;      // 墙厚 0.24 米 = 1.2 格
+        const float roomLen = RoomLength;        // 房间边长（已换算成格）
 
-        Wall("外墙_南", new Vector3(0f, -OverallDepth * 0.5f + WallThickness * 0.5f, zCenter) * k,
-             new Vector3(OverallWidth, WallThickness, hWall) * k);
-        Wall("外墙_北", new Vector3(0f, OverallDepth * 0.5f - WallThickness * 0.5f, zCenter) * k,
-             new Vector3(OverallWidth, WallThickness, hWall) * k);
-        Wall("外墙_西", new Vector3(-OverallWidth * 0.5f + WallThickness * 0.5f, 0f, zCenter) * k,
-             new Vector3(WallThickness, OverallDepth, hWall) * k);
-        Wall("外墙_东", new Vector3(OverallWidth * 0.5f - WallThickness * 0.5f, 0f, zCenter) * k,
-             new Vector3(WallThickness, OverallDepth, hWall) * k);
+        Wall("外墙_南", new Vector3(0f, -OverallDepth * 0.5f + wallT * 0.5f, zCenter) * k,
+             new Vector3(OverallWidth, wallT, hWall) * k);
+        Wall("外墙_北", new Vector3(0f, OverallDepth * 0.5f - wallT * 0.5f, zCenter) * k,
+             new Vector3(OverallWidth, wallT, hWall) * k);
+        Wall("外墙_西", new Vector3(-OverallWidth * 0.5f + wallT * 0.5f, 0f, zCenter) * k,
+             new Vector3(wallT, OverallDepth, hWall) * k);
+        Wall("外墙_东", new Vector3(OverallWidth * 0.5f - wallT * 0.5f, 0f, zCenter) * k,
+             new Vector3(wallT, OverallDepth, hWall) * k);
 
         // ---------- 内墙：把房子分成 2×2 四间 + 中央楼梯井 ----------
         // 南北向内墙（左右各一段，中间留楼梯井）
         Wall("内墙_南西", new Vector3(-RoomOffsetX, 0f, zCenter) * k,
-             new Vector3(WallThickness, RoomSize, hWall) * k);
+             new Vector3(wallT, roomLen, hWall) * k);
         Wall("内墙_南东", new Vector3(RoomOffsetX, 0f, zCenter) * k,
-             new Vector3(WallThickness, RoomSize, hWall) * k);
+             new Vector3(wallT, roomLen, hWall) * k);
         Wall("内墙_北西", new Vector3(-RoomOffsetX, 0f, zCenter) * k,
-             new Vector3(WallThickness, RoomSize, hWall) * k);
+             new Vector3(wallT, roomLen, hWall) * k);
         Wall("内墙_北东", new Vector3(RoomOffsetX, 0f, zCenter) * k,
              new Vector3(WallThickness, RoomSize, hWall) * k);
 
@@ -308,8 +362,8 @@ public static class HouseBlockout
     }
 
     /// <summary>整体平面尺寸（X = 东西，Y = 南北）。</summary>
-    public static float OverallWidth => RoomSize * 2 + ShaftSizeX;
-    public static float OverallDepth => RoomSize * 2;                // 7.0
+    public static float OverallWidth => RoomLength * 2 + ShaftSizeX;
+    public static float OverallDepth => RoomLength * 2;
 
     // ================================================================
     //  楼梯：两跑折返（两次拐角）
@@ -343,9 +397,6 @@ public static class HouseBlockout
     {
         float sx = 0f;      // 井中心 x
         float sy = 0f;      // 井中心 y
-        float tread = StepTread;
-        float rise = StepRise;
-        const float slabT = 0.06f;      // 踏步板厚度
 
         /* ★ 两跑的朝向不同 —— 这是「两次90° 转角」的关键
          *
@@ -358,14 +409,22 @@ public static class HouseBlockout
          *  → 所以 X 向需要容纳两跑：2.52 + 1.40 = 3.92 m
          *  → Y 向只需容纳中间的横向段：1.12 m
          */
-        float sizeX = ShaftSizeX;        // 4.22 m（沿 X）
-        float sizeY = ShaftSizeY;        // 1.42 m（沿 Y）
+        float sizeX = ShaftSizeX;        // 4.22 米（沿 X）
+        float sizeY = ShaftSizeY;        // 1.42 米（沿 Y）
+
+        // ★ 米 -> 格：所有规范尺寸都要过M()
+        //   旧代码直接用米当 Unity 单位，
+        //   导致球直径 9 格 > 房间 4.5 —— **球比房间还大**。
+        float tread = M(StepTread);      // 踏步进深 0.28 米 = 1.4 格
+        float rise = StepRise;            // 高度在下面算 z 时才换算
+        const float stairW = StairWidthM; // 梯段净宽 1.20 米 = 6 格
+        const float slabT = 0.30f;       // 踏步板厚（Unity 单位）
 
         // 梯段中心线
-        float westX = sx - sizeX * 0.5f + StairWidth * 0.5f;   // 跑1 在西侧
-        float eastX = sx + sizeX * 0.5f - StairWidth * 0.5f;   // 跑3 在东侧
-        float northY = sy + sizeY * 0.5f - StairWidth * 0.5f;   // 跑2 在北端
-        float southY = sy - sizeY * 0.5f + StairWidth * 0.5f;   // 起步区
+        float westX = sx - sizeX * 0.5f + stairW * 0.5f;   // 跑1 在西侧
+        float eastX = sx + sizeX * 0.5f - stairW * 0.5f;   // 跑3 在东侧
+        float northY = sy + sizeY * 0.5f - stairW * 0.5f;   // 跑2 在北端
+        float southY = sy - sizeY * 0.5f + stairW * 0.5f;   // 起步区
 
         // ============================================================
         //  第 1 跑：沿 -X → +X（西侧），9 级
@@ -373,19 +432,20 @@ public static class HouseBlockout
         float xStart1 = sx - sizeX * 0.5f + tread * 0.5f;
         for (int i = 0; i < Flight1Steps; i++)
         {
-            float z = (i + 0.5f) * rise;                          // 0.08 .. 1.36
+            float z = M((i + 0.5f) * rise);                     // 升到 1.44 米处
             float x = xStart1 + i * tread;
             Slab("楼梯_跑1_" + (i + 1),
                  new Vector3(x, southY, z) * k,
-                 new Vector3(tread, StairWidth, slabT) * k, C.Stair);
+                 new Vector3(tread, stairW, slabT) * k, C.Stair);
         }
 
         // ---------- 拐角 1 的休息平台（井的西南角）----------
-        float z1 = Flight1Steps * rise;                              // 1.44
-        float xPlat1 = sx - sizeX * 0.5f + StairWidth * 0.5f;
+        float z1m = Flight1Steps * rise;                             // 1.44 米
+        float z1 = M(z1m);
+        float xPlat1 = sx - sizeX * 0.5f + stairW * 0.5f;
         Slab("楼梯_平台1",
              new Vector3(xPlat1, sy, z1) * k,
-             new Vector3(StairWidth, sizeY, slabT) * k, C.Stair);
+             new Vector3(stairW, sizeY, slabT) * k, C.Stair);
 
         // ============================================================
         //  第 2 跑：沿 +Y（北端），横向连接，4 级
@@ -393,19 +453,20 @@ public static class HouseBlockout
         float yStart2 = sy - sizeY * 0.5f + tread * 0.5f;
         for (int i = 0; i < Flight2Steps; i++)
         {
-            float z = z1 + (i + 0.5f) * rise;                        // 1.52 .. 2.00
+            float z = M(z1m + (i + 0.5f) * rise);
             float y = yStart2 + i * tread;
             Slab("楼梯_跑2_" + (i + 1),
                  new Vector3(xPlat1, y, z) * k,
-                 new Vector3(StairWidth, tread, slabT) * k, C.Stair);
+                 new Vector3(stairW, tread, slabT) * k, C.Stair);
         }
 
         // ---------- 拐角 2 的休息平台（井的西北角）----------
-        float z2 = (Flight1Steps + Flight2Steps) * rise;             // 2.08
+        float z2m = (Flight1Steps + Flight2Steps) * rise;           // 2.08 米
+        float z2 = M(z2m);
         float yPlat2 = sy + sizeY * 0.5f - tread * 0.5f;
         Slab("楼梯_平台2",
              new Vector3(xPlat1, yPlat2, z2) * k,
-             new Vector3(StairWidth, tread, slabT) * k, C.Stair);
+             new Vector3(stairW, tread, slabT) * k, C.Stair);
 
         // ============================================================
         //  第 3 跑：沿 +X（东侧），5 级，抵达 2F
@@ -413,11 +474,11 @@ public static class HouseBlockout
         float xStart3 = sx - sizeX * 0.5f + tread * 0.5f;
         for (int i = 0; i < Flight3Steps; i++)
         {
-            float z = z2 + (i + 0.5f) * rise;                      // 2.16 .. 2.80
+            float z = M(z2m + (i + 0.5f) * rise);
             float x = xStart3 + i * tread;
             Slab("楼梯_跑3_" + (i + 1),
                  new Vector3(x, northY, z) * k,
-                 new Vector3(tread, StairWidth, slabT) * k, C.Stair);
+                 new Vector3(tread, stairW, slabT) * k, C.Stair);
         }
     }
 
@@ -546,7 +607,7 @@ public static class HouseBlockout
                "  层高 " + StoreyHeight + " m\n" +
                "  房间 " + RoomSize + " × " + RoomSize + " m（四间统一）\n" +
                "  楼梯 踏步 " + StepTread + "×" + StepRise + " m   GB50096 6.3.2 强条\n" +
-               "  楼梯 梯段净宽 " + StairWidth + " m   GB50096 6.3.1 强条（≥1.10）\n" +
+               "  楼梯 梯段净宽 " + stairW + " m   GB50096 6.3.1 强条（≥1.10）\n" +
                "  门洞 高 " + DoorHeight + " m   表 5.8.7（规范 2.00 + 实际余量）\n" +
                "  ── 关键提示 ──\n" +
                "  · 所有墙/板都是**薄板**，房间是空心的，可以进去\n" +

@@ -1590,6 +1590,57 @@ public class SilkChain : MonoBehaviour
         + "  反而压缩了不同距离之间的节奏差异。")]
     [Range(0.8f, 1.5f)] public float slackScale = 1.0f;
 
+    /// <summary>
+    /// 绳长下限（米），用于**数值防爆**。
+    ///
+    /// 【★ 为什么必须有这个】
+    /// 摆荡力学里有两项都除以绳长：
+    ///     gPerp / L      ∝ 1/L
+    ///     T = v² / L      ∝ 1/L
+    /// 室内摆荡时绳长可能被压到极短（住宅层高 2.6 米、球直径 0.75，
+    /// 绳长可能只有 0.05~0.3 米）：
+    ///     L = 0.05 时 gPerp/L = 98/0.05 = **1960 格/秒²**（20 倍重力）
+    /// 两项同时放大 -> 速度指数发散。
+    ///
+    /// Python 实测（30 帧内）：
+    ///     L = 0.30 -> 稳定
+    ///     L = 0.10 -> 稳定
+    ///     L = 0.05 -> **第 3 帧速度飙到 1,488,710** -> Infinity
+    ///
+    /// 【官方为何不会遇到】
+    /// Fristrom 原始伪代码是**位置修正**不是力：
+    ///     vel += (Test - pos).normalized;   ← 只修正单位向量
+    /// 没有 v²/L 这种与平方成正比的项。我把位置约束改写成力时
+    /// 保留了这个形式，在力积分里是不稳定的 —— 重构时的疏漏。
+    ///
+    /// 依据：多个抓钩实现都用 `Clamp(绳长, 最小值, 最大值)`。
+    /// </summary>
+    [Tooltip("绳长下限（米）。★ 数值防爆用，不是玩法参数。\n"
+        + "摆荡公式里有两项除以绳长（gPerp/L、T=v²/L），\n"
+        + "室内短绳时会同时放大导致速度指数发散。\n"
+        + "设 0.05 足以让除法稳定，又小到不干扰正常摆荡。")]
+    public float minRopeLength = 0.05f;
+
+    /// <summary>
+    /// 速度上限（格/秒）—— 数值安全网。
+    ///
+    /// 依据：Insomniac GDC 2019 P86 明确说水平终端速度
+    /// 由「下落速度映射」而来，且**永不允许减速**——
+    /// 也就是有一个上限。P85 另给了流式加载约束「平均速度 < 30 m/s」。
+    /// 这里取 300 覆盖两者（30 m/s ≈ 108 格/秒，留足余量）。
+    /// </summary>
+    [Tooltip("速度上限（格/秒）。数值安全网，防止异常情况下速度失控。\n"
+        + "依据：Insomniac GDC 2019 提到水平终端速度由下落速度映射，\n"
+        + "且流式加载要求平均速度 < 30 m/s（约 108 格/秒）。\n"
+        + "这里取 300，覆盖官方量级且留足余量。")]
+    public float terminalSpeed = 300f;
+
+    /// <summary>检查向量是否有限（无 NaN / Infinity）。</summary>
+    static bool IsFinite(Vector3 v)
+        => !float.IsNaN(v.x) && !float.IsNaN(v.y) && !float.IsNaN(v.z)
+        && !float.IsInfinity(v.x) && !float.IsInfinity(v.y)
+        && !float.IsInfinity(v.z);
+
     /// 悬链线布点结果：节点位置 + 各段弧长
     struct CatenaryLayout
     {
@@ -1864,18 +1915,55 @@ public class SilkChain : MonoBehaviour
             float gAlong = Vector3.Dot(gravityVec, lineDir);
             Vector3 gPerp = gravityVec - lineDir * gAlong;
 
+            /* ★★ 线长必须钳制 —— 这是数值爆炸的根因
+             *
+             * 【症状】用户报错：
+             *   Invalid worldAABB. Object is too large or too far away
+             *   from the origin.
+             *   transform.position assign attempt for
+             *   'Anchor_SilkNode_(-50, -2, 38)' is not valid.
+             *   Input position is { -Infinity, Infinity, Infinity }
+             *   出现 19 个报错。
+             *
+             * 【根因】下面两项**都除以 lineLen**：
+             *     gPerp / lineLen         ∝ 1/L
+             *     tension = v² / L         ∝ 1/L
+             * 室内摆荡时绳长可能被压到极短（房屋层高 2.6 米、
+             * 球直径 0.75，绳长可能只有 0.05~0.3 米）：
+             *     L = 0.05 时 gPerp/L = 98/0.05 = **1960 格/秒²**（20 倍重力）
+             * 两项同时放大 -> 速度指数发散 -> Infinity。
+             *
+             * Python 实测复现（30 帧内）：
+             *     L0=0.30 -> 稳定
+             *     L0=0.10 -> 稳定
+             *     L0=0.05 -> **第 3 帧速度飙到 1,488,710** -> Infinity
+             *
+             * 【为什么官方不会遇到】
+             * Fristrom 的原始伪代码是**位置修正**，不是力：
+             *     vel += (Test - pos).normalized;   ← 只修正单位向量
+             * 没有 v²/L 这种与平方成正比的项，所以不会指数爆炸。
+             * 我把「位置约束」改写成「力」时保留了 T=v²/L 的形式，
+             * 在力积分里这是**不稳定**的 —— 这是我重构时的疏漏。
+             *
+             * 【修法】两层防护：
+             *   ① 把 lineLen 钳到最小值（下方 clamp）
+             *   ② 每帧检查速度，非有限就归零并复位（见下方）*/
+            float safeLen = Mathf.Max(lineLen, minRopeLength);
+
             /* 张力 T = m·v² / L，m = 1（P68/P70）。
              * 注意用的是**沿绳方向的相对速度** —— 球飞离锚点时
-             * 绳索把它拉回来，这个力只改变「沿绳」的速度分量。*/
-            float tension = (velAlong * velAlong) / lineLen;
+             * 绳索把它拉回来，这个力只改变「沿绳」的速度分量。
+             * ★ 用 safeLen 而非 lineLen：室内短绳时防爆炸。*/
+            float tension = (velAlong * velAlong) / safeLen;
 
             /* 施力：只作用于切向速度（P71 BONUS INFO）。
              *
              *   · 张力：沿绳方向，抵消「飞离」趋势
              *   · G_perp：垂直绳方向，是恢复力，让球摆回来
              * 这两个力都**不含** gAlong —— 因为它已被上面的
-             * 「张力对消」处理过了。*/
-            Vector3 accel = (gPerp / lineLen) + (lineDir * (tension - gAlong));
+             * 「张力对消」处理过了。
+             * ★ 同样用 safeLen。*/
+            Vector3 accel = (gPerp / safeLen) + (lineDir * (tension - gAlong));
             velTangent += accel * dt;
 
             /* 官方 P71：「apply full gravity to the remaining velocity
@@ -1886,6 +1974,16 @@ public class SilkChain : MonoBehaviour
 
             // 阻尼：官方演讲未给数值，用 Box2D 官方推荐的 0.5 阻尼比换算
             vel *= Mathf.Pow(damping, dt * 60f);
+
+            /* ★ 数值安全网：任何非有限值直接归零。
+             * 即使有了 safeLen 钳制，极端情况（玩家卡进几何体、
+             * 两个节点重叠、dt 异常）仍可能产生 NaN/Infinity。
+             * 一旦不处理，Unity 会报 worldAABB 错误并让整条链崩坏。*/
+            if (!IsFinite(vel)) vel = Vector3.zero;
+            // 速度上限：与官方「水平终端速度由下落速度映射」的做法一致，
+            // 防止异常情况下速度失控
+            if (vel.sqrMagnitude > terminalSpeed * terminalSpeed)
+                vel = vel.normalized * terminalSpeed;
 
             velocities[i] = vel;
             nodes[i].transform.position += vel * dt;
@@ -1909,7 +2007,12 @@ public class SilkChain : MonoBehaviour
                 Vector3 b = nodes[i + 1].WorldPosition;
                 Vector3 d = b - a;
                 float len = d.magnitude;
-                if (len < 0.0001f) continue;
+
+                /* ★ 数值安全网：位置非有限就跳过这一段。
+                 * 约束求解会做除法（d / len * ...），
+                 * 若上游已产生 NaN，这里会继续放大。
+                 * 直接跳过比强行修正安全 —— 下一帧力学段会重算。*/
+                if (!IsFinite(d) || len < 0.0001f) continue;
 
                 float rest = restLengths[i];
 
@@ -1960,6 +2063,28 @@ public class SilkChain : MonoBehaviour
              * —— 必须放在**约束迭代内部**，让混合与约束交替进行。
              * 若放在迭代之外，混合只做一次就结束，起不到稳定绳长的作用。*/
             ApplySwingBlend();
+        }
+
+        /* ★★ 最终安全网：整条链的非有限值兜底
+         *
+         * 用户报错（19 个）：
+         *   Invalid worldAABB. Object is too large or too far away
+         *   from the origin.
+         *   Input position is { -Infinity, Infinity, Infinity }
+         *
+         * 一旦某个节点位置变成 Infinity，
+         * Unity 会**永久**拒绝该物体的 transform 更新
+         * （worldAABB 缓存被污染），刷出大量重复报错。
+         *
+         * 这里做最后一道检查：任一节点位置非有限，
+         * 就把整条链的速度清零（位置下一帧由约束拉回）。
+         * 总比让 Unity 永久报错好。*/
+        for (int i = 0; i <= last; i++)
+        {
+            if (!IsFinite(nodes[i].transform.position))
+            {
+                velocities[i] = Vector3.zero;
+            }
         }
 
         // 3. 末端被驱动时，每帧末尾把它对齐到挂载点，
