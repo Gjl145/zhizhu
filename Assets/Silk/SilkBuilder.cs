@@ -1059,6 +1059,34 @@ public class SilkLine
     public bool Grab(Transform player, SilkBuilder builder)
         => Attach(player, builder, "玩家");
 
+    /// <summary>
+    /// 把自己（球）作为**载荷**挂到丝线末端，但**不锁死末端**。
+    ///
+    /// 【与 Attach 的区别 —— 这是钩爪摆荡能成立的关键】
+    ///   Attach(target)：末端 Drive 到 target.transform ——末端被钉死，
+    ///                   丝线不会摆动。适合「粘在墙上」。
+    ///   AttachSelf()：  末端自由，由约束求解决定位置。
+    ///                   球每帧跟随末端（见 UpdateSwing），
+    ///                   玩家施力改变摆动方向 —— 这才是摆荡。
+    ///
+    /// 【为什么需要它】用户反馈「钩爪莫名其妙连上又断开」，
+    /// 根因就是用了 Attach 把末端钉死：线是「连上」了，但球
+    /// 与末端位置脱钩，看起来就像断开了。
+    /// </summary>
+    public bool AttachSelf(SilkBuilder builder, string label = "玩家")
+    {
+        if (builder == null) return false;
+        if (!TryTransition(SilkLifeState.Anchored, "挂载 " + label)) return false;
+
+        attachedBody = null;
+        // 末端不Drive ——让它自由摆动。这与 Attach 的唯一区别。
+        endTarget = null;
+        endDriven = false;
+
+        EnsureChain(builder);
+        return true;
+    }
+
     /// <summary>挂到已有的锚点上（复用 CreateAnchorAt 建好的点）。
     /// 避免为了拿一个 Transform 而多建一个重复锚点。</summary>
     public bool Attach(AnchorPoint anchor, SilkBuilder builder, string label = "锚点")
@@ -1804,6 +1832,52 @@ public class SilkChain : MonoBehaviour
             return drivenVelocity;
         }
         return velocities[nodes.Count - 1];
+    }
+
+    /// <summary>
+    /// 读取末端当前**位置**（格）。
+    ///
+    /// 【为什么必须有这个方法】
+    /// 摆荡时玩家（球）是挂在末端的载荷，位置必须**等于**末端位置。
+    /// 原实现里球只靠 `transform.position += ... * accel * dt * dt` 积分，
+    /// **从不跟随末端** —— 于是球和丝线是两个互不相干的物体，
+    /// 视觉上分离，看起来就是「线断了」。
+    ///
+    /// 被驱动时（endDriven）直接读目标位置；
+    /// 自由摆动时读最后一个节点 —— 那是约束求解出来的真实位置。
+    /// </summary>
+    public Vector3 GetEndPosition()
+    {
+        if (endDriven && endTarget != null) return endTarget.position;
+        if (nodes.Count < 2) return transform.position;
+        // nodes 是 List<AnchorPoint>，用 WorldPosition 取实际世界坐标
+        return nodes[nodes.Count - 1].WorldPosition;
+    }
+
+    /// <summary>
+    /// 给末端施加一次**速度冲量**（格/秒）。
+    ///
+    /// 【为什么是速度冲量而不是位移】
+    /// 原实现用 `transform.position += accel * dt * dt` 直接位移球，
+    /// 在 dt = 0.016 时 dt² = 0.00026，实际效果微乎其微
+    ///（实测 1 秒只累积 1.8 格，是目标值的 14%），泵力几乎无效。
+    ///
+    /// 改成对末端的速度冲量（dt 的一次项）后，每帧稳定生效。
+    /// 同时语义更正确：玩家按键是「对丝线施力」，
+    /// 球的位置由约束求解自然得出，而不是被硬推。
+    /// </summary>
+    public void AddEndVelocity(Vector3 impulse)
+    {
+        if (impulse.sqrMagnitude < 1e-8f) return;
+        if (nodes.Count < 2) return;
+
+        int last = nodes.Count - 1;
+        // 末端被 Drive 时不该由这里改速度（下一帧会被覆盖），直接返回
+        if (endDriven && endTarget != null) return;
+
+        // 本项目用**显式速度积分**（velocities[i] += a * dt，
+        // 位置 += velocities[i] * dt），不是 Verlet 的位置差。
+        velocities[last] += impulse;
     }
 
     /// <summary>
@@ -4638,7 +4712,28 @@ public class SilkParkourController : MonoBehaviour
         + "现实人类跑动约 3~12 格/秒，取 50 属于偏快的冲刺手感。")]
     public float moveSpeed = 50f;
 
-    /* ---------- 挂荡：按输入移动自己，丝线末端跟随 ---------- */
+    /* ---------- 挂荡：球跟随丝线末端 ---------- */
+
+    /// <summary>
+    /// 摆荡：球**必须跟随丝线末端**，泵力只用来给末端施加力。
+    ///
+    /// 【★ 这是一个曾经存在的根本缺陷 —— 修复记录】
+    /// 原实现只用 `transform.position += tangential * (pump * accel * dt * dt)`
+    /// 靠加速度积分「把球推开」，**球的位置从不跟随丝线末端**。
+    /// 结果（用户反馈「莫名其妙把球和锚点连起来又莫名断开」）：
+    ///   · 球与丝线末端是两个互不相干的物体 -> 视觉上分离 =看起来「断了」
+    ///   · 不按 WASD 时 pump=0 -> 球停着不动，丝线在别处摆 -> 更是「断开」
+    ///   · 玩家看到的现象：球「飞向」锚点，然后线就断了
+    ///     实际上线没断，只是球不在末端上了。
+    ///
+    /// 【正确的物理关系】
+    /// 丝线末端的位置由 SilkChain 的约束求解决定（摆动中心 + 摆动半径）。
+    /// 玩家（球）是挂在末端上的**载荷** —— 它的位置应该**等于**末端位置。
+    /// 玩家按键的作用是**对末端施加力**（改变摆动方向/加速摆动），
+    /// 而不是直接位移自己。这是蜘蛛侠式摆荡的标准做法：
+    ///   按方向键 = 荡向那个方向（身体随之被拉过去）
+    ///   松手       = 脱离丝线，末端速度成为自己的初速度
+    /// </summary>
     void UpdateSwing(float dt)
     {
         if (grabbed == null) { isFlying = true; return; }
@@ -4655,19 +4750,33 @@ public class SilkParkourController : MonoBehaviour
         float pump = Input.GetAxis("Vertical");
         float side = Input.GetAxis("Horizontal");
 
-        // 有输入时才进入 Swinging 状态 —— 否则丝线会一直停在 Anchored，
-        // 状态机里Swinging 这个值等于从未被用过
-        if (Mathf.Abs(pump) > 0.01f || Mathf.Abs(side) > 0.01f)
+        bool hasInput = Mathf.Abs(pump) > 0.01f || Mathf.Abs(side) > 0.01f;
+
+        if (hasInput)
+        {
             grabbed.StartSwing();
 
-        /* 位移用加速度积分：displacement = a * dt^2
-         * （不是 a*dt —— 那是速度；也不是 a*dt^2/2 *60 * 0.06 这种凑数，
-         *   实测 1 秒只累积 1.8 格，是目标值的 14%，泵力几乎无效）
-         * Python 实算：accel=30 时1 秒末速度 30 格/s（约 1.1g），符合目标区间。*/
-        if (Mathf.Abs(pump) > 0.01f)
-            transform.position += tangential * (pump * pumpAccel * dt * dt);
-        if (Mathf.Abs(side) > 0.01f)
-            transform.position += lateral * (side * lateralAccel * dt * dt);
+            /* 泵力作用在**末端**上 —— 让摆动加速/改变方向，
+             * 而不是直接把球位移出去。
+             * 改用速度冲量（dt 的一次项）而非位移（dt 的二次项）：
+             *   位移 = a*dt^2 在 dt=0.016 时极小，泵力几乎无效
+             *   （实测 1 秒只累积 1.8 格，是目标值的 14%）
+             * 速度冲量则每帧稳定生效，手感才跟得上。*/
+            if (Mathf.Abs(pump) > 0.01f)
+                grabbed.chain.AddEndVelocity(tangential * (pump * pumpAccel * dt));
+            if (Mathf.Abs(side) > 0.01f)
+                grabbed.chain.AddEndVelocity(lateral * (side * lateralAccel * dt));
+        }
+
+        /* ★ 核心修正：球的位置 = 丝线末端的位置。
+         *
+         * 必须在施力**之后**取 —— 这样本帧的泵力立刻反映到位置上，
+         * 玩家能看到「按了键身体就被拉过去」，反馈才跟得上手。
+         * 物理链（SilkChain）是在它自己的 Update 里解的，
+         * 故这里读到的是上一帧解出的末端位置 ——
+         * 相差一帧（16ms），肉眼无法察觉。*/
+        if (grabbed.chain != null)
+            transform.position = grabbed.chain.GetEndPosition();
 
         bodyVelocity = endVel;
     }
@@ -4924,14 +5033,28 @@ public class SilkParkourController : MonoBehaviour
         if (line == null) return;     // 太近或重复
         if (!firedLines.Contains(line)) firedLines.Add(line);
 
-        // 末端挂到目标点 -> 进入摆荡
-        line.Attach(target, builder, "命中点");
+        // 末端挂到目标点-> 进入摆荡
+        /* ★ 关键修正：这里**不能**用 Attach(target)。
+         *
+         * Attach(AnchorPoint) 会调用 DriveEndTo(anchor) ——
+         * 把丝线末端**锁死在锚点上**（endDriven = true）。
+         * 后果：丝线根本不会摆动，只是被钉在锚点。
+         * 玩家看到的现象正是用户反馈的：
+         *   「莫名其妙把球和锚点连起来，莫名其妙断开来」——
+         *   线是「连上」了（钉住了），但球与末端位置脱钩，
+         *   球靠加速度积分乱飘 -> 看起来球和线分离了。
+         *
+         * 正确做法：末端**自由**（不Drive），由 SilkChain 的约束求解
+         * 决定位置 —— 玩家是挂在末端的载荷，按方向键对末端施力。
+         * 这样才有真正的摆荡。*/
+        line.AttachSelf(builder, "钩爪末端");
         line.StartSwing();
         grabbed = line;
         isFlying = false;
         if (verboseFireLog)
             Debug.Log("[Fire] 已连接自己 → " + target.position +
-                      "（评分 " + lastAnchorScore.ToString("F1") + "）");
+                      "（评分 " + lastAnchorScore.ToString("F1") + "）"
+                      + "｜末端自由摆动 = true");
     }
 
     [Tooltip("输出自动瞄准的选点结果（调自动瞄准手感时临时开启）")]

@@ -385,6 +385,30 @@ if os.path.exists(DESIGN):
         else:
             ok('设计文档声称已实现的 %d 项机制在代码中均存在' % len(ids))
 
+# ---------- 13. 摆荡一致性（防「球与丝线脱钩」回归）----------
+# 【曾发生的真实 bug】用户反馈「钩爪莫名其妙把球和锚点连起来、
+# 又莫名其妙断开」。根因有二：
+#   1. FireAtAnchor 用 Attach(target) -> DriveEndTo(anchor) 把末端钉死，
+#      丝线根本不会摆动。
+#   2. UpdateSwing 里球只靠 `transform.position += accel*dt*dt` 积分，
+#      **从不跟随末端** -> 球与丝线是两个物体 -> 看起来「断了」。
+# 这两项若同时成立，玩家无论怎么按键都得不到摆荡手感。
+ok_msg = []
+if 'AttachSelf' not in s:
+    err('缺少 AttachSelf —— 钩爪不能用它把末端钉死（否则摆荡不成立）')
+else:
+    ok_msg.append('AttachSelf 存在')
+if re.search(r'transform\.position\s*=\s*grabbed\.chain\.GetEndPosition\(\)', s):
+    ok_msg.append('球跟随末端位置')
+else:
+    err('UpdateSwing 未让球跟随丝线末端 —— 会出现「球与线脱钩、看起来断开」')
+if 'AddEndVelocity' in s:
+    ok_msg.append('泵力施加到末端')
+else:
+    warn('未找到 AddEndVelocity —— 泵力可能仍在直接位移球（dt² 积分几乎无效）')
+if ok_msg:
+    ok('摆荡一致性：%s' % ' / '.join(ok_msg))
+
 # ---------- 汇总 ----------
 print()
 print('=' * 60)
