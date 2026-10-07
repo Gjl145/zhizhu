@@ -45,3 +45,6 @@ desktop.ini
 
 # WorkBuddy 工作区数据（项目记忆目录，本地保留不入库）
 .workbuddy/memory/
+
+# 临时研究目录
+_research/
