@@ -2763,6 +2763,88 @@ public class SilkBuilder : MonoBehaviour
     AnchorPoint firstAnchor;
 
     /// <summary>最近一次由「选中-连线」流程创建的丝线。
+
+    /// <summary>★ 自由搭建模式下的球心落点 —— **自动找场景里最高的平台**。
+    ///
+    /// 【为什么需要这个】
+    ///   你在Editor 里手工搭场景，但 <see cref="startPosition"/> 是代码里
+    ///   写死的旧关卡坐标（如 -30, 0, -32.75）。
+    ///   → 球出生在悬空处 -> 掉下去 -> 「小球很容易丢了」。
+    ///   若让你手填坐标，你每换一次场景布局就要改一次 Inspector。
+    ///
+    /// 【做法】向下射线扫描，找**最高的有顶面的物体**，
+    ///   球心 = 该顶面 + visualRadius（正好悬在面上，不会陷进去）。
+    ///
+    /// 【为什么找「最高」而不是「最近」】
+    ///   多层建筑里玩家通常从顶层开始。若找最近（最低）的，
+    ///   球会出生在地板层，跑到楼下还得爬楼梯。
+    ///   ★ 用户可��用 <see cref="freeBuildSpawnOverride"/> 手动指定，
+    ///   不指定时点 Re-detect按钮重扫。
+    /// </summary>
+    public Vector3 DetectFreeBuildSpawn()
+    {
+        // 手动指定优先（用户就是想放某处）
+        if (freeBuildSpawnOverride != Vector3.zero)
+            return freeBuildSpawnOverride + Vector3.forward * visualRadius;
+
+        /* 扫描场景里所有 Collider，找 Z 最高的顶面。
+         *
+         * 【为什么用 Physics.OverlapBox 而不是射线】
+         *   射线只从一个点往下打，会漏掉旁边/下方的平台；
+         *   垂直扫一遍全场景才能找到「玩家能站上去的最高处」。
+         *
+         * 【为什么要排除触发器与自身】
+         *   · Trigger 不阻挡球
+         *   · 排除 visual（球自己），否则会把自己的位置当落点*/
+        Collider[] all = Physics.OverlapBox(
+            Vector3.zero,
+            new Vector3(500f, 500f, freeBuildSearchMaxZ * 0.5f),
+            Quaternion.identity,
+            ~0, QueryTriggerInteraction.Ignore);
+
+        float bestTop = float.NegativeInfinity;
+        Vector3 bestCenter = Vector3.zero;
+
+        for (int i = 0; i < all.Length; i++)
+        {
+            Collider c = all[i];
+            if (c == null) continue;
+            if (c.transform.root == transform) continue;   // 跳过球自己
+
+            Bounds b = c.bounds;
+            // 顶面 = 中心 + 高度一半
+            float top = b.center.z + b.size.z * 0.5f;
+            if (top > bestTop && top <= freeBuildSearchMaxZ)
+            {
+                bestTop = top;
+                bestCenter = b.center;
+            }
+        }
+
+        if (float.IsNegativeInfinity(bestTop))
+        {
+            // 场景里什么都没找到 -> 给个安全值（原点上方）
+            Debug.LogWarning("[FreeBuild] 场景里找不到可站立的平面，"
+                         + "球放到原点上方。可在 SilkBuilder 的 "
+                         + "Free Build Spawn Override 里手动指定。");
+            return new Vector3(0f, 0f, visualRadius);
+        }
+
+        Debug.Log("[FreeBuild] 自动落点：顶面 z=" + bestTop.ToString("F1")
+                + " -> 球心 z=" + (bestTop + visualRadius).ToString("F1"));
+        return new Vector3(bestCenter.x, bestCenter.y, bestTop + visualRadius);
+    }
+
+    /// <summary>自由搭建模式下真正生效的起点。</summary>
+    public Vector3 EffectiveStartPosition
+        => freeBuildMode ? DetectFreeBuildSpawn() : startPosition;
+
+    /// <summary>自由搭建模式下的掉落重生线 —— 场景底部往下 30 格。
+    /// 设为正数可关闭自动重生。</summary>
+    public float EffectiveFallRespawnZ
+        => freeBuildMode ? (DetectFreeBuildSpawn().z - 40f) : fallRespawnZ;
+
+
     /// Parkour 世界的发射用它接管摆荡。</summary>
     public SilkLine lastCreatedLine = null;
     bool isFirstSelected;
@@ -4361,87 +4443,6 @@ public class SilkParkourController : MonoBehaviour
     /// </summary>
     public Vector3 StartPositionBasicStage
         => new Vector3(-30f, 0f, BasicStageFloorZ + visualRadius);
-
-    /// <summary>★ 自由搭建模式下的球心落点 —— **自动找场景里最高的平台**。
-    ///
-    /// 【为什么需要这个】
-    ///   你在Editor 里手工搭场景，但 <see cref="startPosition"/> 是代码里
-    ///   写死的旧关卡坐标（如 -30, 0, -32.75）。
-    ///   → 球出生在悬空处 -> 掉下去 -> 「小球很容易丢了」。
-    ///   若让你手填坐标，你每换一次场景布局就要改一次 Inspector。
-    ///
-    /// 【做法】向下射线扫描，找**最高的有顶面的物体**，
-    ///   球心 = 该顶面 + visualRadius（正好悬在面上，不会陷进去）。
-    ///
-    /// 【为什么找「最高」而不是「最近」】
-    ///   多层建筑里玩家通常从顶层开始。若找最近（最低）的，
-    ///   球会出生在地板层，跑到楼下还得爬楼梯。
-    ///   ★ 用户可��用 <see cref="freeBuildSpawnOverride"/> 手动指定，
-    ///   不指定时点 Re-detect按钮重扫。
-    /// </summary>
-    public Vector3 DetectFreeBuildSpawn()
-    {
-        // 手动指定优先（用户就是想放某处）
-        if (freeBuildSpawnOverride != Vector3.zero)
-            return freeBuildSpawnOverride + Vector3.forward * visualRadius;
-
-        /* 扫描场景里所有 Collider，找 Z 最高的顶面。
-         *
-         * 【为什么用 Physics.OverlapBox 而不是射线】
-         *   射线只从一个点往下打，会漏掉旁边/下方的平台；
-         *   垂直扫一遍全场景才能找到「玩家能站上去的最高处」。
-         *
-         * 【为什么要排除触发器与自身】
-         *   · Trigger 不阻挡球
-         *   · 排除 visual（球自己），否则会把自己的位置当落点*/
-        Collider[] all = Physics.OverlapBox(
-            Vector3.zero,
-            new Vector3(500f, 500f, freeBuildSearchMaxZ * 0.5f),
-            Quaternion.identity,
-            ~0, QueryTriggerInteraction.Ignore);
-
-        float bestTop = float.NegativeInfinity;
-        Vector3 bestCenter = Vector3.zero;
-
-        for (int i = 0; i < all.Length; i++)
-        {
-            Collider c = all[i];
-            if (c == null) continue;
-            if (c.transform.root == transform) continue;   // 跳过球自己
-
-            Bounds b = c.bounds;
-            // 顶面 = 中心 + 高度一半
-            float top = b.center.z + b.size.z * 0.5f;
-            if (top > bestTop && top <= freeBuildSearchMaxZ)
-            {
-                bestTop = top;
-                bestCenter = b.center;
-            }
-        }
-
-        if (float.IsNegativeInfinity(bestTop))
-        {
-            // 场景里什么都没找到 -> 给个安全值（原点上方）
-            Debug.LogWarning("[FreeBuild] 场景里找不到可站立的平面，"
-                         + "球放到原点上方。可在 SilkBuilder 的 "
-                         + "Free Build Spawn Override 里手动指定。");
-            return new Vector3(0f, 0f, visualRadius);
-        }
-
-        Debug.Log("[FreeBuild] 自动落点：顶面 z=" + bestTop.ToString("F1")
-                + " -> 球心 z=" + (bestTop + visualRadius).ToString("F1"));
-        return new Vector3(bestCenter.x, bestCenter.y, bestTop + visualRadius);
-    }
-
-    /// <summary>自由搭建模式下真正生效的起点。</summary>
-    public Vector3 EffectiveStartPosition
-        => freeBuildMode ? DetectFreeBuildSpawn() : startPosition;
-
-    /// <summary>自由搭建模式下的掉落重生线 —— 场景底部往下 30 格。
-    /// 设为正数可关闭自动重生。</summary>
-    public float EffectiveFallRespawnZ
-        => freeBuildMode ? (DetectFreeBuildSpawn().z - 40f) : fallRespawnZ;
-
     /// <summary>基础关卡「区 0 平地」的**顶面**高度（格）。
     /// 平台中心 (-30, 0, -38)，厚度 8 -> 顶面 = -38 + 8/2 = -34。
     /// 球心 = 本值 + visualRadius（见 <see cref="StartPositionBasicStage"/>）。
