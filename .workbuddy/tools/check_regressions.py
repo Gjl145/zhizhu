@@ -232,6 +232,57 @@ def check_hardcoded_mistakes():
 
 
 # =====================================================================
+# 错误 4b：跨类字段访问的方向（今晚连续踩了 3 次）
+# =====================================================================
+def check_cross_class_refs():
+    """★ 本项目已因此报CS0103/CS1061 共 3 轮、约 80 个错误。
+
+    【核心规则】SilkBuilder 与 SilkParkourController 互相持有引用：
+        SilkParkourController 持有 `SilkBuilder builder`
+        但 SilkBuilder **不持有**控制器 -> 方向是单向的
+    所以：
+      · 控制器里访问配置字段 -> 必须写 `builder.xxx`
+      · 控制器里访问自己的字段 -> 必须**裸写**（不加 builder.）
+      · SilkBuilder 里访问控制器的字段/方法 -> 编译不过（根本不该出现）
+    """
+    if not os.path.exists(SILK):
+        return
+    src = read(SILK)
+    lines = strip_comments(src).split('\n')
+
+    # 定位两个类的范围
+    ranges = class_ranges(SILK)
+    ctrl = None
+    builder = None
+    for name, a, b in ranges:
+        if name == 'SilkParkourController':
+            ctrl = (a, b)
+        elif name == 'SilkBuilder':
+            builder = (a, b)
+    if not ctrl:
+        return
+    ca, cb = ctrl
+
+    # SilkBuilder 的配置字段（只列我们新增的这几个，避免噪音）
+    cfg = ('freeBuildMode', 'freeBuildSearchMaxZ', 'freeBuildSpawnOverride')
+
+    for i in range(ca - 1, min(cb, len(lines))):
+        s = lines[i]
+        if not s.strip():
+            continue
+        # 控制器里访问配置字段必须有 builder. 前缀
+        for name in cfg:
+            if re.search(r'(?<![\w.])%s\b' % name, s):
+                err('%d: 控制器里访问 %s 缺 `builder.` 前缀 -> CS0103'
+                    % (i + 1, name))
+        # 控制器的自有字段不该加 builder. 前缀
+        for f in ('visualRadius', 'fallRespawnZ', 'startPosition'):
+            if 'builder.' + f in s:
+                err('%d: %s 是控制器自有字段，不该加 `builder.` 前缀'
+                    % (i + 1, f))
+
+
+# =====================================================================
 # 错误 5：自检项本身的假阴性（检查写得不对）
 # =====================================================================
 def check_selfcheck_quality():
@@ -268,6 +319,7 @@ def main():
     check_local_const_leak()
     check_derived_literals()
     check_hardcoded_mistakes()
+    check_cross_class_refs()
     check_selfcheck_quality()
 
     print('=' * 66)

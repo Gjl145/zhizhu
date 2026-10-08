@@ -4505,8 +4505,8 @@ public float colliderRadius = 1.25f;
     public Vector3 DetectFreeBuildSpawn()
     {
         // 手动指定优先（用户就是想放某处）
-        if (freeBuildSpawnOverride != Vector3.zero)
-            return freeBuildSpawnOverride + Vector3.forward * builder.visualRadius;
+        if (builder.freeBuildSpawnOverride != Vector3.zero)
+            return builder.freeBuildSpawnOverride + Vector3.forward * visualRadius;
 
         /* 扫描场景里所有 Collider，找 Z 最高的顶面。
          *
@@ -4519,7 +4519,7 @@ public float colliderRadius = 1.25f;
          *   · 排除 visual（球自己），否则会把自己的位置当落点*/
         Collider[] all = Physics.OverlapBox(
             Vector3.zero,
-            new Vector3(500f, 500f, freeBuildSearchMaxZ * 0.5f),
+            new Vector3(500f, 500f, builder.freeBuildSearchMaxZ * 0.5f),
             Quaternion.identity,
             ~0, QueryTriggerInteraction.Ignore);
 
@@ -4535,7 +4535,7 @@ public float colliderRadius = 1.25f;
             Bounds b = c.bounds;
             // 顶面 = 中心 + 高度一半
             float top = b.center.z + b.size.z * 0.5f;
-            if (top > bestTop && top <= freeBuildSearchMaxZ)
+            if (top > bestTop && top <= builder.freeBuildSearchMaxZ)
             {
                 bestTop = top;
                 bestCenter = b.center;
@@ -4548,22 +4548,22 @@ public float colliderRadius = 1.25f;
             Debug.LogWarning("[FreeBuild] 场景里找不到可站立的平面，"
                          + "球放到原点上方。可在 SilkBuilder 的 "
                          + "Free Build Spawn Override 里手动指定。");
-            return new Vector3(0f, 0f, builder.visualRadius);
+            return new Vector3(0f, 0f, visualRadius);
         }
 
         Debug.Log("[FreeBuild] 自动落点：顶面 z=" + bestTop.ToString("F1")
-                + " -> 球心 z=" + (bestTop + builder.visualRadius).ToString("F1"));
-        return new Vector3(bestCenter.x, bestCenter.y, bestTop + builder.visualRadius);
+                + " -> 球心 z=" + (bestTop + visualRadius).ToString("F1"));
+        return new Vector3(bestCenter.x, bestCenter.y, bestTop + visualRadius);
     }
 
     /// <summary>自由搭建模式下真正生效的起点。</summary>
     public Vector3 EffectiveStartPosition
-        => freeBuildMode ? DetectFreeBuildSpawn() : startPosition;
+        => builder.freeBuildMode ? DetectFreeBuildSpawn() : startPosition;
 
     /// <summary>自由搭建模式下的掉落重生线 —— 场景底部往下 30 格。
     /// 设为正数可关闭自动重生。</summary>
     public float EffectiveFallRespawnZ
-        => freeBuildMode ? (DetectFreeBuildSpawn().z - 40f) : fallRespawnZ;
+        => builder.freeBuildMode ? (DetectFreeBuildSpawn().z - 40f) : fallRespawnZ;
 
     /// <summary>自动创建一个可见球体代表「玩家」。
     /// 没有它就只能靠 Debug.Log 判断状态，看不到本体在哪、
