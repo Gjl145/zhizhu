@@ -2724,8 +2724,29 @@ public class SilkBuilder : MonoBehaviour
         + "SwingTest = 摆荡测试 5 点（绳长 14~34 格，用于定位摆荡问题）\n"
         + "SwingUnit = 最小摆荡单元：4 个正方体节点，摆荡一次到一个\n"
         + "House     = ★两层四间住宅白盒（按 GB 50096/55038 国家规范）\n"
-        + "★ 改这个值后要按 Tab 重新切一次模式才会重建。")]
+        + "★ 改这个值后要按 Tab 重新切一次模式才会重建。\n"
+        + "★★ 但若开启了 Free Build Mode，这个值会被忽略！")]
     public ParkourStageKind parkourStage = ParkourStageKind.House;
+
+    [Header("★★ 自由搭建模式（2026-10-08）")]
+    [Tooltip("★ 开启后：**完全不碰编辑器里手工搭的场景**\n"
+        + "\n"
+        + "开启时的行为：\n"
+        + "  · 按 Tab 不再重建任何关卡（你的手工场景原样保留）\n"
+        + "  · 球自动落到「场景里最高的平台上」\n"
+        + "  · 掉出场景时重生到那个点\n"
+        + "\n"
+        + "★ 你自己用 Editor 搭场景时应该开着。\n"
+        + "  关闭时才会用代码生成关卡（Basic / House 等）。")]
+    public bool freeBuildMode = false;
+
+    [Tooltip("★ 自由搭建模式下，球自动找落点时搜索的上限高度（格）。\n"
+        + "场景里比这更高的平台会被忽略（防止选到天空的悬浮物）。")]
+    public float freeBuildSearchMaxZ = 60f;
+
+    [Tooltip("★ 自由搭建模式的落点缓存（运行时算出，不保存）。\n"
+        + "  手动指定时可留 Vector3.zero，表示自动检测。")]
+    public Vector3 freeBuildSpawnOverride = Vector3.zero;
 
     /* ★ 注意：重建关卡的实际执行在 SilkParkourController.RebuildParkourStage()。
      *
@@ -4341,6 +4362,86 @@ public class SilkParkourController : MonoBehaviour
     public Vector3 StartPositionBasicStage
         => new Vector3(-30f, 0f, BasicStageFloorZ + visualRadius);
 
+    /// <summary>★ 自由搭建模式下的球心落点 —— **自动找场景里最高的平台**。
+    ///
+    /// 【为什么需要这个】
+    ///   你在Editor 里手工搭场景，但 <see cref="startPosition"/> 是代码里
+    ///   写死的旧关卡坐标（如 -30, 0, -32.75）。
+    ///   → 球出生在悬空处 -> 掉下去 -> 「小球很容易丢了」。
+    ///   若让你手填坐标，你每换一次场景布局就要改一次 Inspector。
+    ///
+    /// 【做法】向下射线扫描，找**最高的有顶面的物体**，
+    ///   球心 = 该顶面 + visualRadius（正好悬在面上，不会陷进去）。
+    ///
+    /// 【为什么找「最高」而不是「最近」】
+    ///   多层建筑里玩家通常从顶层开始。若找最近（最低）的，
+    ///   球会出生在地板层，跑到楼下还得爬楼梯。
+    ///   ★ 用户可��用 <see cref="freeBuildSpawnOverride"/> 手动指定，
+    ///   不指定时点 Re-detect按钮重扫。
+    /// </summary>
+    public Vector3 DetectFreeBuildSpawn()
+    {
+        // 手动指定优先（用户就是想放某处）
+        if (freeBuildSpawnOverride != Vector3.zero)
+            return freeBuildSpawnOverride + Vector3.forward * visualRadius;
+
+        /* 扫描场景里所有 Collider，找 Z 最高的顶面。
+         *
+         * 【为什么用 Physics.OverlapBox 而不是射线】
+         *   射线只从一个点往下打，会漏掉旁边/下方的平台；
+         *   垂直扫一遍全场景才能找到「玩家能站上去的最高处」。
+         *
+         * 【为什么要排除触发器与自身】
+         *   · Trigger 不阻挡球
+         *   · 排除 visual（球自己），否则会把自己的位置当落点*/
+        Collider[] all = Physics.OverlapBox(
+            Vector3.zero,
+            new Vector3(500f, 500f, freeBuildSearchMaxZ * 0.5f),
+            Quaternion.identity,
+            ~0, QueryTriggerInteraction.Ignore);
+
+        float bestTop = float.NegativeInfinity;
+        Vector3 bestCenter = Vector3.zero;
+
+        for (int i = 0; i < all.Length; i++)
+        {
+            Collider c = all[i];
+            if (c == null) continue;
+            if (c.transform.root == transform) continue;   // 跳过球自己
+
+            Bounds b = c.bounds;
+            // 顶面 = 中心 + 高度一半
+            float top = b.center.z + b.size.z * 0.5f;
+            if (top > bestTop && top <= freeBuildSearchMaxZ)
+            {
+                bestTop = top;
+                bestCenter = b.center;
+            }
+        }
+
+        if (float.IsNegativeInfinity(bestTop))
+        {
+            // 场景里什么都没找到 -> 给个安全值（原点上方）
+            Debug.LogWarning("[FreeBuild] 场景里找不到可站立的平面，"
+                         + "球放到原点上方。可在 SilkBuilder 的 "
+                         + "Free Build Spawn Override 里手动指定。");
+            return new Vector3(0f, 0f, visualRadius);
+        }
+
+        Debug.Log("[FreeBuild] 自动落点：顶面 z=" + bestTop.ToString("F1")
+                + " -> 球心 z=" + (bestTop + visualRadius).ToString("F1"));
+        return new Vector3(bestCenter.x, bestCenter.y, bestTop + visualRadius);
+    }
+
+    /// <summary>自由搭建模式下真正生效的起点。</summary>
+    public Vector3 EffectiveStartPosition
+        => freeBuildMode ? DetectFreeBuildSpawn() : startPosition;
+
+    /// <summary>自由搭建模式下的掉落重生线 —— 场景底部往下 30 格。
+    /// 设为正数可关闭自动重生。</summary>
+    public float EffectiveFallRespawnZ
+        => freeBuildMode ? (DetectFreeBuildSpawn().z - 40f) : fallRespawnZ;
+
     /// <summary>基础关卡「区 0 平地」的**顶面**高度（格）。
     /// 平台中心 (-30, 0, -38)，厚度 8 -> 顶面 = -38 + 8/2 = -34。
     /// 球心 = 本值 + visualRadius（见 <see cref="StartPositionBasicStage"/>）。
@@ -4956,7 +5057,24 @@ public float colliderRadius = 1.25f;
              * 两个关卡的起跳台高度不同（基础区顶面 -34，
              * 摆荡测试区顶面 20），顺序错了球就会埋进地里或悬空。*/
             // 测试关卡属于游戏世界，FreeFly 下不该存在
-            if (builder != null && builder.createTestLevel) RebuildParkourStage();
+            /* ★★ 自由搭建模式：绝不碰用户手工搭的场景（2026-10-08）
+             *
+             * 【原来这里无条件 RebuildParkourStage()】
+             *   → 按 Tab 会删除并重建代码定义的关卡，
+             *     用户在 Editor 里搭的场景**全被清掉**，
+             *     而且球会被摆到旧关卡起点（-30, 0, -32.75）——
+             *     这正是「小球很容易丢了」的根因。
+             *
+             * 【现在的行为】
+             *   freeBuildMode 开-> 跳过重建，直接用场景里已有的东西
+             *   freeBuildMode 关   -> 原行为不变（代码生成关卡）*/
+            if (!builder.freeBuildMode && builder.createTestLevel)
+                RebuildParkourStage();
+
+            /* ★ 起点：自由模式下自动找场景最高的平台，
+             * 否则用关卡自带的起点。 */
+            if (builder.freeBuildMode)
+                startPosition = builder.DetectFreeBuildSpawn();
 
             transform.position = startPosition;   // 用新关卡的起点
             flightVel = Vector3.zero;
@@ -4974,10 +5092,20 @@ public float colliderRadius = 1.25f;
         else
         {
             /* 回编辑器世界：销毁球与测试关卡，保持画面干净。
-             * FreeFly 属于关卡编辑，不该有玩家角色和跑酷台子。*/
+             * FreeFly 属于关卡编辑，不该有玩家角色和跑酷台子。
+             *
+             * ★★ 自由搭建模式下**不清关卡**（2026-10-08）
+             *   原因：`SilkParkourStage.Clear()` 会删掉场上所有标记为
+             *   Plat_/Barrier_ 前缀的物体。若用户的**手工场景**里
+             *   恰好有类似命名的物体，或关卡数据里记着场景物件，
+             *   切回 FreeFly 就会把场景清空 —— 白搭了。
+             *   ★ 只销毁球（那个确实是临时的），场景原样保留。*/
             DestroyVisual();
-            SilkParkourStage.Clear();
-            SilkSwingTestStage.Clear();
+            if (!builder.freeBuildMode)
+            {
+                SilkParkourStage.Clear();
+                SilkSwingTestStage.Clear();
+            }
             if (cam != null)
             {
                 cam.transform.position = freeFlyCameraPos;
@@ -6167,7 +6295,13 @@ public float colliderRadius = 1.25f;
     void RespawnAtStart(string reason)
     {
         DoRelease();
-        transform.position = startPosition;
+        /* ★ 自由搭建模式：重生到场景里最高的平台，
+         * 而非写死的旧关卡坐标。
+         * （否则会重生到用户场景之外 -> 无限掉落循环）*/
+        if (builder != null && builder.freeBuildMode)
+            transform.position = builder.DetectFreeBuildSpawn();
+        else
+            transform.position = startPosition;
 
         // 四种速度/状态全清 —— 任何一项残留都会导致刚重生就异常：
         //   flightVel  飞行惯性 -> 带着上一段的速度冲出起点
@@ -6201,12 +6335,28 @@ public float colliderRadius = 1.25f;
     /// </summary>
     void CheckFallRespawn()
     {
-        if (transform.position.z > fallRespawnZ) return;
+        /* ★ 自由搭建模式：重生线跟着场景走。
+         *
+         * 【原来用写死的 fallRespawnZ = -70】
+         *   那是**内墙范围 ±50** 时代的值（边界外 1.4 倍）。
+         *   用户手工搭的场景可能远在别处，
+         *   球掉到 -70 才重生 -> 在此之前会一直自由落体，
+         *   看起来就是「小球很容易丢了 / 掉很久才回来」。
+         *
+         * 【现在：落点往下 40 格】
+         *   跟着自动检测出的落点走，换场景也不用改。*/
+        float line = fallRespawnZ;
+        if (builder != null && builder.freeBuildMode)
+            line = builder.EffectiveFallRespawnZ;
+
+        // 设为正数可关闭该功能
+        if (line > 0) return;
+        if (transform.position.z > line) return;
 
         if (verboseFireLog)
             Debug.Log("[Respawn] 掉出关卡（z=" +
                       transform.position.z.ToString("F1") + " < " +
-                      fallRespawnZ.ToString("F0") + "），自动回起点");
+                      line.ToString("F0") + "），自动回起点");
         RespawnAtStart("掉落自动重生");
     }
 

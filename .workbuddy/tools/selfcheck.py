@@ -1281,6 +1281,67 @@ else:
     ok('门洞由「墙垛左 + 门楣 + 墙垛右」三块拼成（真的挖通了），'
        '且门楣位置正确坐在门洞顶部')
 
+# ---------- 25. 自由搭建模式：不能删（用户要自己搭场景）----------
+# 【背景】2026-10-08 用户要「自己重新搭建场景，不保留之前的」。
+#   原架构是「代码生成关卡」，导致：
+#     · 按 Tab 会 RebuildParkourStage() -> 手工搭的场景全被清掉
+#     · 球出生在写死的 (-30, 0, -32.75) -> 掉下去 -> 「小球容易丢」
+#   加了 freeBuildMode 开关解决：开启时不重建 + 自动找场景最高的平台。
+_fb = []
+ok_msg = None
+
+if 'freeBuildMode' not in s:
+    _fb.append('缺少 freeBuildMode 开关 —— 用户无法在自己搭的场景里试玩，'
+               '按 Tab 会清空手工场景')
+else:
+    # 25a. Tab 切换时必须尊重该开关（这是「场景被清掉」的根因）
+    if not re.search(r'!\s*builder\.freeBuildMode\s*&&\s*'
+                     r'builder\.createTestLevel\s*\)?\s*RebuildParkourStage', s):
+        _fb.append('HandleModeSwitch 里 RebuildParkourStage 没有检查 freeBuildMode '
+                   '—— 开启后按 Tab 仍会清空用户手工搭的场景')
+
+    # 25b. 切回 FreeFly 时也不能 Clear 关卡
+    if not re.search(r'if\s*\(\s*!\s*builder\.freeBuildMode\s*\)\s*\{[^}]*'
+                     r'SilkParkourStage\.Clear', s, re.S):
+        _fb.append('切回 FreeFly 时无条件 SilkParkourStage.Clear() '
+                   '—— 自由搭建模式下会误删用户场景')
+
+    # 25c. 重生必须回到场景里，而不是写死坐标
+    if 'DetectFreeBuildSpawn' not in s:
+        _fb.append('缺少 DetectFreeBuildSpawn —— 球无法自动落到用户搭的平台上')
+    else:
+        # ★ 截取范围要够大：RespawnAtStart 里有大量注释，
+        #   600 字符不够（变异测试实测漏抓）
+        _m = re.search(r'void RespawnAtStart\(string reason\)\s*\{(.{0,2000}?)\n    \}',
+                       s, re.S)
+        if _m is None:
+            _fb.append('找不到 RespawnAtStart 方法体')
+        elif 'freeBuildMode' not in _m.group(1):
+            _fb.append('RespawnAtStart 没有检查 freeBuildMode '
+                       '—— 掉出场景后会重生到旧关卡坐标，形成无限掉落')
+        else:
+            pass
+
+    # 25d. 掉落重生线也要跟着场景走（否则掉很久才回来）
+    _m2 = re.search(r'void CheckFallRespawn\(\)\s*\{(.{0,500}?)\n    \}', s, re.S)
+    if _m2 and 'EffectiveFallRespawnZ' not in _m2.group(1):
+        _fb.append('CheckFallRespawn 没用 EffectiveFallRespawnZ '
+                   '—— 仍按写死的 -70 判定，用户场景在新坐标时会「掉很久才重生」')
+
+    # 25e. 自动落点必须排除球自己，否则会把自己的位置当落点
+    _m3 = re.search(r'public Vector3 DetectFreeBuildSpawn\(\)\s*\{(.{0,2000}?)\n    \}',
+                    s, re.S)
+    if _m3 and 'transform.root' not in _m3.group(1):
+        _fb.append('DetectFreeBuildSpawn 没排除球自身 —— '
+                   '会把球自己的 Collider 当成落点，形成死循环')
+
+if _fb:
+    for _x in _fb:
+        err(_x)
+else:
+    ok('自由搭建模式完整（不重建关卡 / 自动找落点 / 重生回场景 / '
+       '掉落线跟随场景）')
+
 # ---------- 汇总 ----------
 print()
 print('=' * 60)

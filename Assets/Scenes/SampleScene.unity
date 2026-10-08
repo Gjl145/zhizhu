@@ -165,6 +165,7 @@ MonoBehaviour:
   bottomLinkCount: 36
   playerNodeRadius: 1.5
   createTestLevel: 1
+  parkourStage: 0
   parkourMode: 0
 --- !u!4 &53039545
 Transform:
