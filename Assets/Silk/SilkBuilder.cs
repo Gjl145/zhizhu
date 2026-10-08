@@ -106,7 +106,6 @@ public interface SilkAttachable
     string name { get; }
 }
 
-
 public enum SilkColor { White, Yellow, Red }
 /// <summary>
 /// 锚点类型。
@@ -372,7 +371,6 @@ public class SilkSpanSignal : ISilkEvent
         handler.ExecuteSpan(this);
     }
 }
-
 
 /// <summary>
 /// 全局事件总线 —— 统一控制不同事件。
@@ -4467,6 +4465,25 @@ public float colliderRadius = 1.25f;
         builder = FindObjectOfType<SilkBuilder>();
         cam = FindObjectOfType<SimpleOrbitCamera>();
 
+        // ScreenPointToRay 定义在 Camera 上，必须单独取
+        camComp = cam != null ? cam.GetComponent<Camera>() : Camera.main;
+
+        /* 初始是 FreeFly（编辑器世界）—— **不建球**。
+         * 球只属于游戏世界，在编辑器世界里出现会污染画面。
+         * 这是之前的设计缺陷：CreateVisual 在 Start 里无条件调用，
+         * 导致 FreeFly 下也能看到球。*/
+        if (mode == SilkControlMode.Parkour)
+        {
+            // 先建关卡再摆球 —— startPosition 由 RebuildParkourStage 设定，
+            // 顺序反了会用到旧关卡的起点（见 HandleModeSwitch 的同处注释）。
+            if (builder != null && builder.createTestLevel) RebuildParkourStage();
+
+            transform.position = startPosition;
+            CreateVisual();
+            UpdateVisualColor();
+            FollowCamera();
+        }
+    }
 
     /// <summary>★ 自由搭建模式下的球心落点 —— **自动找场景里最高的平台**。
     ///
@@ -4547,28 +4564,6 @@ public float colliderRadius = 1.25f;
     /// 设为正数可关闭自动重生。</summary>
     public float EffectiveFallRespawnZ
         => freeBuildMode ? (DetectFreeBuildSpawn().z - 40f) : fallRespawnZ;
-
-
-
-        // ScreenPointToRay 定义在 Camera 上，必须单独取
-        camComp = cam != null ? cam.GetComponent<Camera>() : Camera.main;
-
-        /* 初始是 FreeFly（编辑器世界）—— **不建球**。
-         * 球只属于游戏世界，在编辑器世界里出现会污染画面。
-         * 这是之前的设计缺陷：CreateVisual 在 Start 里无条件调用，
-         * 导致 FreeFly 下也能看到球。*/
-        if (mode == SilkControlMode.Parkour)
-        {
-            // 先建关卡再摆球 —— startPosition 由 RebuildParkourStage 设定，
-            // 顺序反了会用到旧关卡的起点（见 HandleModeSwitch 的同处注释）。
-            if (builder != null && builder.createTestLevel) RebuildParkourStage();
-
-            transform.position = startPosition;
-            CreateVisual();
-            UpdateVisualColor();
-            FollowCamera();
-        }
-    }
 
     /// <summary>自动创建一个可见球体代表「玩家」。
     /// 没有它就只能靠 Debug.Log 判断状态，看不到本体在哪、
@@ -6887,7 +6882,6 @@ public float colliderRadius = 1.25f;
         }
     }
     AnchorPoint _selfNode;
-
 
     /// <summary>
     /// 蜘蛛侠式发射：沿「运动前方 + 上抬」方向发射，命中后自动勾住并进入摆动。
