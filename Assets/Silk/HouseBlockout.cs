@@ -696,11 +696,41 @@ public static class HouseBlockout
         float sideW = (spanX - doorW) * 0.5f;
         if (sideW <= 0.01f) return;      // 门比墙还宽，不处理
 
+        /* ★★★ 【2026-10-08 补上两侧墙垛 —— 之前漏了，门洞其实没挖通】
+         *
+         * 【问题】原实现只做了门楣（下方注释写着「拆成左墙垛 + 门楣 + 右墙垛」，
+         *   但代码里根本没有墙垛），于是门洞位置是一面**完整的墙**，
+         *   只是在上面贴了块门楣 —— 球靠墙体碰撞是撞不开的。
+         *
+         * 【做法】门洞 = 左墙垛 + 门楣 + 右墙垛，三块拼起来才是「挖通」。
+         *   墙垛宽 = (墙宽 - 门宽) / 2，分居门洞左右。
+         *
+         * 【为什么不改用 CSG 布尔】
+         *   最初想用 ProBuilder 的 Subtraction（墙 − 门框），
+         *   但那是**编辑器里手工操作**的方案，而本函数是**运行时生成**的。
+         *   运行时用 CSG 需要自己实现网格布尔运算（成本高、边角情况多）。
+         *   手工拼墙垛虽然土，但运行时稳定、法线正确（薄板法线不会被破坏）。
+         *
+         * ★ 墙垛必须与墙同厚（thick），否则会漏光/看穿。 */
+        float lintelH = 0.30f;           // 门楣高 0.30 m
+        float doorH = height - lintelH; // 门洞净高
+
+        // 左侧墙垛
+        Slab(tag + "_墙垛左",
+             wallCenter + new Vector3(doorCenterOffsetY - halfDoor - sideW * 0.5f, 0f,
+                                     doorH * 0.5f) * k,
+             new Vector3(sideW, thick, doorH) * k, C.Wall);
+
+        // 右侧墙垛
+        Slab(tag + "_墙垛右",
+             wallCenter + new Vector3(doorCenterOffsetY + halfDoor + sideW * 0.5f, 0f,
+                                     doorH * 0.5f) * k,
+             new Vector3(sideW, thick, doorH) * k, C.Wall);
+
         // 门楣（门洞上方的部分）
-        float lintelH = 0.30f;           // 门楣高0.30 m
         Slab(tag + "_门楣",
              wallCenter + new Vector3(doorCenterOffsetY, 0f,
-                                     (height - lintelH) * 0.5f) * k,
+                                     doorH + lintelH * 0.5f) * k,
              new Vector3(doorW, thick, lintelH) * k, C.Wall);
     }
 

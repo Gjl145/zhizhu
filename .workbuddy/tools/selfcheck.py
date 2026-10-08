@@ -1221,6 +1221,66 @@ else:
     ok('建筑参数联动正确（RoomLength/StepRise/起点高度均为公式，'
        '球径小于门洞与楼梯，建筑在网格内）')
 
+# ---------- 24. 门洞必须真的挖通（左墙垛 + 门楣 + 右墙垛）----------
+# 【背景】2026-10-08 发现 BuildDoorways 的严重缺口：
+#   注释写着「拆成左墙垛 + 门楣 + 右墙垛」，但代码**只做了门楣**，
+#   两侧墙垛根本没实现 —— 于是门洞位置是一面完整的墙，
+#   只在上面贴了块门楣，球靠墙体碰撞撞不开。
+#   而且门楣本身的 z 位置也算错了（详见 24b）。
+_door = []
+
+_hs = open('Assets/Silk/HouseBlockout.cs', encoding='utf-8').read()
+_di = _hs.find('static void DoorInWall(')
+if _di < 0:
+    _door.append('HouseBlockout: 找不到 DoorInWall()')
+else:
+    _dj = _hs.find('{', _di)
+    _dd = 0
+    _dk = _dj
+    while _dk < len(_hs):
+        if _hs[_dk] == '{':
+            _dd += 1
+        elif _hs[_dk] == '}':
+            _dd -= 1
+            if _dd == 0:
+                break
+        _dk += 1
+    _dbody = re.sub(r'//[^\n]*', '', _hs[_dj:_dk])
+    _dbody = re.sub(r'/\*.*?\*/', '', _dbody, flags=re.S)
+
+    # 24a. 三块都要有：墙垛左、墙垛右、门楣
+    if '_墙垛左' not in _dbody:
+        _door.append('DoorInWall 缺少「墙垛左」—— 门洞没挖通，'
+                     '球会被整面墙挡住（2026-10-08 的实际 bug）')
+    if '_墙垛右' not in _dbody:
+        _door.append('DoorInWall 缺少「墙垛右」—— 同上')
+    if '_门楣' not in _dbody:
+        _door.append('DoorInWall 缺少「门楣」')
+
+    # 24b. 门楣位置必须用「门洞净高 + 门楣一半」，不能是 (height-lintel)/2
+    #     后者的含义是「门洞净高的一半」，会让门楣落到墙的中部而非顶部。
+    if re.search(r'\(\s*height\s*-\s*lintelH\s*\)\s*\*\s*0\.5f', _dbody):
+        _door.append('DoorInWall 的门楣 z 用了 (height - lintelH) * 0.5f —— '
+                     '那是「门洞净高的一半」，门楣会落在墙中部。'
+                     '正确应为 doorH + lintelH * 0.5f（门楣坐在门洞顶部）')
+
+    # 24c. 墙垛必须与墙同厚（否则漏光/看穿）
+    #    ★ 必须匹配表达式本身（Vector3(sideW, thick, ...)），
+    #      只数 'thick' 出现次数会被「thick * 0.3f」这类缩放骗过
+    #      （变异测试实测漏抓）。
+    _n_thick = len(re.findall(r'Vector3\(\s*sideW\s*,\s*thick\s*,', _dbody))
+    if _n_thick < 2:
+        _door.append('DoorInWall 的墙垛未全部使用原墙厚 thick —— '
+                     '墙垛比墙薄会漏光/看穿'
+                     '（匹配 Vector3(sideW, thick, ...) 形式）')
+
+if _door:
+    for _x in _door:
+        err(_x)
+else:
+    ok('门洞由「墙垛左 + 门楣 + 墙垛右」三块拼成（真的挖通了），'
+       '且门楣位置正确坐在门洞顶部')
+
 # ---------- 汇总 ----------
 print()
 print('=' * 60)
