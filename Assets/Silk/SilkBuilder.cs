@@ -5072,7 +5072,7 @@ public float colliderRadius = 1.25f;
             /* ★ 起点：自由模式下自动找场景最高的平台，
              * 否则用关卡自带的起点。 */
             if (builder.freeBuildMode)
-                startPosition = builder.DetectFreeBuildSpawn();
+                startPosition = DetectFreeBuildSpawn();
 
             transform.position = startPosition;   // 用新关卡的起点
             flightVel = Vector3.zero;
@@ -5081,7 +5081,8 @@ public float colliderRadius = 1.25f;
             grounded = false;
             ResetDashState();
             isFlying = true;
-            CreateVisual();       // 幂等：已存在则直接返回
+            CreateVisual();
+        var _t = EffectiveFallRespawnZ;  // 反向引用
             UpdateVisualColor();
             logFollowOnce = true; // 每次切模式重打一次诊断
             lookAlignedOnce = false;   // 新世界需重新对齐一次视角
@@ -6297,7 +6298,7 @@ public float colliderRadius = 1.25f;
          * 而非写死的旧关卡坐标。
          * （否则会重生到用户场景之外 -> 无限掉落循环）*/
         if (builder != null && builder.freeBuildMode)
-            transform.position = builder.DetectFreeBuildSpawn();
+            transform.position = DetectFreeBuildSpawn();
         else
             transform.position = startPosition;
 
@@ -6345,7 +6346,7 @@ public float colliderRadius = 1.25f;
          *   跟着自动检测出的落点走，换场景也不用改。*/
         float line = fallRespawnZ;
         if (builder != null && builder.freeBuildMode)
-            line = builder.EffectiveFallRespawnZ;
+            line = EffectiveFallRespawnZ;
 
         // 设为正数可关闭该功能
         if (line > 0) return;

@@ -63,8 +63,11 @@ def class_ranges(path):
     lines = src.split('\n')
     starts = []
     for i, ln in enumerate(lines):
+        #★ 必须 ln.strip()：类声明可能是缩进的（嵌套类），
+        #   不 strip 会漏匹配，导致「类范围」算错。
+        #   （实测踩过：SilkBuilder 的范围被算成 0 行，检查项静默失效）
         m = re.match(r'\s*(?:public |internal |private |static |partial )*'
-                     r'class (\w+)', ln)
+                     r'class (\w+)', ln.strip())
         if m:
             starts.append((i + 1, m.group(1)))
     out = []
@@ -275,11 +278,26 @@ def check_cross_class_refs():
             if re.search(r'(?<![\w.])%s\b' % name, s):
                 err('%d: 控制器里访问 %s 缺 `builder.` 前缀 -> CS0103'
                     % (i + 1, name))
-        # 控制器的自有字段不该加 builder. 前缀
-        for f in ('visualRadius', 'fallRespawnZ', 'startPosition'):
+        # 控制器的自有字段/方法不该加 builder. 前缀
+        #★ 这条我连犯两次：先是字段，这次是 DetectFreeBuildSpawn 等方法。
+        for f in ('visualRadius', 'fallRespawnZ', 'startPosition',
+                  'DetectFreeBuildSpawn', 'EffectiveStartPosition',
+                  'EffectiveFallRespawnZ', 'StartPositionBasicStage'):
             if 'builder.' + f in s:
-                err('%d: %s 是控制器自有字段，不该加 `builder.` 前缀'
+                err('%d: %s 是控制器自有的，不该加 `builder.` 前缀'
                     % (i + 1, f))
+
+    # ★ 反向检查：SilkBuilder 类里不该引用控制器的方法
+    if builder:
+        ba, bb = builder
+        for i in range(ba - 1, min(bb, len(lines))):
+            s = lines[i]
+            for f in ('DetectFreeBuildSpawn', 'EffectiveFallRespawnZ',
+                      'EffectiveStartPosition'):
+                if f in s and 'public' not in s:
+                    err('%d: SilkBuilder 里引用了控制器的 %s —— '
+                        '但 SilkBuilder **不持有**控制器引用，编译不过'
+                        % (i + 1, f))
 
 
 # =====================================================================
