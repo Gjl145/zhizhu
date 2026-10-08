@@ -3,33 +3,63 @@
 > 针对本项目：**Unity 2022.3.62f3c1 + Built-in 内置管线**（非 URP/HDRP）
 > 编写日期：2026-10-08
 
-## ★ 你的项目情况（已核实，省掉一半步骤）
+## ★★★ 已帮你改好 manifest.json —— 现在只需切回 Unity
 
-| 项 | 你的情况 | 影响 |
-|---|---|---|
-| Unity 版本 | 2022.3.62f3c1 | ✓ 满足 ProBuilder 6.0.9 的「2019.4+」要求 |
-| 渲染管线 | **Built-in 内置管线** | ★ **不需要**导入 URP/HDRP 着色器 |
-| URP/HDRP 包 | 未安装 | ★ 跳过「导入 Samples 着色器」这一步 |
-| ProBuilder 已装 | 否 | 需Package Manager 安装 |
+**你不需要再搜索了。** 我已在 `Packages/manifest.json` 里加好：
 
-★ **因为用 Built-in 管线，下面第 3 步（导入着色器）可以完全跳过。**
-官方文档原文：「If you are using either URP or HDRP, you also need to import
-the corresponding shaders.」—— 你不属于这两种情况。
+```json
+"com.unity.probuilder": "5.2.4",
+"com.unity.progrids":   "2.0.16",
+```
+
+**你现在只要做一件事：切回 Unity 编辑器窗口。**
+
+Unity 会自动检测manifest 变化并开始下载（`Packages` 标签有进度条），
+等它下载 + 编译完成（1~3 分钟），菜单栏出现**`Tools > ProBuilder`**。
+
+★ 若没自动反应：点菜单 `Assets > Refresh`。
 
 ---
 
-## 第 1 步：安装 ProBuilder
+## ★★ 为什么在 Package Manager 里搜不到（两个原因）
 
-1. 打开 Unity 菜单：`Window > Package Manager`
-2. 左侧栏点 **`Unity Registry`**（不是 My Assets）
-3. 搜索框输入 **`probuilder`**
-4. 在结果里找到 **`ProBuilder`**（发布者 Unity Technologies）
-   - ⚠️ 注意别选成同名的第三方包
-   - 右侧应显示版本 **6.0.x**、发布者 **Unity Technologies**
-5. 点右下角 **`Install`**
+### 原因 1：★ 我上一版文档给错了版本号
 
-★ 安装后 Package Manager 里会出现 `ProBuilder`，并且顶部菜单栏多出
-**`Tools > ProBuilder`**。
+我写的是「ProBuilder 6.0.9」，**但 6.x 不支持 Unity 2022.3**：
+
+| ProBuilder | 要求的 Unity | 你的 2022.3 |
+|---|---|---|
+| 6.0.x | Unity 6 / 更新版 | ✗ **不兼容** |
+| **5.2.4** | **Unity 2019.4+** | ✓ **匹配** |
+
+★ 即使能搜到，6.x 装了也会报错。**已改为 5.2.4**。
+
+### 原因 2：Unity Registry 的搜索不保证完整
+
+`Window > Package Manager` → `Unity Registry` 的搜索结果
+**不保证包含全部包**（网络慢、缓存过期、索引未刷新都会漏）。
+
+★ **直接在 `manifest.json` 里写包名是 100% 可靠的做法**，已替你做完。
+
+---
+
+## 备用方法（若 manifest 改动没生效）
+
+`Window > Package Manager` → 左上角 **`+`** → 选 **`By name`**
+→ 输入 `com.unity.probuilder` → `Install`
+
+---
+
+## 你的项目情况（已核实，省掉一半步骤）
+
+| 项 | 你的情况 | 影响 |
+|---|---|---|
+| Unity 版本 | 2022.3.62f3c1 | ✓ 匹配 ProBuilder **5.2.4** |
+| 渲染管线 | **Built-in 内置管线** | ★ **不需要**导入 URP/HDRP着色器 |
+| URP/HDRP 包 | 未安装 | ★ 跳过「导入 Samples 着色器」 |
+| ProBuilder | ★ **已在 manifest 里加好** | 只需等 Unity 下载 |
+
+★ **因为用 Built-in 管线，「导入 URP/HDRP 着色器」这步可以完全跳过。**
 
 ---
 
