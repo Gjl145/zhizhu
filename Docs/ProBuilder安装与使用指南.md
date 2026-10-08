@@ -9,37 +9,49 @@
 
 ```json
 "com.unity.probuilder": "5.2.4",
-"com.unity.progrids":   "2.0.16",
 ```
 
 **你现在只要做一件事：切回 Unity 编辑器窗口。**
 
-Unity 会自动检测manifest 变化并开始下载（`Packages` 标签有进度条），
-等它下载 + 编译完成（1~3 分钟），菜单栏出现**`Tools > ProBuilder`**。
+Unity 会自动检测manifest 变化并处理依赖。等编译完成，
+菜单栏出现 **`Tools > ProBuilder`** 就成功了。
 
 ★ 若没自动反应：点菜单 `Assets > Refresh`。
 
 ---
 
-## ★★ 为什么在 Package Manager 里搜不到（两个原因）
+## ★★ 装之前踩过的两个坑（都已解决，供参考）
 
-### 原因 1：★ 我上一版文档给错了版本号
+### 坑 1：我上一版给错了 ProBuilder 版本号
 
-我写的是「ProBuilder 6.0.9」，**但 6.x 不支持 Unity 2022.3**：
+我最初写的是「ProBuilder 6.0.9」，**但 6.x 要求 Unity 6** ——
+在 2022.3 上即使能搜到也装不上：
 
 | ProBuilder | 要求的 Unity | 你的 2022.3 |
 |---|---|---|
 | 6.0.x | Unity 6 / 更新版 | ✗ **不兼容** |
 | **5.2.4** | **Unity 2019.4+** | ✓ **匹配** |
 
-★ 即使能搜到，6.x 装了也会报错。**已改为 5.2.4**。
+★ 已改为 5.2.4（包内`package.json` 写的 `unity: 2019.4`，确认兼容）。
 
-### 原因 2：Unity Registry 的搜索不保证完整
+### 坑 2：★ 我多加了 ProGrids，导致依赖解析报错
 
-`Window > Package Manager` → `Unity Registry` 的搜索结果
-**不保证包含全部包**（网络慢、缓存过期、索引未刷新都会漏）。
+我最初还加了 `"com.unity.progrids": "2.0.16"`，结果报错：
 
-★ **直接在 `manifest.json` 里写包名是 100% 可靠的做法**，已替你做完。
+```
+Project has invalid dependencies:
+com.unity.progrids: Package [com.unity.progrids@2.0.16] cannot be found
+```
+
+**原因：ProGrids 在 Unity 2020+ 被官方移出默认仓库**，
+2.0.16 这个版本号不存在。
+
+★ **已移除 ProGrids。它不是必需的** ——
+Unity 2022 自带网格吸附功能（`Edit > Snap Settings` 或按住 `Ctrl` 临时吸附），
+ProBuilder 的顶点吸附照样能用。
+
+★ 教训：**加包时只加真正必需的**。
+多写一个版本号猜测的包，会让整个依赖解析失败。
 
 ---
 
