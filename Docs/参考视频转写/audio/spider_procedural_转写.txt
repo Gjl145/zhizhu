@@ -1,0 +1,2489 @@
+[    0.4-    6.6] 這次的影片我會談論行動動作和如何創造一個行動的步驟
+[    6.6-   10.0] 我會展示步驟如何創造這個行動的實驗
+[   10.0-   12.2] 但 most of the concepts will apply to any engine
+[   12.2-   15.1] whether it's a custom engine, unity, or whatever you may be using
+[   15.1-   17.8] 我會推薦大家在第一次看這個影片
+[   17.8-   19.5] 然後試試看自己的影片
+[   19.5-   21.9] 然後 maybe referring back to the video if you get stuck
+[   21.9-   26.5] 因為 most of what I'll be talking about is the thought process behind how we get to the end result
+[   26.5-   29.7] rather than specific steps that you must follow every single time
+[   29.7-   32.8] and hopefully after watching you'll be able to apply the same kind of concepts
+[   32.8-   37.1] to figure out how to make the procedural animation that you need for your project
+[   37.1-   39.5] so to summarise what procedural animation is
+[   39.5-   42.1] it's animations created using a procedure
+[   42.1-   45.7] and that means logic and variables as opposed to keyframed pauses
+[   45.7-   48.9] that you would get from traditional animation
+[   48.9-   51.0] so because the animation is based on logic
+[   51.0-   54.6] that means it changes when you change the input and the variables
+[   54.7-   57.8] and one thing that you could count as the input is the environment
+[   57.8-   60.7] so if you change let's say the height of a step
+[   60.7-   64.9] the procedural walk animation can deal with that by raising the like height
+[   64.9-   67.5] or if you choose to change a variable that's part of the system
+[   67.5-   68.9] such as the stride length
+[   68.9-   70.2] then you can change that
+[   70.2-   74.8] and the animation will change based on what you've changed on the inputs
+[   74.8-   77.6] what this means is that once you've set up the system that you need
+[   77.6-   79.6] it can apply to many situations
+[   79.6-   81.8] so you don't need to make an individual animation
+[   81.8-   83.5] for every single possible step height
+[   83.5-   85.6] or every direction they might be moving
+[   85.6-   87.3] or any direction they could be facing
+[   87.3-   88.7] while they're going up the steps
+[   88.7-   90.7] you just make the system in the first place
+[   90.7-   95.3] and then it can adapt to many different environments
+[   95.3-   96.3] so to start off with
+[   96.3-   98.0] I'm just going to explain some of the concepts
+[   98.0-   98.9] that I'll be following
+[   98.9-  100.5] some of the techniques I use
+[  100.5-  101.2] so to begin
+[  101.2-  104.0] I'm going to start off by drawing a photorealistic spider
+[  104.0-  105.7] and what we want to do first
+[  105.7-  108.3] is to make his legs actually meet the floor
+[  108.3-  109.0] so to do that
+[  109.0-  110.7] you find the position of his foot
+[  110.7-  112.5] and find some point above it
+[  112.5-  114.5] let's say 50 units above
+[  114.5-  116.6] and then find a point 50 units below
+[  116.6-  118.1] and do essentially a trace line
+[  118.1-  120.1] from the top point to the bottom point
+[  120.1-  121.6] see where it hits something
+[  121.6-  122.5] and that should be the floor
+[  122.5-  125.2] and that's where you will place the foot
+[  125.2-  126.3] then in the next stage
+[  126.3-  129.3] we're going to imagine that he's moving from left to right
+[  129.3-  132.2] and we're just going to lock the feet in position
+[  132.2-  134.5] so this leg will actually be here
+[  134.5-  136.9] and it will be locked back in place
+[  136.9-  138.5] so it's locked in world space
+[  138.5-  139.7] so wherever it is in the world
+[  139.7-  140.6] it will be locked there
+[  140.6-  141.8] and that will be the same for all feet
+[  141.8-  142.8] so all feet will be locked
+[  142.8-  144.4] where they originally started
+[  144.7-  146.4] even though the body is moving
+[  146.4-  147.4] and after that step
+[  147.4-  148.4] what we'll do is
+[  148.4-  150.8] intermittently move the legs forward
+[  150.8-  152.2] so from where they are
+[  152.2-  152.9] when they're locked
+[  152.9-  154.3] to where they want to be
+[  154.3-  156.1] which is the base pose
+[  156.1-  157.3] where they are in the base pose
+[  157.3-  158.6] when they're relaxed
+[  158.6-  159.1] however
+[  159.1-  160.8] if we move it to where they are
+[  160.8-  161.7] currently
+[  161.7-  162.7] that's already too late
+[  162.7-  164.3] as soon as it lands there
+[  164.3-  165.7] the spider carries on moving
+[  165.7-  167.5] and the foot's too far behind
+[  167.5-  169.0] so what we instead want to do
+[  169.0-  169.8] is predict a point
+[  169.8-  172.2] where the spider will be in the future
+[  172.2-  174.1] and move the leg from where it is now
+[  174.1-  175.6] to where we predict it to be
+[  175.6-  177.0] based on its current velocity
+[  177.7-  178.6] and then instead
+[  178.6-  179.9] of the foot just sliding
+[  179.9-  181.4] from one place to another
+[  181.4-  182.8] and along the floor
+[  182.8-  183.8] at the halfway point
+[  183.8-  185.9] so let's say 50% of the move
+[  185.9-  187.3] we'll just add some height to it
+[  187.3-  188.4] just so it lifts up
+[  188.4-  189.9] and we'll do the same for each leg
+[  189.9-  191.5] so they lift in an arc
+[  191.5-  193.0] and it looks a little bit more natural
+[  193.0-  193.9] and it doesn't look like
+[  193.9-  195.7] they're just ice skating along the floor
+[  198.2-  199.7] I'm using Unreal Engine 5
+[  199.7-  201.2] but if you're using a previous version
+[  201.2-  202.3] you may need to enable
+[  202.3-  204.1] Control Rig from the plugins menu
+[  205.1-  206.5] so the first step
+[  206.5-  207.4] is to right-click
+[  207.4-  208.7] go to animation
+[  208.7-  210.6] and click on the control rig
+[  210.6-  211.8] and select control rig
+[  211.8-  212.9] as the parent rig
+[  213.5-  215.0] and I'm going to name this
+[  215.0-  216.5] spiderwalk control rig
+[  218.3-  219.5] and open it up
+[  219.5-  221.5] and right-click anywhere in the graph
+[  222.0-  224.2] and search for set bone transform
+[  224.2-  225.7] or just set transform
+[  226.4-  228.3] and link the execution path up
+[  229.0-  231.2] and currently there are no bones to use
+[  231.2-  233.3] because we've not imported the rig
+[  233.3-  234.7] so go to rig hierarchy
+[  234.7-  236.1] and click import hierarchy
+[  236.1-  237.7] and select your skeletal mesh
+[  244.3-  245.0] click OK
+[  245.6-  247.2] and now you should see the mesh
+[  247.2-  248.9] in the small viewport
+[  249.8-  252.0] as well as all the bones listed underneath
+[  253.8-  255.6] and so now when we go to the drop down of name
+[  255.6-  257.1] we've got all the bones that we can select
+[  257.1-  258.6] so I've selected pelvis
+[  259.0-  261.2] and now we need to plug something into transform
+[  261.5-  263.7] so right-click and search for get transform
+[  263.8-  265.1] and select the same bone
+[  265.1-  266.3] which is pelvis
+[  267.4-  268.7] and plug in the transform
+[  268.7-  269.9] and now things are back to normal
+[  270.3-  271.9] and we've not modified the values
+[  271.9-  273.7] so open the drop downs for transform
+[  273.7-  274.7] and plug in rotation
+[  274.7-  276.3] and rotation translation translation
+[  276.3-  277.2] scale and scale
+[  277.2-  278.5] and things are back to normal again
+[  279.0-  281.2] and then on translation do an advector
+[  282.7-  284.0] and put in some number
+[  284.0-  285.1] and you should see that
+[  285.5-  286.6] the whole rig moves
+[  289.6-  290.6] so now what we're going to do
+[  290.6-  292.2] is we're going to find a point
+[  292.2-  294.4] that's above the pelvis and below
+[  294.9-  296.1] and do a trace line
+[  296.1-  297.4] or a sphere trace
+[  297.9-  299.4] and find way into six
+[  299.4-  300.6] which should be the floor
+[  300.9-  301.6] and then
+[  301.9-  304.1] position the pelvis at that location
+[  304.4-  306.9] so right-click and do sphere trace by channel
+[  309.8-  311.6] and for the start point
+[  311.6-  313.6] we're going to do the pelvis location
+[  313.6-  316.7] plus 150 on the z axis
+[  317.5-  319.3] and for the end position
+[  319.3-  322.1] we're going to do an advector again
+[  322.1-  324.4] but this time we're going to do negative 150
+[  324.9-  326.3] and plug that into end
+[  326.3-  327.7] for the end of the trace
+[  333.8-  335.8] and now plug in the hit location
+[  335.9-  337.0] to translation
+[  337.5-  338.7] and now you can see that the pelvis
+[  338.7-  340.1] snapped to the floor
+[  342.2-  345.0] so if we right-click on the skeletal mesh
+[  346.8-  348.1] and go to create
+[  348.6-  349.7] animation blueprint
+[  350.6-  352.0] open up the animation blueprint
+[  352.0-  354.0] right-click search for control rig
+[  355.5-  357.6] plugging the execution path
+[  358.1-  360.8] and for control rig class
+[  360.8-  363.2] on the side search for your control rig class
+[  363.2-  364.2] that you've just created
+[  364.7-  365.4] compile
+[  365.6-  366.7] and it should be working
+[  367.1-  368.9] so now dragging the skeletal mesh
+[  369.7-  371.2] and in the details panel
+[  371.8-  373.4] you want to use animation blueprint
+[  373.4-  375.1] and in the animation class
+[  375.1-  375.9] or anim class
+[  375.9-  378.3] you want to select the animation blueprint
+[  378.3-  379.2] you just created
+[  379.8-  380.9] and then if you simulate
+[  381.7-  382.8] you should see that
+[  384.0-  386.5] the mesh is snapping to the floor
+[  387.0-  388.2] using the trace line
+[  390.1-  391.7] if you open up the console
+[  391.8-  393.7] and type control rig debug
+[  393.7-  397.0] you'll find this a.anim node.controlrig.debug
+[  397.0-  397.9] set that to 1
+[  398.5-  400.1] and that allows you to use
+[  400.1-  401.6] debug drawing
+[  402.0-  402.8] so in this case
+[  402.8-  404.0] I've had a draw line
+[  404.2-  405.5] and I'm just going to plug in
+[  405.5-  407.1] the trace start and trace end
+[  407.1-  408.1] to the A and B
+[  408.8-  410.0] so then we'll see a line
+[  410.0-  411.1] which represents
+[  411.1-  412.2] what the trace is doing
+[  414.0-  415.4] although this will be drawing a line
+[  415.4-  417.2] when the trace is actually a sphere trace
+[  417.2-  418.7] but we'll be able to see the path
+[  418.7-  419.5] that it's taking
+[  420.3-  421.9] so now when you simulate
+[  421.9-  423.0] you should see a red line
+[  423.3-  425.8] that's from above the pelvis to below
+[  426.3-  427.4] and that's what it's using
+[  427.4-  428.5] to find the floor
+[  428.6-  429.7] and then it's snapping the pelvis
+[  429.7-  430.7] to that location
+[  442.2-  443.1] so I'm going to remove
+[  443.1-  444.0] the draw line
+[  444.0-  445.2] because we don't need that now
+[  445.3-  446.3] clean things up a bit
+[  448.6-  449.8] and next
+[  449.9-  451.6] we're going to search for
+[  451.6-  452.8] basic IK
+[  454.1-  455.0] and plug that in
+[  456.1-  458.0] and for the effector item
+[  458.0-  459.5] that's the end point of the leg
+[  459.5-  460.1] so in this case
+[  460.1-  461.4] it's L and scuff foot
+[  462.1-  463.2] and then for item B
+[  463.2-  464.5] it should be the bone above that
+[  464.5-  466.7] which is L and scuff calf in my case
+[  467.1-  468.5] and then for item A
+[  468.5-  469.8] you want the top bone
+[  469.8-  470.7] the top bone of the chain
+[  470.7-  472.1] which is L and scuff thigh
+[  473.5-  474.7] and as you can see
+[  475.3-  476.8] that looks uncomfortable
+[  477.6-  478.8] but we haven't set
+[  478.8-  480.1] the effector target
+[  480.5-  482.3] so search for get bone transform
+[  483.0-  484.0] and search for
+[  484.0-  485.9] the foot bone
+[  486.6-  488.0] and plug the transform in
+[  488.6-  490.0] and something has changed
+[  490.1-  491.2] and it's trying
+[  491.2-  492.5] to position the foot
+[  492.8-  493.8] at the end point
+[  494.0-  495.0] but the rest of the bones
+[  495.0-  495.5] don't really know
+[  495.5-  496.9] which direction they should be facing
+[  496.9-  497.8] because we've not set
+[  497.8-  499.5] the primary and secondary axis
+[  499.8-  500.8] or the pole vector
+[  501.7-  503.7] so for the primary and secondary axis
+[  503.7-  505.0] you can figure out
+[  505.0-  506.4] if you look at the skeleton
+[  506.7-  507.8] which direction
+[  507.8-  508.9] the bones are facing
+[  509.6-  511.3] and this may differ
+[  511.3-  513.1] between different 3D programs
+[  513.1-  514.3] I'm not entirely sure
+[  515.4-  516.6] I think Blender will always do it
+[  516.6-  517.3] consistently
+[  517.3-  519.3] but I'm not 100% sure on that either
+[  521.0-  522.0] so you can have
+[  522.0-  523.3] you can figure it out this way
+[  523.6-  524.8] or what I usually do
+[  524.8-  525.8] is just brute force it
+[  525.8-  527.1] and take a guess at some numbers
+[  527.5-  528.6] so in my case
+[  528.6-  529.7] I know it's 0
+[  529.7-  530.8] -1 0
+[  531.3-  533.5] and then it's 1 0 0
+[  534.2-  535.2] and it still looks wrong
+[  535.2-  536.2] because it's going through the floor
+[  536.2-  537.1] but that's because we've not set
+[  537.1-  538.0] the pole vector
+[  538.2-  539.6] so another high quality diagram
+[  539.6-  540.3] I'm going to show
+[  540.3-  541.4] what I usually do
+[  541.4-  542.7] to find the pole vector
+[  542.9-  543.6] so if you find
+[  543.6-  544.6] the top of the thigh
+[  544.6-  545.4] and the foot
+[  545.9-  547.4] and the halfway point
+[  547.4-  548.2] between the two
+[  549.1-  550.7] and then you project forward
+[  550.8-  551.7] to where the sort of
+[  551.7-  552.8] knee joint is
+[  553.1-  554.2] and you keep projecting
+[  554.2-  555.6] that same line forward
+[  556.0-  557.2] into the distance
+[  557.6-  558.8] and if that's where
+[  558.8-  560.0] the IK target is
+[  560.2-  561.3] things usually work out
+[  561.3-  561.8] ok
+[  562.6-  563.5] and I'm not going to do that
+[  563.5-  564.3] in this case
+[  564.4-  565.0] I'm just
+[  565.0-  566.1] because it's a spider
+[  566.5-  567.1] the
+[  568.3-  568.8] elbows
+[  568.8-  570.3] knees of the spider
+[  570.3-  571.3] can all point straight up
+[  571.3-  572.0] so I've just put in
+[  572.0-  573.4] for the pole vector on Z
+[  573.8-  574.6] 10,000
+[  576.3-  578.1] so now you can see that
+[  578.2-  579.2] we're back to square one
+[  579.4-  580.5] everything looks the same
+[  580.5-  581.3] even though one of the leg
+[  581.3-  582.3] is actually using IK
+[  582.3-  582.8] but you can't
+[  582.8-  583.8] many tell which one it is
+[  583.8-  584.8] because it looks
+[  585.1-  586.5] as it would in the default pose
+[  587.2-  588.2] now what we're going to do
+[  588.2-  588.7] is
+[  588.8-  589.9] another sphere trace
+[  590.4-  591.3] and for this one
+[  591.3-  592.2] we're going to
+[  592.3-  593.9] trace above and below
+[  593.9-  594.9] the foot point
+[  595.9-  597.6] and use the hit result
+[  597.6-  599.0] to decide where the floor is
+[  599.6-  601.2] so we get bone transform
+[  601.2-  602.6] set to L and scoff foot
+[  603.0-  604.1] get the translation
+[  604.7-  605.8] add some number to it
+[  606.4-  607.8] I'm using 150
+[  608.5-  609.6] then add again
+[  609.6-  610.9] and do negative
+[  611.1-  612.4] I know 150 again
+[  612.8-  613.7] for the end point
+[  614.5-  616.5] and hit location
+[  616.5-  617.7] we're going to plug that into
+[  617.7-  618.3] the effector
+[  618.3-  618.9] but we can't plug it in
+[  618.9-  619.5] directly
+[  619.5-  620.4] because we're using
+[  620.4-  621.1] the transform
+[  621.1-  622.2] so drop down both
+[  622.6-  623.6] plug rotation in
+[  623.9-  624.6] scale
+[  624.6-  625.8] but for the translation
+[  625.8-  626.6] we're going to plug in
+[  626.6-  627.7] the hit location
+[  629.1-  630.3] so now you'll see
+[  630.3-  631.7] that this one leg
+[  632.0-  633.0] is actually
+[  633.3-  634.2] meeting the floor
+[  634.8-  635.8] as the other legs
+[  636.0-  636.8] intersecting
+[  637.3-  638.0] and when it goes up
+[  638.0-  638.4] the ramp
+[  638.4-  639.3] you can see that
+[  639.5-  640.4] for a short part
+[  640.4-  641.1] of the ramp
+[  641.4-  642.3] it actually
+[  642.4-  643.4] lifts up the leg
+[  645.2-  646.6] but then it drops down again
+[  646.9-  647.6] because the start
+[  647.6-  648.0] of the trace
+[  648.0-  648.8] isn't high enough
+[  648.9-  650.0] I'll increase the
+[  650.0-  650.5] values
+[  650.5-  651.4] so 450
+[  651.4-  652.6] and negative 450
+[  652.8-  653.6] so it traces from
+[  653.6-  654.5] higher and lower
+[  654.6-  655.8] and now you can see
+[  656.5-  657.4] that the leg lifts up
+[  657.4-  657.8] quite a lot
+[  657.8-  658.8] when it goes up the ramp
+[  659.3-  660.2] and excuse the lag
+[  660.2-  660.9] on the recording
+[  660.9-  661.9] that'll disappear shortly
+[  661.9-  663.0] but you get what you pay for
+[  663.3-  664.0] so now I'm going to
+[  664.0-  664.8] loop this process
+[  664.8-  665.2] so we can do it
+[  665.2-  666.0] for all the feet
+[  666.1-  667.0] so create a
+[  667.0-  668.1] for each node
+[  668.6-  669.6] and search for
+[  669.7-  670.6] getchildren
+[  673.4-  674.0] and this will get
+[  674.0-  675.4] all the children bones
+[  675.4-  676.4] of the selected bone
+[  676.5-  677.1] so in this case
+[  677.1-  678.1] I'm going to use
+[  678.1-  679.0] pelvis
+[  679.0-  679.9] as the bone
+[  679.9-  680.9] because that's equivalent
+[  680.9-  681.2] to the
+[  681.2-  682.0] rooped bone
+[  682.0-  682.8] in my case
+[  684.0-  684.5] and you want to
+[  684.5-  685.0] make sure that
+[  685.0-  686.4] you tick recursive
+[  686.5-  687.4] and what that will do
+[  687.4-  687.9] it will search
+[  687.9-  688.8] for all the children
+[  688.8-  689.1] bones
+[  689.1-  689.8] of the children
+[  689.8-  690.1] bones
+[  692.4-  692.8] so now we've
+[  692.8-  693.5] got every bone
+[  694.0-  694.5] and you can
+[  694.5-  695.0] limit the
+[  695.0-  695.9] type to search
+[  695.9-  696.1] to bone
+[  696.1-  696.6] if you want
+[  697.1-  697.6] plugging the
+[  697.6-  698.1] array to the
+[  698.1-  698.9] for each loop
+[  699.4-  700.0] control drag
+[  700.0-  700.6] on the execution
+[  700.6-  701.1] paths to move
+[  701.1-  701.8] and like that
+[  701.8-  702.1] if you want
+[  703.0-  704.0] so from the element
+[  704.0-  704.5] this is
+[  704.6-  705.2] basically looping
+[  705.2-  705.6] through every
+[  705.6-  706.2] single bone
+[  707.0-  707.5] so now I
+[  707.5-  708.0] want to check
+[  708.0-  708.8] if the name
+[  708.8-  709.9] contains the word
+[  709.9-  710.4] foot
+[  711.0-  711.2] and so
+[  711.2-  711.9] all of the
+[  711.9-  712.6] end points
+[  712.6-  712.9] of the
+[  712.9-  713.4] legs
+[  713.4-  713.5] I've
+[  713.5-  713.9] named
+[  713.9-  714.4] foot
+[  715.4-  715.8] and
+[  715.8-  716.0] create a
+[  716.0-  716.6] branch
+[  717.6-  718.0] plug it
+[  718.0-  718.5] in
+[  718.5-  718.9] and
+[  718.9-  719.5] if true
+[  720.0-  720.4] continue
+[  720.4-  720.6] on
+[  721.5-  722.1] so
+[  722.1-  722.6] now it's
+[  722.6-  723.4] limiting
+[  723.4-  723.6] everything
+[  723.6-  724.0] it does
+[  724.0-  724.1] with the
+[  724.1-  724.5] i care
+[  724.5-  725.1] to
+[  725.1-  725.5] bones
+[  725.5-  725.6] that
+[  725.6-  725.8] are
+[  725.8-  726.0] named
+[  726.0-  726.5] foot
+[  728.8-  729.0] so
+[  729.0-  729.3] drag out
+[  729.3-  729.5] from the
+[  729.5-  730.2] element
+[  730.2-  730.8] and do
+[  730.8-  731.6] get parent
+[  732.7-  733.0] and this
+[  733.0-  733.3] should be
+[  733.3-  733.7] the bone
+[  733.7-  734.3] above it
+[  734.3-  734.9] which
+[  734.9-  735.2] is
+[  735.2-  735.4] the
+[  735.4-  735.9] carve
+[  736.9-  737.4] preceed
+[  737.4-  737.7] create
+[  737.7-  738.2] comments
+[  739.2-  739.8] and then
+[  739.8-  740.2] the parent
+[  740.2-  740.8] of that
+[  746.7-  747.1] so
+[  747.1-  747.4] now we
+[  747.4-  747.7] want to
+[  747.7-  748.3] replace
+[  748.3-  748.7] all the
+[  748.7-  749.3] bone names
+[  749.3-  749.5] that we've
+[  749.5-  749.8] put in
+[  749.8-  750.5] directly
+[  750.5-  750.8] we've
+[  750.8-  751.3] references
+[  751.3-  751.5] to
+[  751.5-  751.7] these
+[  751.7-  752.3] bones
+[  753.7-  754.1] so
+[  754.1-  754.2] the
+[  754.2-  754.7] carve
+[  754.7-  754.9] should
+[  754.9-  755.7] replace
+[  756.7-  757.1] item
+[  757.1-  757.5] b
+[  758.3-  758.8] phi
+[  758.8-  759.4] replaces
+[  759.4-  759.8] item
+[  759.8-  760.2] a
+[  761.1-  761.5] and
+[  761.5-  761.6] the
+[  761.6-  762.0] effector
+[  762.0-  762.3] item
+[  762.3-  762.7] that's
+[  762.7-  762.9] just
+[  762.9-  763.0] the
+[  763.0-  763.4] foot
+[  763.4-  763.5] and
+[  763.5-  763.7] that's
+[  763.7-  763.8] the
+[  763.8-  763.9] one
+[  763.9-  764.0] that
+[  764.0-  764.1] we
+[  764.1-  764.3] current
+[  764.3-  764.8] the looping
+[  764.8-  765.2] through
+[  765.2-  765.4] so
+[  765.4-  765.5] we
+[  765.5-  765.6] can
+[  765.6-  765.7] just
+[  765.7-  765.9] plug
+[  765.9-  766.0] that
+[  766.0-  766.5] directly
+[  766.5-  766.6] in
+[  766.6-  766.7] from
+[  766.7-  766.8] the
+[  766.8-  767.7] element
+[  767.7-  768.0] now
+[  768.0-  768.1] we
+[  768.1-  768.3] can
+[  768.3-  768.4] see
+[  768.4-  768.7] we'vemade
+[  768.7-  769.3] a squid
+[  771.3-  771.7] so
+[  771.7-  775.1] at the moment they're all pointing to the same place
+[  775.1-  777.3] they're all targeting where the Ellen's got foot is
+[  777.3-  779.5] because we've not replaced these references yet
+[  779.5-  780.3] so
+[  780.3-  782.8] plugging the element to both of these
+[  782.8-  787.1] and then each foot goes to where it should be
+[  787.1-  787.5] so
+[  787.5-  790.5] now if you simulate you'll see that
+[  790.5-  792.1] the same thing applies to all the feet
+[  792.1-  792.7] so
+[  792.7-  795.3] both of the front legs lift up
+[  795.3-  797.5] until the trace
+[  797.5-  798.9] doesn't work
+[  800.1-  801.0] and
+[  801.0-  804.1] I think if you move up and down the mesh
+[  804.1-  806.4] you'll see that the feet are still trying to stick to the floor
+[  808.1-  809.5] and the pelvis will snap to the floor
+[  809.5-  811.5] if it gets low enough because of our trace
+[  811.5-  821.2] where we're setting it to the floor
+[  821.2-  821.5] so
+[  821.5-  823.1] what I'm going to do is
+[  823.1-  825.4] after we've do the sphere trace for the pelvis
+[  825.4-  826.7] I'm just going to add on some number
+[  826.7-  828.2] so it's not literally on the floor
+[  828.2-  831.2] it's just raised above some distance from the floor
+[  831.2-  832.0] so
+[  832.0-  833.3] in the z
+[  833.3-  835.1] I'm going to add on 150
+[  835.1-  837.4] and I don't know why I keep using that number
+[  839.0-  841.0] but I'm going to use an if
+[  841.0-  842.7] which is essentially select
+[  842.7-  843.6] and
+[  843.6-  844.8] if the trace is true
+[  844.8-  846.3] if it hits something
+[  846.3-  847.7] then we use the trace result
+[  847.7-  853.3] otherwise we're going to use the default translation of the bone
+[  853.3-  855.3] and I'm going to just increase these values
+[  855.3-  861.7] so it traces from higher and lower
+[  861.7-  862.8] so now we can see that the pelvis
+[  862.8-  866.4] is actually raised off the floor
+[  866.4-  869.1] maybe too high but
+[  869.1-  871.9] so there's an issue with the foot IK
+[  871.9-  873.8] and it's caused by
+[  873.8-  875.1] tracing from straight above the foot
+[  875.1-  876.3] to straight below
+[  876.3-  878.6] but the leg's not actually coming from straight above or below
+[  878.6-  879.8] so you get issues like this
+[  879.8-  881.1] where if it goes over an edge
+[  881.1-  882.2] it can snap down
+[  882.2-  885.1] and the leg will actually intersect the geometry
+[  885.1-  885.8] to fix that
+[  885.8-  887.8] we can change the start of the trace
+[  887.8-  890.0] to being a point that's closer to
+[  890.0-  891.0] above the pelvis
+[  891.0-  893.6] rather than directly above the foot
+[  893.6-  894.5] so
+[  894.5-  897.7] in the traces that we use for the feet
+[  897.7-  900.4] I'm going to make a change to
+[  900.4-  902.6] the start point
+[  902.6-  905.0] so instead I'm going to search for pelvis
+[  905.1-  907.4] for the bone transform
+[  907.4-  909.0] and now you can see that
+[  909.0-  912.4] did not help
+[  912.4-  914.0] so I'm going to undo that
+[  914.0-  918.1] and I'm going to copy it
+[  918.1-  922.5] insteadand search for pelvis separately
+[  922.5-  924.0] and we're going to interpolate
+[  924.0-  925.4] between these two vectors
+[  925.4-  927.0] so search for interpolate
+[  927.0-  928.2] plug both in
+[  928.2-  930.0] and the t is
+[  930.0-  931.1] the percentage between the two
+[  931.1-  934.4] so I'm going to do 0.5
+[  934.4-  935.7] so that's halfway between
+[  935.7-  937.1] straight above the pelvis
+[  937.1-  940.7] and straight above the foot
+[  940.7-  942.9] so now when we try it
+[  942.9-  945.2] we should see that
+[  945.2-  947.1] if you remember to simulate
+[  947.1-  948.7] before moving it
+[  948.7-  950.0] we should see
+[  950.0-  951.0] that the feet
+[  951.0-  952.1] the leg's not intersect
+[  952.1-  953.5] they'll reach the edge
+[  953.5-  954.6] and then it'll fall off
+[  954.6-  957.8] when it's got room to fall off
+[  957.8-  959.3] and we don't get the intersection
+[  959.3-  959.8] as much
+[  959.8-  960.6] it's not perfect
+[  960.6-  962.4] but for our uses
+[  962.4-  964.6] it's a good approximation
+[  964.6-  967.8] everything's still working as it should
+[  967.8-  969.3] and the legs are just snapping into place
+[  969.3-  969.7] at the minute
+[  969.7-  970.2] but we can see
+[  970.2-  971.2] that the IK is working
+[  971.2-  972.0] and each foot
+[  972.0-  973.1] is actually
+[  973.1-  974.8] meeting the ground
+[  974.8-  976.4] so back in control rig
+[  976.4-  977.5] create a setup event
+[  977.5-  978.4] if you don't already have one
+[  978.4-  980.1] so right click search setup event
+[  980.1-  981.1] this is the equivalent to
+[  981.1-  982.1] beginplay
+[  982.1-  983.6] from blueprints
+[  983.6-  984.8] and we're going to copy
+[  984.8-  985.9] the get children
+[  985.9-  987.1] for each
+[  987.1-  987.8] contains
+[  987.8-  992.7] and the branch
+[  992.7-  994.1] and also the
+[  994.1-  995.1] get transform
+[  995.1-  996.6] interpolation
+[  996.6-  999.1] and the trace
+[  999.1- 1001.3] so we're going to copy all of that
+[ 1001.3- 1002.3] and move it up to
+[ 1002.3- 1003.7] this setup event
+[ 1004.7- 1005.8] and what we're doing here
+[ 1005.8- 1007.7] is we're going to save
+[ 1007.7- 1008.9] each foot location
+[ 1008.9- 1010.1] the initial location
+[ 1010.1- 1016.7] to an array
+[ 1016.7- 1018.4] so to do that
+[ 1018.4- 1019.4] we need to put
+[ 1019.4- 1020.0] the hit location
+[ 1020.0- 1020.6] into an array
+[ 1020.6- 1021.3] so we create
+[ 1021.3- 1022.2] a new variable
+[ 1022.2- 1023.8] so on the left
+[ 1023.8- 1025.9] click the plus
+[ 1025.9- 1028.2] and give it a name
+[ 1028.2- 1029.5] so I'm going to call it
+[ 1029.5- 1035.3] world locked foot locations
+[ 1035.3- 1036.3] and you want to search
+[ 1036.3- 1037.9] for a vector
+[ 1037.9- 1039.2] make sure it's a vector
+[ 1039.2- 1041.1] and on the side panel
+[ 1041.1- 1042.0] make sure you've got it set
+[ 1042.0- 1044.7] to array
+[ 1044.7- 1045.5] so I drag it in
+[ 1045.5- 1046.9] searchforget
+[ 1046.9- 1049.8] do add
+[ 1049.8- 1050.7] and we're going to want
+[ 1050.7- 1051.7] the plug hit location
+[ 1051.7- 1052.6] into the element
+[ 1052.6- 1054.3] but we're going to use
+[ 1054.3- 1057.1] the if or select
+[ 1057.1- 1059.2] that we've used before
+[ 1059.2- 1060.5] so it's essentially
+[ 1060.5- 1061.7] doing the same thing
+[ 1061.7- 1063.2] so if there's a hit result
+[ 1063.2- 1064.6] we will use the hit result
+[ 1064.6- 1065.1] if there isn't
+[ 1065.1- 1065.9] we'll use the default
+[ 1065.9- 1067.1] bone position
+[ 1067.1- 1067.8] so I've just copied
+[ 1067.8- 1069.4] and pasted that there
+[ 1069.4- 1071.4] result goes into element
+[ 1071.4- 1073.2] so plug in hit
+[ 1073.2- 1074.1] to the condition
+[ 1074.1- 1075.1] so if it's true
+[ 1075.1- 1077.4] we'll use hit location
+[ 1077.4- 1078.8] and if it's false
+[ 1078.8- 1080.1] we will use
+[ 1080.1- 1083.2] the default position
+[ 1083.2- 1083.7] so that should be
+[ 1083.7- 1084.4] the default position
+[ 1084.4- 1085.7] of each foot
+[ 1085.7- 1086.4] now we should have
+[ 1086.4- 1087.0] an array
+[ 1087.0- 1088.7] that has eight entries
+[ 1088.7- 1089.9] one for each foot
+[ 1089.9- 1092.9] with their location
+[ 1092.9- 1093.7] so now where
+[ 1093.7- 1094.3] we do the basic
+[ 1094.3- 1095.1] rk instead of
+[ 1095.1- 1095.5] just plugging
+[ 1095.5- 1097.9] the translation in
+[ 1097.9- 1098.5] we are going
+[ 1098.5- 1099.6] to unhook that
+[ 1099.6- 1100.3] and dragging
+[ 1100.3- 1101.5] the get world
+[ 1101.5- 1102.3] whatever
+[ 1102.3- 1103.9] locked foot locations
+[ 1103.9- 1104.7] searchforget
+[ 1104.7- 1105.3] or at
+[ 1105.9- 1106.8] and plug that in
+[ 1106.8- 1107.4] and now because
+[ 1107.4- 1108.0] the index is
+[ 1108.0- 1108.6] zero
+[ 1108.6- 1109.1] we've made the
+[ 1109.1- 1110.0] squid again
+[ 1110.0- 1110.4] because they're
+[ 1110.4- 1111.0] all pointing
+[ 1111.0- 1112.6] to the same place
+[ 1112.6- 1113.2] and also
+[ 1113.2- 1114.0] they're all pointing
+[ 1114.0- 1114.6] to a place
+[ 1114.6- 1115.3] in the global
+[ 1115.3- 1115.6] space
+[ 1115.6- 1116.2] which is actually
+[ 1116.2- 1117.1] rig space
+[ 1117.1- 1117.9] different to world
+[ 1117.9- 1118.8] space
+[ 1118.8- 1121.1] so in a setup event
+[ 1121.1- 1122.9] after the condition
+[ 1122.9- 1124.8] searchforto world
+[ 1124.8- 1126.0] and this converts it
+[ 1126.0- 1127.0] from a global
+[ 1127.0- 1127.8] orrig space
+[ 1127.8- 1128.4] to a world
+[ 1128.4- 1129.2] space
+[ 1129.2- 1129.7] the opposite of
+[ 1129.7- 1130.2] that is
+[ 1130.2- 1131.3] a from world
+[ 1131.3- 1133.2] which does the inverse
+[ 1133.2- 1133.9] and we're going
+[ 1133.9- 1134.7] to use that now
+[ 1134.7- 1135.6] to take it
+[ 1135.6- 1136.0] from the
+[ 1136.0- 1136.5] array
+[ 1136.5- 1137.8] back to
+[ 1137.8- 1138.6] the rigspace
+[ 1138.6- 1139.0] so we're
+[ 1139.0- 1139.3] dragging
+[ 1139.3- 1139.8] the from
+[ 1139.8- 1140.0] world
+[ 1140.0- 1141.1] node
+[ 1141.1- 1141.4] and now
+[ 1141.4- 1141.8] you'll see
+[ 1141.8- 1142.1] that they're
+[ 1142.1- 1142.8] all locked
+[ 1142.8- 1143.6] to
+[ 1143.6- 1144.1] an actual
+[ 1144.1- 1144.4] world
+[ 1144.4- 1144.8] position
+[ 1144.8- 1145.1] so when
+[ 1145.1- 1145.4] we move it
+[ 1145.4- 1146.1] around
+[ 1146.1- 1146.4] all the
+[ 1146.4- 1146.6] feet
+[ 1146.6- 1146.7] are
+[ 1146.7- 1147.2] targeting
+[ 1147.2- 1147.3] the
+[ 1147.3- 1151.0] same place
+[ 1151.0- 1151.2] now
+[ 1151.2- 1151.5] what we
+[ 1151.5- 1152.0] want to do
+[ 1152.0- 1152.2] is
+[ 1152.2- 1152.7] make it
+[ 1152.7- 1153.0] so that
+[ 1153.0- 1153.8] each
+[ 1153.8- 1154.2] individual
+[ 1154.2- 1154.7] foot
+[ 1154.7- 1155.0] is
+[ 1155.0- 1155.5] targeting
+[ 1155.5- 1155.8] where
+[ 1155.8- 1156.0] they
+[ 1156.0- 1156.3] want
+[ 1156.3- 1157.3] to be
+[ 1157.3- 1158.2] so
+[ 1158.2- 1158.5] we need
+[ 1158.5- 1158.7] to get
+[ 1158.7- 1159.2] the index
+[ 1159.2- 1159.3] of the
+[ 1159.3- 1160.2] foot
+[ 1160.2- 1161.2] but
+[ 1161.2- 1161.5] from this
+[ 1161.5- 1161.8] get
+[ 1161.8- 1163.3] children
+[ 1167.0- 1167.7] not just the
+[ 1167.7- 1168.7] feet
+[ 1168.7- 1169.2] so
+[ 1169.2- 1169.5] create
+[ 1169.5- 1169.7] a new
+[ 1169.7- 1171.2] intercher
+[ 1171.2- 1171.3] and
+[ 1171.3- 1171.5] I'm
+[ 1171.5- 1171.7] going
+[ 1171.7- 1171.8] to
+[ 1171.8- 1172.0] call
+[ 1172.0- 1173.0] this
+[ 1173.0- 1173.3] current
+[ 1173.3- 1173.5] foot
+[ 1173.5- 1176.5] count
+[ 1176.5- 1177.1] and
+[ 1177.1- 1177.3] make
+[ 1177.3- 1177.5] sure
+[ 1177.5- 1177.6] that
+[ 1177.6- 1177.7] this
+[ 1177.7- 1178.0] is
+[ 1178.0- 1178.4] intercher
+[ 1178.4- 1178.6] but
+[ 1178.6- 1178.9] not
+[ 1178.9- 1179.0] an
+[ 1179.0- 1181.4] array
+[ 1181.4- 1181.7] and
+[ 1181.7- 1182.1] before
+[ 1182.1- 1182.2] the
+[ 1182.2- 1182.7] loop
+[ 1182.7- 1182.8] we're
+[ 1182.8- 1182.9] going
+[ 1182.9- 1183.2] to set
+[ 1183.2- 1183.4] that
+[ 1183.4- 1183.6] to
+[ 1183.6- 1184.1] negative
+[ 1184.1- 1185.2] one
+[ 1185.2- 1185.7] so
+[ 1185.7- 1185.8] that
+[ 1185.8- 1186.0] when
+[ 1186.0- 1186.1] we
+[ 1186.1- 1186.5] increase
+[ 1186.5- 1186.6] it
+[ 1186.6- 1187.0] later
+[ 1187.0- 1187.2] the
+[ 1187.2- 1187.5] first
+[ 1187.5- 1187.7] one
+[ 1187.7- 1187.8] will
+[ 1187.8- 1187.9] be
+[ 1187.9- 1188.3] zero
+[ 1188.3- 1188.5] on
+[ 1188.5- 1188.6] the
+[ 1188.6- 1189.0] second
+[ 1189.0- 1189.1] will
+[ 1189.1- 1189.2] be
+[ 1189.2- 1189.5] one
+[ 1189.5- 1189.6] and
+[ 1189.6- 1189.7] so
+[ 1190.7- 1191.2] so
+[ 1191.2- 1191.3] if
+[ 1191.3- 1191.4] it
+[ 1191.4- 1191.7] fans
+[ 1191.7- 1191.9] a
+[ 1191.9- 1192.1] foot
+[ 1192.1- 1193.2] successfully
+[ 1193.2- 1193.8] dragging
+[ 1193.8- 1194.0] the
+[ 1199.9- 1203.6] intature
+[ 1203.6- 1203.9] plus
+[ 1203.9- 1204.2] one
+[ 1205.4- 1205.8] plug
+[ 1205.8- 1206.0] that
+[ 1206.0- 1206.2] in
+[ 1207.4- 1207.6] so
+[ 1207.6- 1208.3] now
+[ 1208.3- 1208.6] as it
+[ 1208.6- 1208.8] loops
+[ 1208.8- 1209.0] through
+[ 1209.0- 1209.1] the
+[ 1209.1- 1209.3] feet
+[ 1209.3- 1209.4] it
+[ 1209.4- 1209.5] will
+[ 1209.5- 1209.6] be
+[ 1209.6- 1210.0] counting
+[ 1210.0- 1210.2] up
+[ 1210.2- 1210.3] how
+[ 1210.3- 1210.4] many
+[ 1210.4- 1211.0] feet
+[ 1211.0- 1211.2] we've
+[ 1211.2- 1211.5] gone
+[ 1211.5- 1211.9] through
+[ 1211.9- 1212.0] so
+[ 1212.0- 1212.2] then
+[ 1212.2- 1212.4] use
+[ 1212.4- 1212.5] a
+[ 1212.5- 1212.7] current
+[ 1212.7- 1212.9] foot
+[ 1212.9- 1213.2] count
+[ 1213.2- 1213.3] as
+[ 1213.3- 1213.4] the
+[ 1213.4- 1213.6] index
+[ 1213.6- 1213.7] for
+[ 1213.7- 1213.8] the
+[ 1213.8- 1214.2] array
+[ 1214.2- 1216.7] and
+[ 1216.7- 1217.1] everything
+[ 1217.1- 1217.2] is
+[ 1217.2- 1217.4] back
+[ 1217.4- 1217.5] to
+[ 1217.5- 1218.0] normal
+[ 1218.0- 1218.2] and
+[ 1218.2- 1218.3] the
+[ 1218.3- 1218.6] feet
+[ 1218.6- 1218.7] are
+[ 1218.7- 1219.0] locked
+[ 1219.0- 1219.2] to
+[ 1219.2- 1219.3] the
+[ 1219.3- 1219.8] initialed
+[ 1219.8- 1220.3] place
+[ 1220.3- 1220.5] in
+[ 1220.5- 1220.8] world
+[ 1220.8- 1221.4] space
+[ 1221.4- 1221.6] so
+[ 1221.6- 1221.7] when
+[ 1221.7- 1221.9] you move
+[ 1221.9- 1222.4] it around
+[ 1222.4- 1223.0] they're all locked
+[ 1223.0- 1223.1] in
+[ 1223.1- 1223.7] place
+[ 1225.0- 1225.2] and
+[ 1225.2- 1225.8] if you move it far
+[ 1225.8- 1226.4] enough
+[ 1229.9- 1231.8] it's a new function
+[ 1231.8- 1232.4] and we're going to call this
+[ 1232.4- 1234.4] calculate velocity
+[ 1234.4- 1235.9] and back to Mr.Spider
+[ 1235.9- 1237.2] who's now wearing his hat
+[ 1237.2- 1238.5] for another diagram
+[ 1238.5- 1239.7] so if we imagine that he's moving
+[ 1239.7- 1240.7] from the left of the screen
+[ 1240.7- 1242.2] to the right
+[ 1242.2- 1243.8] and let's say in the last update
+[ 1243.8- 1245.6] one second has passed
+[ 1245.6- 1246.8] and we'll say that he's moved
+[ 1246.8- 1248.5] two hundred units in that time
+[ 1248.5- 1250.1] so he's moving at
+[ 1250.1- 1251.4] two hundred units
+[ 1251.4- 1252.2] in one second
+[ 1252.2- 1254.6] which is two hundred units per second
+[ 1254.6- 1255.2] but
+[ 1255.2- 1257.4] in a more lightly case
+[ 1257.4- 1258.4] the last update
+[ 1258.4- 1259.5] would be shorter
+[ 1259.5- 1260.5] so he's only moved
+[ 1260.5- 1261.0] let's say
+[ 1261.0- 1262.7] two units
+[ 1262.7- 1263.5] and
+[ 1263.5- 1264.3] we'll say that
+[ 1264.3- 1264.9] in that
+[ 1264.9- 1266.1] the time passed
+[ 1266.1- 1267.2] for him to move two units
+[ 1267.2- 1267.6] is
+[ 1267.6- 1268.3] zero point
+[ 1268.3- 1268.9] zero
+[ 1268.9- 1269.6] one
+[ 1270.9- 1272.3] which is one frame
+[ 1272.3- 1274.3] at a hundred FPS
+[ 1274.3- 1275.4] so the mass would be
+[ 1275.4- 1275.8] two
+[ 1275.8- 1277.3] divided by a zero point zero one
+[ 1277.3- 1278.8] which calculates back to
+[ 1278.8- 1281.4] two hundred units per second
+[ 1281.4- 1282.7] so now what we're doing
+[ 1282.7- 1283.6] is basically
+[ 1283.6- 1284.4] the distance
+[ 1284.4- 1285.5] or the displacement
+[ 1285.5- 1286.5] over the time
+[ 1286.5- 1287.5] equals the speed
+[ 1287.5- 1288.1] or in our case
+[ 1288.1- 1288.8] the velocity
+[ 1290.2- 1292.0] so we can use this to calculate
+[ 1292.7- 1293.3] the speed
+[ 1293.3- 1294.3] that he's moving at
+[ 1294.3- 1295.5] frame rate independent
+[ 1296.1- 1297.7] so to do that in the actual code
+[ 1297.7- 1299.4] we're first going to get the transform
+[ 1299.4- 1301.0] of the pelvis
+[ 1301.5- 1302.8] and we're just using this
+[ 1302.8- 1304.2] cause it's the root bone
+[ 1304.2- 1306.7] so we get the bone transform
+[ 1306.7- 1307.3] pelvis
+[ 1307.8- 1309.6] and we want to save this location
+[ 1309.6- 1310.4] for later
+[ 1311.2- 1313.7] so get the translation
+[ 1313.7- 1315.7] and we're going to get
+[ 1315.7- 1317.0] to use a two world
+[ 1317.0- 1318.4] to get it in world space
+[ 1319.3- 1320.3] create a new variable
+[ 1320.6- 1321.7] set that to a vector
+[ 1324.5- 1326.0] and we will call this
+[ 1326.0- 1327.6] previous world location
+[ 1328.1- 1328.7] and at some point
+[ 1328.7- 1329.6] we need to set this
+[ 1329.6- 1330.6] so we'll do this
+[ 1330.6- 1331.9] towards the end of the function
+[ 1332.5- 1334.5] we'll do set previous world location
+[ 1335.1- 1335.9] and for now
+[ 1335.9- 1336.9] we'll just plug in
+[ 1337.3- 1337.7] the world
+[ 1337.7- 1338.8] the current world location
+[ 1339.8- 1341.3] but what we want to do instead
+[ 1341.6- 1342.6] is we want to calculate
+[ 1342.6- 1343.1] the difference
+[ 1343.1- 1344.2] between the current
+[ 1344.3- 1345.2] world location
+[ 1345.2- 1346.0] and the saved
+[ 1346.0- 1347.1] previous world location
+[ 1347.1- 1348.8] to find the difference
+[ 1348.8- 1349.6] in position
+[ 1354.3- 1355.2] so to do that
+[ 1355.2- 1356.0] we do
+[ 1356.3- 1357.4] the new position
+[ 1357.5- 1359.2] minus the previous position
+[ 1359.4- 1360.6] so that's the difference
+[ 1361.4- 1362.7] and then we want to divide this
+[ 1362.7- 1363.9] by a time that has passed
+[ 1363.9- 1365.2] which is the delta time
+[ 1365.8- 1366.3] so
+[ 1366.7- 1367.7] if we do divide
+[ 1367.7- 1369.0] we'll see that's a vector
+[ 1369.1- 1370.5] and we don't actually have a divide
+[ 1370.9- 1371.6] by a factor
+[ 1371.6- 1372.6] so we'll do scale
+[ 1372.6- 1373.2] by a factor
+[ 1373.2- 1374.5] which is multiplying
+[ 1375.2- 1376.8] so then we get the delta time
+[ 1376.9- 1377.8] and because we're scaling
+[ 1377.8- 1378.7] not dividing
+[ 1379.0- 1380.4] we need to convert the delta time
+[ 1380.4- 1382.2] into a way that it'll make it divide it
+[ 1382.2- 1383.6] so instead of just plug
+[ 1383.6- 1384.2] putting it in
+[ 1384.2- 1384.7] we do
+[ 1384.7- 1385.7] one divide
+[ 1385.7- 1386.7] by a delta time
+[ 1390.8- 1392.2] and then we plug that into
+[ 1392.2- 1393.0] the factor
+[ 1393.3- 1394.2] which should be
+[ 1394.4- 1395.7] dividing the displacement
+[ 1395.7- 1396.6] by the time
+[ 1397.6- 1398.5] and the result
+[ 1398.5- 1399.3] should be
+[ 1399.7- 1400.6] the velocity
+[ 1401.1- 1402.1] so we're going to save
+[ 1402.3- 1403.7] of what we're going to create a vector called
+[ 1403.7- 1405.0] calculated velocity
+[ 1405.8- 1406.7] drag that in
+[ 1406.7- 1408.4] and set
+[ 1408.4- 1409.2] that value
+[ 1409.2- 1409.9] to the value
+[ 1409.9- 1410.8] we just found
+[ 1413.2- 1414.2] but we don't necessarily
+[ 1414.2- 1415.2] want it to instantly
+[ 1415.2- 1416.2] update the velocity
+[ 1416.2- 1417.2] we want it to be
+[ 1417.2- 1418.0] a bit more gradual
+[ 1418.0- 1418.7] because
+[ 1419.3- 1420.8] if the rig is moving around
+[ 1420.8- 1421.5] fast
+[ 1421.5- 1422.7] it might be jittering
+[ 1422.7- 1423.5] and you know
+[ 1423.5- 1424.8] with frame time differences
+[ 1424.8- 1425.8] so we want to smooth it out
+[ 1425.8- 1426.2] a little bit
+[ 1426.8- 1428.0] so if we get the current
+[ 1428.0- 1429.2] calculated velocity
+[ 1430.0- 1431.5] and we interpolate
+[ 1431.5- 1432.8] towards the new value
+[ 1433.8- 1434.7] and if we use a number
+[ 1434.7- 1435.8] like 0.1
+[ 1436.8- 1438.0] all the time it'll accumulate
+[ 1438.0- 1439.0] and get closer and closer
+[ 1439.0- 1440.2] to the actual value
+[ 1441.2- 1442.5] and we'll plug that into
+[ 1442.5- 1443.8] set calculated velocity
+[ 1453.1- 1454.8] so back in the rig graph
+[ 1455.1- 1455.8] what we're going to do
+[ 1455.8- 1456.9] just for a test
+[ 1457.0- 1458.6] is instead of using
+[ 1458.6- 1459.9] the bone
+[ 1459.9- 1460.4] location
+[ 1460.4- 1460.9] that we got
+[ 1460.9- 1461.5] from the saved
+[ 1461.5- 1462.0] array
+[ 1462.7- 1463.1] instead
+[ 1463.1- 1464.1] we're going to
+[ 1464.4- 1465.1] get the
+[ 1465.3- 1466.0] initial foot
+[ 1466.0- 1466.9] location
+[ 1467.4- 1467.9] just from the
+[ 1467.9- 1468.8] default pause
+[ 1469.1- 1469.7] so to do that
+[ 1469.7- 1470.6] if we go to
+[ 1470.6- 1471.8] the array element
+[ 1471.8- 1472.4] that we're currently
+[ 1472.4- 1473.3] iterating through
+[ 1475.7- 1476.3] and we do get
+[ 1476.3- 1477.1] transform
+[ 1477.7- 1479.2] and tick initial
+[ 1480.4- 1481.0] and then
+[ 1481.0- 1482.2] get the translation
+[ 1483.9- 1485.3] and on this translation
+[ 1485.3- 1485.9] instead of plugging it
+[ 1485.9- 1486.6] indirect label
+[ 1486.6- 1487.7] do an add vector
+[ 1487.7- 1488.3] and we're just going to
+[ 1488.3- 1488.9] add on the
+[ 1488.9- 1489.5] velocity
+[ 1491.9- 1492.4] and we'll plug that
+[ 1492.4- 1493.4] into the translation
+[ 1494.4- 1495.0] so now
+[ 1495.6- 1496.3] we'll see
+[ 1497.6- 1498.8] nothing is happening
+[ 1501.6- 1502.8] and that is because
+[ 1503.4- 1504.2] we missed a
+[ 1504.2- 1504.7] virtual step
+[ 1504.7- 1505.4] of actually using
+[ 1505.4- 1506.0] the function
+[ 1506.0- 1506.4] so
+[ 1507.5- 1508.0] we'll plug that
+[ 1508.0- 1508.8] in at the start
+[ 1508.8- 1509.9] after forward solve
+[ 1511.0- 1511.9] and now we'll see
+[ 1511.9- 1513.2] that it's all pointing
+[ 1513.2- 1514.0] towards
+[ 1514.0- 1515.1] one location
+[ 1515.4- 1516.8] which is strange
+[ 1516.8- 1517.3] so
+[ 1517.9- 1518.4] from that
+[ 1518.4- 1519.0] we can assume
+[ 1519.0- 1519.6] that we've done something
+[ 1519.6- 1520.7] wrong in terms of
+[ 1520.7- 1521.4] switching from
+[ 1521.4- 1522.0] worldspace
+[ 1522.5- 1523.0] to
+[ 1523.0- 1523.9] global space
+[ 1524.5- 1525.1] and we have
+[ 1525.1- 1525.6] because
+[ 1525.6- 1526.1] we basically
+[ 1526.1- 1527.0] didn't do that at all
+[ 1527.7- 1528.3] we named
+[ 1528.3- 1529.1] the variable
+[ 1529.4- 1530.4] previous world
+[ 1530.4- 1531.1] location
+[ 1531.1- 1531.8] but we're not actually
+[ 1531.8- 1532.4] converting it
+[ 1532.4- 1532.8] to a world
+[ 1532.8- 1533.3] location
+[ 1533.3- 1533.8] we're just getting
+[ 1533.8- 1534.6] the global
+[ 1534.6- 1535.2] transform of the
+[ 1535.2- 1535.6] bone
+[ 1536.3- 1536.7] so
+[ 1536.7- 1537.1] if you drag
+[ 1537.1- 1537.9] out from translation
+[ 1537.9- 1538.5] into two
+[ 1538.5- 1539.0] world
+[ 1539.6- 1540.0] and plug
+[ 1540.0- 1540.5] that into
+[ 1540.5- 1541.3] the subtract
+[ 1542.4- 1542.9] we can now
+[ 1542.9- 1543.6] see that
+[ 1543.6- 1544.7] when the rig moves
+[ 1544.7- 1545.1] the legs
+[ 1545.1- 1545.7] are moving
+[ 1545.7- 1546.2] forward
+[ 1546.2- 1546.7] so if we move
+[ 1546.7- 1547.5] it at 200units
+[ 1547.5- 1547.9] at second
+[ 1547.9- 1548.8] in one direction
+[ 1548.8- 1549.1] the legs
+[ 1549.1- 1550.3] are moving forward
+[ 1550.3- 1551.1] ahead of that
+[ 1551.1- 1551.9] by 200unit
+[ 1555.4- 1556.0] and this
+[ 1556.0- 1556.7] also makes
+[ 1556.7- 1557.3] a jumping
+[ 1557.3- 1557.8] spider
+[ 1564.8- 1565.1] okay
+[ 1565.1- 1565.5] so
+[ 1566.6- 1567.1] back to
+[ 1567.1- 1567.8] control rig
+[ 1569.8- 1570.2] what we now
+[ 1570.2- 1570.6] want to do
+[ 1570.6- 1571.0] is actually
+[ 1571.0- 1571.8] use the
+[ 1571.8- 1572.1] world
+[ 1572.1- 1572.7] location
+[ 1572.7- 1572.9] that we've
+[ 1572.9- 1573.3] used from
+[ 1573.3- 1573.4] the
+[ 1573.4- 1573.7] array
+[ 1573.7- 1574.3] so
+[ 1574.3- 1574.7] we can
+[ 1574.7- 1575.1] probably
+[ 1575.1- 1575.8] delete
+[ 1575.8- 1576.2] what we
+[ 1576.2- 1576.9] just
+[ 1576.9- 1577.3] added
+[ 1577.3- 1577.4] to
+[ 1577.4- 1577.8] test
+[ 1577.8- 1578.4] things
+[ 1578.4- 1578.8] because
+[ 1578.8- 1579.1] the
+[ 1579.1- 1579.6] calculated
+[ 1579.6- 1579.9] flasty
+[ 1579.9- 1580.2] appears
+[ 1580.2- 1580.4] to be
+[ 1580.4- 1580.8] working
+[ 1580.8- 1581.1] now
+[ 1583.9- 1584.2] so
+[ 1584.2- 1584.3] we'll
+[ 1584.3- 1584.4] just
+[ 1584.4- 1584.8] get rid of
+[ 1584.8- 1585.3] that
+[ 1585.3- 1586.1] and
+[ 1586.1- 1586.6] we can
+[ 1586.6- 1586.8] plug
+[ 1586.8- 1587.1] back
+[ 1587.1- 1587.3] in
+[ 1587.3- 1588.1] as it was
+[ 1591.2- 1591.4] and I'm
+[ 1591.4- 1591.6] going
+[ 1591.6- 1592.3] to duplicate
+[ 1592.3- 1592.5] the
+[ 1592.5- 1593.0] worldlocked
+[ 1593.0- 1593.2] locked
+[ 1595.4- 1595.8] target
+[ 1595.8- 1596.0] foot
+[ 1596.0- 1597.2] location
+[ 1597.2- 1597.3] so
+[ 1597.3- 1597.6] this is
+[ 1597.6- 1597.8] where
+[ 1597.8- 1597.9] the
+[ 1597.9- 1598.2] foot
+[ 1598.2- 1598.4] will
+[ 1598.4- 1598.7] want
+[ 1598.7- 1599.2] to reach
+[ 1599.2- 1599.3] when
+[ 1599.3- 1599.4] it
+[ 1599.4- 1602.5] steps
+[ 1602.5- 1603.2] so
+[ 1603.2- 1603.2] now
+[ 1603.2- 1603.3] we
+[ 1603.3- 1603.5] want
+[ 1603.5- 1604.2] to create
+[ 1604.2- 1604.5] another
+[ 1604.5- 1605.5] function
+[ 1605.5- 1606.0] to
+[ 1606.0- 1606.3] actually
+[ 1606.3- 1606.8] calculate
+[ 1606.8- 1607.2] this
+[ 1607.2- 1607.8] volume
+[ 1607.8- 1608.0] put
+[ 1608.0- 1608.3] things
+[ 1608.3- 1608.5] into
+[ 1608.5- 1608.5] this
+[ 1608.5- 1608.8] array
+[ 1610.2- 1610.3] so
+[ 1610.3- 1610.5] I'm
+[ 1610.5- 1610.7] going
+[ 1610.7- 1610.8] to call
+[ 1610.8- 1611.2] this
+[ 1611.2- 1611.7] calculate
+[ 1611.7- 1612.0] new
+[ 1612.0- 1612.2] foot
+[ 1612.2- 1617.1] targets
+[ 1617.1- 1617.9] and
+[ 1617.9- 1618.0] what
+[ 1618.0- 1618.1] we
+[ 1618.1- 1618.2] going
+[ 1618.2- 1618.3] to
+[ 1618.3- 1618.4] do
+[ 1618.4- 1618.6] in
+[ 1618.6- 1619.3] here
+[ 1619.3- 1620.4] is
+[ 1620.4- 1620.9] well
+[ 1620.9- 1623.8] firstly
+[ 1623.8- 1623.9] we
+[ 1623.9- 1624.0] are
+[ 1624.0- 1624.2] going
+[ 1624.2- 1624.3] to
+[ 1624.3- 1624.7] copy
+[ 1625.9- 1626.2] some of
+[ 1626.2- 1626.3] the
+[ 1626.3- 1626.7] nodes
+[ 1626.7- 1626.9] from
+[ 1633.1- 1633.3] like
+[ 1633.3- 1634.1] landing spot
+[ 1634.7- 1635.1] and
+[ 1635.1- 1639.7] we should have used a function for this but I'm just trying to keep things simple and just do it one step at a time
+[ 1640.7- 1641.3] so
+[ 1642.2- 1645.4] we loop through all the bones and find all the ones that contain foot
+[ 1646.3- 1647.6] and get the world location
+[ 1648.3- 1649.4] but now we want to add it
+[ 1650.0- 1651.1] to this world
+[ 1651.5- 1651.9] target
+[ 1651.9- 1652.2] foot
+[ 1652.2- 1652.8] locations
+[ 1652.8- 1653.2] array
+[ 1665.4- 1665.9] so
+[ 1666.6- 1669.5] we want to also clear this array before the loop
+[ 1669.6- 1673.3] just so that it doesn't keep accumulating new targets and adding
+[ 1673.3- 1676.0] so it only ever creates eight for one for each foot
+[ 1683.3- 1683.9] so now
+[ 1683.9- 1685.5] before we add it to the array
+[ 1685.5- 1687.8] we're going to add on that calculated velocity
+[ 1688.2- 1690.1] to essentially project it forward
+[ 1691.0- 1691.8] and at this point
+[ 1691.8- 1695.6] I should mention that another way to get the calculated velocity is just to input it
+[ 1696.0- 1697.7] from the animation blueprint
+[ 1697.7- 1699.8] if it's a non velocity with a character blueprint
+[ 1700.0- 1704.2] but this works for any situation when it isn't a character with a movement component
+[ 1705.0- 1705.5] so
+[ 1705.8- 1707.0] the moment we're getting an error
+[ 1707.9- 1708.4] and
+[ 1709.1- 1710.0] that is because
+[ 1711.1- 1712.1] well firstly
+[ 1712.1- 1714.2] we are calling the return node
+[ 1714.6- 1716.9] inside the loop rather than on complete
+[ 1717.9- 1719.1] but we still have the error
+[ 1720.2- 1723.7] and I've just noticed that I managed to delete an execution path at some point
+[ 1723.7- 1725.0] so I've just put that back
+[ 1725.3- 1726.9] but that shouldn't be affecting the problem
+[ 1727.7- 1728.3] so
+[ 1729.4- 1731.9] what we can see is if we go to the output log
+[ 1732.1- 1735.8] we can see that it's trying to access values outside of the array
+[ 1736.7- 1738.5] and that may be because
+[ 1738.5- 1740.7] we're not actually calling this function
+[ 1742.4- 1744.2] and now everything works as it should
+[ 1744.8- 1745.3] so
+[ 1745.9- 1746.9] when we simulate
+[ 1747.0- 1748.8] we're back to how things were
+[ 1748.9- 1751.2] that it's projecting forward at all times
+[ 1752.3- 1755.7] but we don't want it to always be projecting the location forwards
+[ 1755.8- 1758.6] we only want it to do that when it decides to lift the foot
+[ 1758.6- 1760.8] and it should calculate a new landing spot
+[ 1762.0- 1762.6] so
+[ 1762.8- 1764.4] at the moment just when we move it
+[ 1764.9- 1766.4] if we remember to simulate
+[ 1767.4- 1768.7] it's just moving forward
+[ 1768.7- 1770.5] so we're going to make that more intermittent
+[ 1770.5- 1772.1] so it only updates these values
+[ 1772.5- 1773.4] every so often
+[ 1774.1- 1775.6] so as a quick test
+[ 1776.1- 1778.3] inside the calculate new foot locations
+[ 1778.6- 1779.8] on new foot targets
+[ 1780.2- 1781.3] instead of doing add
+[ 1781.6- 1784.2] we're going to change that to a set
+[ 1784.8- 1785.9] so set at
+[ 1786.6- 1788.3] so that means that we can change values
+[ 1788.3- 1789.9] or not change them if we don't want to
+[ 1789.9- 1791.4] rather than just adding to the array
+[ 1795.5- 1797.2] so the element is still the same
+[ 1797.6- 1799.5] but the index should be
+[ 1799.6- 1801.0] the foot index
+[ 1801.5- 1804.1] and once again we don't have direct access to the variable
+[ 1804.1- 1805.8] and we should redo a lot of this
+[ 1805.8- 1807.0] because this is just
+[ 1807.3- 1808.2] getting repetitive
+[ 1808.2- 1810.4] but we'll get the current foot index
+[ 1810.4- 1811.6] and make that a local variable
+[ 1811.6- 1814.0] just so we're not messing with the previous one that we used
+[ 1814.8- 1815.3] and
+[ 1815.7- 1816.4] we're in the loop
+[ 1816.4- 1817.8] we're going to set that to
+[ 1818.2- 1820.3] whatever the previous value was plus one
+[ 1820.6- 1828.3] and now because we're updating it
+[ 1828.3- 1830.1] we don't actually want to reset the array
+[ 1830.1- 1831.3] so let's just cut that out
+[ 1833.6- 1835.2] and we're back to an error
+[ 1835.6- 1836.6] so let's just
+[ 1837.0- 1839.7] set the current foot local index to negative one
+[ 1840.2- 1841.9] just for sanity's sake
+[ 1841.9- 1843.4] but we still have the error
+[ 1845.8- 1848.1] and it's still saying that it's out of bounds
+[ 1848.1- 1850.2] when we're trying to update these values
+[ 1850.6- 1851.9] and that's because we're using
+[ 1851.9- 1853.7] well firstly we need to plug in the index
+[ 1853.7- 1854.5] that we haven't used
+[ 1854.5- 1856.7] but also this is an empty array
+[ 1856.7- 1858.4] so we're trying to set values in
+[ 1858.9- 1860.0] a blank array
+[ 1860.3- 1861.6] so in the setup event
+[ 1862.2- 1863.7] each time that we add a new
+[ 1864.2- 1865.1] locked foot
+[ 1865.3- 1866.3] world location
+[ 1866.6- 1868.1] we're also going to add a
+[ 1868.1- 1869.1] the same entry
+[ 1869.3- 1871.4] into the world target foot locations
+[ 1871.4- 1872.5] just to populate the array
+[ 1872.5- 1873.8] just so it has eight entries
+[ 1879.4- 1880.7] and now you can see that
+[ 1880.9- 1883.3] things are working back as they were before
+[ 1884.9- 1886.4] and now what we're going to do is
+[ 1886.8- 1888.8] only set these values
+[ 1888.8- 1890.4] if a certain condition is met
+[ 1891.4- 1891.9] so
+[ 1892.8- 1893.8] drag out and do a branch
+[ 1893.8- 1895.3] and if true we'll set
+[ 1895.3- 1896.4] and update that value
+[ 1896.4- 1897.4] otherwise it does nothing
+[ 1898.2- 1899.2] so just to test it
+[ 1899.2- 1900.6] we'll get a random float
+[ 1901.5- 1902.9] and if that number is greater
+[ 1902.9- 1903.4] than
+[ 1904.5- 1905.5] 0.9
+[ 1906.8- 1907.8] 0.99
+[ 1908.8- 1909.7] then it will update
+[ 1911.4- 1913.6] and you'll see that this doesn't actually work
+[ 1914.7- 1916.5] it will randomly snap all of the
+[ 1916.5- 1918.1] likes to a new location
+[ 1919.1- 1920.8] but instead it should be doing each
+[ 1920.8- 1921.9] layered individually
+[ 1925.2- 1926.2] and so
+[ 1926.4- 1928.0] that's because for some reason in the loop
+[ 1928.0- 1929.7] it doesn't create new values
+[ 1929.7- 1931.7] so we're just going to seed it
+[ 1931.7- 1932.7] with the current foot index
+[ 1932.7- 1934.4] just so each number is unique
+[ 1938.2- 1939.9] and we can see that it's sort of working
+[ 1939.9- 1942.1] it's updating the new target locations
+[ 1942.1- 1943.5] intermittent times
+[ 1944.0- 1945.6] and it's doing it different for each leg
+[ 1949.9- 1951.2] so I'm just going to make that a little bit more
+[ 1951.2- 1953.2] frequent just so we can see that a little bit better
+[ 1956.9- 1958.7] and even though the legs are snapping into place
+[ 1958.7- 1960.0] we can kind of see that that's working
+[ 1966.4- 1967.6] so what we want to do now is
+[ 1967.6- 1969.1] replace just this random
+[ 1969.6- 1971.1] thing that we've done as a test
+[ 1971.6- 1973.4] to actually use some timing
+[ 1973.4- 1974.8] so we create a new float
+[ 1975.2- 1976.5] and we'll make that an array
+[ 1979.6- 1981.1] and we call it foot timings
+[ 1983.1- 1984.6] and since we've made a new array
+[ 1984.6- 1986.3] so we don't get the error that we got before
+[ 1986.3- 1987.7] every time we had a new leg
+[ 1987.7- 1988.9] in the setup event
+[ 1989.3- 1991.3] we'll just add a new entry to foot timings
+[ 1998.6- 2000.4] and we can leave the element at zero for now
+[ 2003.2- 2005.3] so in calculate new foot targets
+[ 2006.5- 2007.7] what we're going to do is
+[ 2007.7- 2010.3] whenever the foot timing gets above a certain value
+[ 2010.8- 2011.8] we're going to
+[ 2012.5- 2014.1] create a new target point
+[ 2015.6- 2018.2] so we're going to get or at
+[ 2019.1- 2020.5] the foot timings array
+[ 2021.0- 2023.0] and the index is the index that we've already got
+[ 2023.0- 2024.7] from the local variable
+[ 2024.7- 2026.2] current foot index local
+[ 2027.9- 2029.7] and if this value is
+[ 2030.0- 2031.2] above some other value
+[ 2031.5- 2032.0] so
+[ 2033.8- 2035.1] let's do two
+[ 2036.9- 2038.1] in that case
+[ 2038.1- 2040.7] we'll update the target location
+[ 2041.5- 2042.5] so every two seconds
+[ 2042.5- 2044.7] it should update a target location
+[ 2045.0- 2047.0] but this array is currently empty
+[ 2047.0- 2048.0] because we've just created it
+[ 2048.0- 2049.4] and we've set the values to zero
+[ 2049.8- 2051.4] so what we're going to do is make a new function
+[ 2051.4- 2053.1] which is going to increase the timers
+[ 2053.4- 2055.4] so I'm going to call it increase foot timings
+[ 2056.5- 2057.8] get the foot timings array
+[ 2058.2- 2060.3] and for each entry in this array
+[ 2061.9- 2064.1] we'll get the current value of the element
+[ 2067.3- 2068.7] and we'll set at
+[ 2070.1- 2072.0] the same index that we've got
+[ 2072.0- 2073.3] from this for each loop
+[ 2074.0- 2075.0] and we'll set the element
+[ 2075.1- 2076.6] to the current value
+[ 2076.6- 2078.4] plus the delta time
+[ 2079.1- 2080.0] so that's the time
+[ 2080.0- 2081.6] that's passed since the last update
+[ 2083.9- 2084.9] so every second
+[ 2085.3- 2086.9] that should increase by a second
+[ 2088.6- 2091.3] and now I think if we test it
+[ 2092.9- 2096.1] and not forget to use the function
+[ 2097.5- 2098.9] we'll see that we're getting some errors
+[ 2099.0- 2101.4] and that's because we've got a lot of loops going on
+[ 2103.3- 2104.9] and by default there's some limit
+[ 2104.9- 2106.3] to how many loops that it can use
+[ 2106.3- 2107.5] so if you search for limit
+[ 2107.9- 2109.0] the node run limit
+[ 2109.9- 2112.3] and we'll see that this is currently set to 64
+[ 2112.6- 2113.5] and before we increase that
+[ 2113.5- 2115.4] let's just make sure we're not doing anything stupid
+[ 2116.5- 2117.2] which we are
+[ 2117.7- 2119.8] we've got the return node once again in the loop
+[ 2119.8- 2120.9] and that seems to be a habit
+[ 2120.9- 2121.7] that I've got
+[ 2121.8- 2123.6] so put that on complete
+[ 2123.6- 2124.7] but we've still got the issue
+[ 2124.7- 2126.5] so let's just try increasing the limit
+[ 2126.5- 2127.7] so in class settings
+[ 2128.6- 2130.8] change it from 64 to 128
+[ 2131.7- 2133.1] now it compiles with no errors
+[ 2137.3- 2139.5] so any time that the foot index is greater than 2
+[ 2139.7- 2141.1] we're going to get a new foot target
+[ 2141.1- 2143.4] but we also want to reset that value
+[ 2144.1- 2145.5] so we do another set at
+[ 2146.1- 2147.4] from the foot timings array
+[ 2147.9- 2149.2] at the same index
+[ 2149.5- 2150.8] and we're just going to set it back to 0
+[ 2163.8- 2166.2] so now you'll see what happens is every 2 seconds
+[ 2166.2- 2167.4] so rather than it being random
+[ 2167.8- 2170.3] it's updating them all every 2 seconds
+[ 2171.2- 2173.7] and because we're not differentiating
+[ 2173.7- 2174.8] between the different feet
+[ 2174.9- 2176.2] in terms of the timings
+[ 2176.2- 2177.7] it's doing them all at the same time
+[ 2179.2- 2180.2] so now what we're going to do
+[ 2180.2- 2182.6] is lurp between the locked location
+[ 2183.2- 2184.6] and we need to from world
+[ 2184.6- 2185.8] because it's a world location
+[ 2186.7- 2187.6] so once again we'll use
+[ 2187.6- 2188.7] interpolate vector
+[ 2190.2- 2191.7] and we'll interpolate it
+[ 2191.7- 2194.3] with the world to target foot location
+[ 2195.1- 2196.2] and the alpha
+[ 2196.2- 2197.6] we're going to get
+[ 2197.7- 2199.1] from the foot timings array
+[ 2199.7- 2200.8] at the current index
+[ 2203.0- 2204.1] which should be a number
+[ 2204.1- 2205.4] that goes from 0 to 2
+[ 2205.4- 2207.0] and then resets over and over again
+[ 2207.5- 2209.1] so because it goes from 0 to 2
+[ 2209.5- 2210.2] and we want it to be
+[ 2210.2- 2211.5] in a range of 0 to 1
+[ 2212.2- 2213.8] we can do a clamp
+[ 2214.4- 2215.1] and clamp it
+[ 2215.1- 2216.3] so that when it gets to 1
+[ 2216.3- 2217.7] it just stays at 1
+[ 2218.1- 2219.8] and when the original value
+[ 2220.0- 2220.7] gets to 2
+[ 2220.7- 2222.0] it resets back to 0
+[ 2222.7- 2225.1] so now every 2 seconds
+[ 2225.1- 2226.1] it will start to lurp
+[ 2226.1- 2227.5] to the new position slowly
+[ 2227.9- 2228.5] but as you can see
+[ 2228.5- 2229.6] it's snapping back
+[ 2229.7- 2231.3] to some old location
+[ 2231.3- 2232.0] and that's because
+[ 2232.0- 2233.3] we're never actually updating
+[ 2233.3- 2235.3] the world target foot location array
+[ 2235.7- 2236.5] we're only using
+[ 2236.5- 2237.9] the initial values we set
+[ 2237.9- 2239.1] on the setup event
+[ 2239.9- 2240.8] so every time
+[ 2240.8- 2242.6] it finds a new foot location
+[ 2242.6- 2243.2] what we're going to do
+[ 2243.2- 2244.2] is also
+[ 2244.5- 2245.8] set the value
+[ 2245.8- 2248.1] for the world locked foot location
+[ 2248.9- 2249.9] and we'll use
+[ 2249.9- 2250.9] the same index
+[ 2252.0- 2252.6] and the value
+[ 2252.6- 2253.7] we want to set it to
+[ 2254.2- 2255.6] is the current target
+[ 2255.6- 2257.8] so the previous target
+[ 2257.8- 2259.3] becomes the locked location
+[ 2259.3- 2259.9] and we generate
+[ 2259.9- 2261.1] a new target straight after
+[ 2262.9- 2263.6] so to do that
+[ 2263.6- 2264.3] we just get
+[ 2264.3- 2266.3] the world target foot locations
+[ 2266.9- 2268.1] and the same entry
+[ 2268.1- 2268.8] from the array
+[ 2269.3- 2270.3] plugging the element
+[ 2271.2- 2272.6] and now
+[ 2272.6- 2273.2] we should see
+[ 2273.2- 2274.1] that every 2 seconds
+[ 2274.1- 2275.1] it just lurps
+[ 2275.1- 2276.1] to a new position
+[ 2284.4- 2285.2] so I'm just going to
+[ 2285.2- 2286.4] quickly speed this up
+[ 2286.9- 2287.4] in the
+[ 2287.4- 2288.5] increase foot timings
+[ 2288.5- 2289.4] by multiplying
+[ 2289.4- 2290.4] the delta time
+[ 2291.2- 2292.5] so I'm multiplying it by 4
+[ 2292.5- 2293.4] so it should be 4 times
+[ 2293.4- 2294.2] faster than it's going
+[ 2294.2- 2294.8] through the loop
+[ 2294.8- 2295.4] just so we can
+[ 2295.4- 2296.4] see how things look
+[ 2297.0- 2298.1] and now you can see
+[ 2298.1- 2299.1] that it's moving
+[ 2299.1- 2299.9] more frequently
+[ 2299.9- 2300.5] as well as
+[ 2300.5- 2301.0] the actual
+[ 2301.0- 2302.1] lurp is faster
+[ 2307.8- 2308.5] and now because
+[ 2308.5- 2309.4] we've sped up the timing
+[ 2309.4- 2309.9] it seems like
+[ 2309.9- 2311.4] the feet are moving too often
+[ 2311.9- 2313.4] so in the branch
+[ 2313.4- 2314.4] where we're checking
+[ 2314.4- 2316.0] if the current foot timing
+[ 2316.0- 2316.8] is above 2
+[ 2316.8- 2317.5] instead we're going to do
+[ 2317.5- 2318.5] above 4
+[ 2318.5- 2319.8] so it should be
+[ 2319.8- 2320.8] twice as slow
+[ 2322.0- 2323.5] or half as fast
+[ 2325.1- 2326.4] so now we can
+[ 2326.4- 2327.1] see that the legs
+[ 2327.1- 2327.7] is still moving
+[ 2327.7- 2328.5] fast
+[ 2329.0- 2329.6] and it's
+[ 2329.6- 2330.8] more frequently
+[ 2331.2- 2331.8] finding a new
+[ 2331.8- 2332.6] location
+[ 2334.3- 2335.1] and I think
+[ 2335.1- 2335.7] we want somewhere
+[ 2335.7- 2336.3] that's in between
+[ 2336.3- 2336.8] the two
+[ 2336.8- 2337.6] so I think
+[ 2337.6- 2338.4] I'll try
+[ 2338.4- 2339.0] if it's greater
+[ 2339.0- 2339.6] than let's say
+[ 2339.6- 2340.1] free
+[ 2341.0- 2341.8] and a lot
+[ 2341.8- 2342.4] of these numbers
+[ 2342.4- 2343.1] will tweak
+[ 2343.1- 2343.6] when we've
+[ 2343.6- 2344.5] added more features
+[ 2344.5- 2345.1] and made it look
+[ 2345.1- 2345.7] a little bit better
+[ 2345.7- 2346.2] because it'll be
+[ 2346.2- 2347.1] easy to tell
+[ 2347.1- 2347.4] if things
+[ 2347.4- 2347.9] are looking
+[ 2347.9- 2348.2] right
+[ 2348.2- 2348.6] or not
+[ 2349.6- 2350.1] but
+[ 2350.1- 2350.4] we just
+[ 2350.4- 2350.6] want
+[ 2350.6- 2351.0] the
+[ 2351.0- 2351.6] baseline
+[ 2351.6- 2352.2] that's
+[ 2352.2- 2353.0] approximately
+[ 2353.0- 2354.0] right
+[ 2354.0- 2354.6] the main issue
+[ 2354.6- 2355.1] at the moment
+[ 2355.1- 2355.6] is that
+[ 2355.6- 2356.2] all the feet
+[ 2356.2- 2356.5] are moving
+[ 2356.5- 2357.4] at once
+[ 2357.4- 2357.8] and that's
+[ 2357.8- 2358.2] because
+[ 2358.2- 2358.7] we
+[ 2358.7- 2359.2] in the setup
+[ 2359.2- 2359.5] event
+[ 2359.5- 2359.8] where we
+[ 2359.8- 2360.7] are now
+[ 2360.7- 2361.0] we are
+[ 2361.0- 2361.5] setting
+[ 2361.5- 2361.9] the
+[ 2361.9- 2362.4] array element
+[ 2362.4- 2363.0] to 0
+[ 2363.0- 2363.9] for all the feet
+[ 2363.9- 2364.2] and we're
+[ 2364.2- 2364.7] increasing
+[ 2364.7- 2365.0] them all
+[ 2365.0- 2365.8] at the same time
+[ 2365.8- 2366.1] so they
+[ 2366.1- 2366.4] always
+[ 2366.4- 2366.7] reach
+[ 2366.7- 2366.9] to the
+[ 2366.9- 2367.4] maximum
+[ 2367.4- 2368.2] at the same time
+[ 2368.2- 2368.7] and reset
+[ 2368.7- 2370.1] at the same time
+[ 2370.1- 2371.1] so instead
+[ 2371.1- 2371.5] when we
+[ 2371.5- 2372.0] first
+[ 2372.0- 2372.4] create this
+[ 2372.4- 2373.0] aray of
+[ 2373.0- 2374.6] the foot timings
+[ 2377.6- 2378.6] to float
+[ 2379.7- 2380.2] and then
+[ 2380.2- 2380.6] multiply
+[ 2380.6- 2381.0] that by
+[ 2381.0- 2381.5] zero point
+[ 2381.5- 2381.7] one
+[ 2381.7- 2381.9] two
+[ 2381.9- 2382.4] five
+[ 2383.2- 2383.4] which
+[ 2383.4- 2383.6] is
+[ 2383.6- 2383.9] an eighth
+[ 2383.9- 2384.7] of a second
+[ 2386.0- 2386.3] so
+[ 2386.3- 2386.6] each
+[ 2386.6- 2386.8] leg
+[ 2386.8- 2386.9] will
+[ 2386.9- 2387.0] be
+[ 2387.0- 2387.4] offset
+[ 2387.4- 2387.5] by
+[ 2387.5- 2387.8] zero
+[ 2387.8- 2387.9] point
+[ 2387.9- 2388.1] one
+[ 2388.1- 2388.3] two
+[ 2388.3- 2388.7] five
+[ 2389.7- 2389.8] so
+[ 2389.8- 2389.9] now
+[ 2389.9- 2390.2] we can
+[ 2390.2- 2390.4] see
+[ 2390.4- 2390.7] that
+[ 2390.7- 2391.5] the
+[ 2391.5- 2391.7] move
+[ 2391.7- 2392.0] ing
+[ 2392.0- 2392.6] slightly
+[ 2392.6- 2392.9] out
+[ 2392.9- 2393.0] of
+[ 2393.0- 2393.7] time
+[ 2393.7- 2393.9] but
+[ 2393.9- 2394.2] it's
+[ 2394.2- 2394.6] not
+[ 2394.6- 2395.2] entirely
+[ 2395.2- 2395.5] clear
+[ 2395.5- 2395.7] what's
+[ 2395.7- 2396.0] going
+[ 2396.0- 2396.2] on
+[ 2396.2- 2396.9] there
+[ 2396.9- 2397.1] so
+[ 2397.1- 2397.2] we're
+[ 2397.2- 2397.3] going
+[ 2397.3- 2398.0] to exaggerate
+[ 2398.0- 2398.3] things
+[ 2398.3- 2398.8] a little bit
+[ 2398.8- 2399.0] just
+[ 2399.0- 2399.3] so we
+[ 2399.3- 2400.1] we can
+[ 2400.1- 2400.3] really
+[ 2400.3- 2400.6] see
+[ 2400.6- 2400.8] what's
+[ 2400.8- 2401.8] happening
+[ 2401.8- 2402.7] so
+[ 2402.7- 2403.5] as it is now
+[ 2405.0- 2405.4] you can
+[ 2405.4- 2405.7] tell
+[ 2405.7- 2405.8] that
+[ 2405.8- 2405.9] they're
+[ 2405.9- 2406.1] not
+[ 2406.1- 2406.3] moving
+[ 2406.3- 2406.8] perfectly
+[ 2406.8- 2407.4] insync
+[ 2407.4- 2407.5] but
+[ 2407.5- 2407.7] it
+[ 2407.7- 2408.0] looks
+[ 2408.0- 2408.4] almost
+[ 2408.4- 2408.6] like
+[ 2408.6- 2408.7] they
+[ 2408.7- 2409.1] are
+[ 2412.9- 2413.3] and
+[ 2413.3- 2413.5] to
+[ 2413.5- 2413.8] fix
+[ 2413.8- 2414.3] this
+[ 2414.8- 2415.1] or
+[ 2415.1- 2415.3] to
+[ 2415.3- 2415.5] just
+[ 2415.5- 2415.9] adjust
+[ 2415.9- 2416.0] it
+[ 2416.0- 2416.2] what
+[ 2416.2- 2416.4] we can
+[ 2416.4- 2416.7] do
+[ 2416.7- 2417.0] in
+[ 2417.0- 2417.4] the
+[ 2417.4- 2417.8] calculate
+[ 2417.8- 2418.0] new
+[ 2418.0- 2418.2] foot
+[ 2418.2- 2418.9] targets
+[ 2419.6- 2419.9] instead
+[ 2419.9- 2420.1] it
+[ 2420.1- 2420.3] been
+[ 2420.3- 2420.6] greater
+[ 2420.6- 2420.8] than
+[ 2420.8- 2421.2] free
+[ 2421.2- 2421.3] we'll
+[ 2421.3- 2421.6] change
+[ 2421.6- 2421.7] it
+[ 2421.7- 2422.2] to
+[ 2422.6- 2422.7] let's
+[ 2422.7- 2423.2] say
+[ 2423.9- 2424.2] maybe
+[ 2424.2- 2424.6] greater
+[ 2424.6- 2424.7] than
+[ 2424.7- 2425.2] one
+[ 2436.9- 2437.4] and
+[ 2437.4- 2437.7] now
+[ 2437.7- 2437.9] because
+[ 2437.9- 2438.2] we're
+[ 2438.2- 2438.3] doing
+[ 2438.3- 2438.5] greater
+[ 2438.5- 2438.7] than
+[ 2438.7- 2439.2] one
+[ 2439.2- 2459.5] the feet are always moving and that's because we're using the lurp based on this foot timings which is only going from 0 to 1 so every time it reaches its target point it starts moving again so what we're going to do instead of just the clamp is we're going to do a remap and the remap node has a clamp option as well so we don't actually need the clamp anymore so we'll just skip over that
+[ 2461.0- 2469.1] we're going to set the source maximum to 0.2 and leave everything else the same so when it reaches 0.2 it will essentially be outputting 1 which means it's
+[ 2469.1- 2492.7] reached the full target location so now the feet move a lot faster because in a fifth of the time they're moving the full distance so now let's just plug delta tan back in without the multiply by 3 because things have already sped up due to what we've changed there and now you can see all of a sudden it actually looks like a spider walking to some extent
+[ 2492.7- 2507.8] it's not perfect but atleast when it's moving at low speeds it kind of holds up and if you do some weird direction changes it probably won't but for the most part this is looking closer to what we're aiming for
+[ 2508.7- 2513.8] but because we're just doing a straight lurp from one location to the next the feet don't actually lift off the floor
+[ 2514.4- 2518.4] so instead before we plug it into the base car key node we're going to do an add vector
+[ 2519.2- 2522.6] and we're going to increase the z height and to do that we're going to use a curve
+[ 2522.7- 2524.2] so let's search for a value rate curve
+[ 2525.2- 2529.4] and this essentially takes an input and remaps it based on the curve
+[ 2531.4- 2537.2] so we'll take the remapped result and plug that into the value of the curve
+[ 2539.0- 2541.7] and because we want it to start and end on the floor
+[ 2542.2- 2546.2] we want the start point and the end point to both output a value of 0
+[ 2546.8- 2551.5] and somewhere in the middle we can bring that up it doesn't really matter where to but we'll put it to 1
+[ 2552.7- 2556.8] and we'll plug the result into z but that will only be adding one unit of height
+[ 2556.8- 2560.7] so the target maximum this is essentially scaling it or remapping it to 100
+[ 2561.3- 2566.1] and now in the viewport you can see that the legs are well lifting
+[ 2567.4- 2572.9] and even though the spider isn't moving it's lifting the legs and we'll fix that later
+[ 2573.4- 2575.4] but let's just see how it looks when it actually is moving
+[ 2581.6- 2586.3] so we may notice that now the legs seem to sometimes be intersecting the geometry
+[ 2586.6- 2590.6] but it's only when they move, when they're stationary over the point they actually work
+[ 2591.4- 2594.8] but when it's moving it's going underneath the surface
+[ 2598.4- 2601.4] and this is because we're taking the hit result
+[ 2601.4- 2604.8] and then projecting forward using the calculated velocity
+[ 2606.0- 2608.3] what we should be doing is projecting the end point
+[ 2608.3- 2611.4] and then doing the trace to see where the end point actually hits the floor
+[ 2612.3- 2616.4] so in the calculate new foot targets function
+[ 2616.9- 2618.5] we're just going to move things around a little bit
+[ 2618.6- 2623.3] so it should be before the trace instead of after the trace when we add on the velocity
+[ 2624.5- 2626.5] so we'll just rearrange some of these
+[ 2628.0- 2631.6] and we're going to add this on to the foot location before we do any of the trace
+[ 2634.7- 2638.1] so if we're plugging the translation to the add node and add it on
+[ 2638.5- 2641.1] and then if you control drag from this
+[ 2642.3- 2645.1] it doesn't seem to work and I think that's because it's looped back in itself
+[ 2645.1- 2646.0] so I've undone that
+[ 2646.7- 2649.7] and I'm going to plug them in manually
+[ 2650.9- 2653.3] so I'm just replacing the connections that already existed
+[ 2653.8- 2655.8] and then the translation can go into A
+[ 2656.5- 2659.2] and now it projects forward and then does the trace line from above
+[ 2659.2- 2662.6] and below that projected point to find the actual hit location
+[ 2662.6- 2663.6] and then save that
+[ 2664.1- 2666.8] so I think that should have fixed the issue we had
+[ 2669.5- 2671.9] so now you can see that the feet are always actually meeting the floor
+[ 2671.9- 2672.7] when it's moving
+[ 2688.7- 2691.3] and I'm just going to tweak the lifting of the feet
+[ 2693.1- 2697.2] so if you right click on the points and select auto
+[ 2699.0- 2702.7] then it will be more of a curve rather than like a linear change
+[ 2703.7- 2706.0] I was moving things around so it lifts up at first
+[ 2706.0- 2708.8] and then it gradually drops down towards the ground
+[ 2710.2- 2712.6] and I think that looks a little bit more realistic
+[ 2712.6- 2714.7] and we're not aiming for realism but
+[ 2715.4- 2718.1] it looks less robotic that way
+[ 2719.4- 2723.3] and you'll notice it starts the issue that when it's stationary
+[ 2723.3- 2724.4] the legs are lifting
+[ 2724.8- 2726.4] so we'll fix that next
+[ 2726.9- 2728.5] so to do that all we need to do
+[ 2728.5- 2730.1] when we've got the target maximum of 100
+[ 2730.1- 2732.5] instead we're going to scale that based on the velocity
+[ 2732.9- 2734.9] so dragging the get calculated velocity
+[ 2735.2- 2736.5] get the length of the vector
+[ 2736.5- 2737.9] which is essentially the speed
+[ 2738.6- 2739.4] remap that
+[ 2740.0- 2741.5] so we can clamp it
+[ 2741.7- 2743.6] and the target maximum we want to be
+[ 2743.6- 2744.5] well it would be 100
+[ 2744.5- 2745.8] but I'm going to try a little bit more
+[ 2745.8- 2747.0] so I'll try 150
+[ 2747.8- 2749.6] and the source minimum 0
+[ 2749.6- 2750.7] so that's when it's not moving
+[ 2750.7- 2751.9] and the source maximum
+[ 2752.5- 2753.9] that is essentially the value
+[ 2753.9- 2755.2] that you're expected to come in at
+[ 2755.2- 2758.4] when you want it to output this maximum 150 value
+[ 2758.8- 2760.2] so I'm going to say
+[ 2760.4- 2762.2] well I'll say 400 for that
+[ 2762.7- 2764.5] as the maximum speed
+[ 2764.5- 2766.2] that we expected to be moving at
+[ 2767.1- 2769.6] and plug that into the target maximum of the curve
+[ 2771.2- 2772.9] so now when we simulate
+[ 2772.9- 2775.4] it's the legs aren't lifting when it's stationary
+[ 2775.4- 2777.1] but when it moves the legs are lifting
+[ 2799.2- 2801.4] the next issue that I've noticed is that
+[ 2801.4- 2802.9] when the pelvis goes over the edge
+[ 2802.9- 2804.4] it instantly snaps down
+[ 2804.8- 2807.2] and that's because we're doing a trace
+[ 2807.2- 2808.7] from above and below the pelvis
+[ 2808.7- 2809.8] and just setting that position
+[ 2809.8- 2810.6] we're not lurping it
+[ 2810.6- 2812.1] we're not doing anything fancy
+[ 2812.1- 2814.3] we're just setting it to wherever it finds the ground
+[ 2815.2- 2816.1] instead
+[ 2816.1- 2817.2] we're going to
+[ 2817.7- 2819.4] save the pelvis offset
+[ 2819.6- 2821.8] so I'm going to create a new vector
+[ 2822.6- 2824.3] and I'm going to call it saved
+[ 2824.6- 2825.6] pelvis offset
+[ 2825.8- 2826.6] conningly
+[ 2827.4- 2829.2] and we're going to make sure
+[ 2829.2- 2830.3] that's not an array
+[ 2834.8- 2836.4] and we're going to set this value
+[ 2836.4- 2839.0] after we've transformed the pelvis bone
+[ 2839.7- 2842.0] we drag in the saved pelvis offset variable
+[ 2842.0- 2842.9] and do set
+[ 2843.3- 2845.9] and put this after the set transform node
+[ 2847.6- 2849.6] at the moment we'll just plug in the same value
+[ 2849.6- 2851.5] as we're putting into the set transform node
+[ 2851.9- 2854.6] but what we want to do is create a spring interp
+[ 2855.9- 2857.1] and what this will do
+[ 2857.1- 2860.0] is it will interpolate towards the target value
+[ 2860.4- 2862.8] with more of a spring look to it
+[ 2863.2- 2865.3] so it can over shoot the value
+[ 2865.3- 2867.5] and it will sort of wobble back into place
+[ 2868.5- 2869.5] so for the target
+[ 2869.5- 2871.7] we have the actual target that we want
+[ 2872.0- 2873.0] and for the current
+[ 2873.0- 2875.2] we plug in the saved offset variable
+[ 2875.9- 2877.2] and let's just see what that looks like
+[ 2877.2- 2879.1] first before we start tweaking the values
+[ 2879.8- 2881.4] so you can see that it's actually
+[ 2881.4- 2882.4] dropping down slower
+[ 2882.4- 2883.7] it's not instant anymore
+[ 2885.8- 2886.3] but it's
+[ 2886.8- 2888.0] not really doing
+[ 2888.3- 2889.2] too much
+[ 2889.2- 2891.6] so let's just tweak some of the values
+[ 2892.5- 2893.1] so
+[ 2893.7- 2895.2] let's turn down the damping
+[ 2895.2- 2896.6] and turn up the strength
+[ 2896.6- 2897.7] so it'll move faster
+[ 2897.7- 2899.1] but it will also have less
+[ 2899.1- 2900.9] let's say friction for the damping
+[ 2901.4- 2902.5] and I can see that it's
+[ 2902.7- 2903.5] well it's
+[ 2904.0- 2905.0] quite bouncy
+[ 2906.4- 2908.5] maybe a bit exaggerated
+[ 2908.5- 2909.9] and a bit too cartoony
+[ 2909.9- 2911.0] for what we're going for
+[ 2912.1- 2913.9] and so I'll tweak the values again
+[ 2914.4- 2915.8] to a strength of 2
+[ 2915.8- 2917.6] and 0.5 for the damping
+[ 2918.5- 2920.0] and that seems closer
+[ 2920.7- 2922.5] it still absorbs some of the weight
+[ 2922.5- 2923.2] when it drops
+[ 2923.2- 2924.8] but you'll notice that
+[ 2925.5- 2926.8] it's intersecting
+[ 2926.8- 2928.2] because we're doing a trace
+[ 2928.2- 2930.1] straight from the center of the pelvis
+[ 2930.4- 2931.9] so if you increase the radius
+[ 2931.9- 2933.2] of the sphere trace
+[ 2934.1- 2935.2] that should help with that
+[ 2935.2- 2936.5] so it's essentially tracing
+[ 2936.5- 2937.6] a larger sphere
+[ 2937.6- 2938.4] straight down
+[ 2938.4- 2939.4] so it's not a line trace
+[ 2939.4- 2940.4] it's just a sphere
+[ 2941.2- 2942.2] and now you can see that
+[ 2942.2- 2943.5] that's improved it slightly
+[ 2944.3- 2946.1] I'll probably tweak those values later
+[ 2946.1- 2947.6] but for now that's good enough
+[ 2949.0- 2950.9] but the legs are sometimes stretching out
+[ 2950.9- 2951.8] too far
+[ 2951.8- 2954.2] so when we do get calculated velocity
+[ 2954.2- 2955.4] we're going to clamp the length
+[ 2955.4- 2956.2] of that vector
+[ 2956.6- 2957.6] so that it limits
+[ 2957.6- 2958.5] how far it can sort of
+[ 2958.5- 2959.8] predict the legs forward
+[ 2960.4- 2961.0] so
+[ 2961.0- 2962.8] we're going to set the minimum value
+[ 2963.3- 2964.8] let's just use 0 for that
+[ 2965.3- 2966.6] and the maximum
+[ 2966.8- 2968.1] we're going to have to tweak this number
+[ 2968.1- 2969.2] so we'll just try things out
+[ 2969.2- 2970.3] or just make sure it's working
+[ 2970.3- 2971.2] with a low value
+[ 2971.8- 2972.9] so now you can see that
+[ 2973.1- 2974.3] when it predicts forward
+[ 2974.3- 2975.9] the legs aren't moving very far
+[ 2976.4- 2977.8] they're basically staying
+[ 2977.8- 2978.7] close to the body
+[ 2979.1- 2980.7] so I'll try 1200
+[ 2981.6- 2983.2] and we can see that
+[ 2983.2- 2984.2] it's limiting it
+[ 2984.7- 2986.3] but not too much
+[ 2986.3- 2988.6] and we might want to reduce that later
+[ 2988.6- 2990.0] but for a normal movement speed
+[ 2990.0- 2991.6] that's not the main issue at the moment
+[ 2992.1- 2993.0] the main issue is
+[ 2993.0- 2994.8] that the legs get locked behind
+[ 2994.8- 2996.5] so when the body keeps moving
+[ 2996.6- 2997.8] it's stuck far behind
+[ 2998.1- 2998.8] so to fix that
+[ 2998.8- 2999.7] we're going to get the
+[ 2999.7- 3001.7] world locked foot locations array
+[ 3001.7- 3003.0] and the current index
+[ 3003.5- 3005.1] and subtract that vector
+[ 3005.3- 3006.6] from the vector
+[ 3006.6- 3008.3] for the location of the pelvis
+[ 3008.6- 3009.8] so what that's essentially doing
+[ 3009.8- 3010.9] is finding the distance
+[ 3010.9- 3011.8] between the pelvis
+[ 3011.8- 3013.1] and where the leg is locked
+[ 3013.9- 3015.5] now if the length of that
+[ 3015.9- 3017.1] after we've subtracted it
+[ 3017.1- 3019.0] is greater than some value
+[ 3019.5- 3021.1] then so in this case
+[ 3021.1- 3022.2] I'm just going to
+[ 3022.2- 3023.2] use the same values
+[ 3023.2- 3024.5] or use 1200
+[ 3024.7- 3025.8] if it's greater than that
+[ 3026.9- 3028.0] then we'll also use that
+[ 3028.0- 3028.8] as an option for
+[ 3028.8- 3029.6] when it should decide
+[ 3029.6- 3030.9] to move the legs
+[ 3031.3- 3032.2] so we've used that
+[ 3032.2- 3033.7] or if the timer reaches
+[ 3033.7- 3034.7] the time when it should
+[ 3034.7- 3035.8] reset the leg anyway
+[ 3036.5- 3037.3] so we'll try that
+[ 3037.3- 3038.3] and as you can see
+[ 3038.3- 3039.9] it's not working very well
+[ 3039.9- 3041.3] and it's resetting them
+[ 3041.3- 3042.3] all almost instantly
+[ 3042.3- 3044.1] because we've done something wrong
+[ 3045.0- 3046.7] and so let's take another look
+[ 3047.9- 3048.8] so instead of
+[ 3048.8- 3050.1] finding the distance
+[ 3050.1- 3051.8] to the pelvis
+[ 3052.3- 3053.3] which is not
+[ 3053.3- 3054.3] where the foot is
+[ 3054.3- 3055.3] it might make more sense
+[ 3055.3- 3056.2] to get the position
+[ 3056.2- 3056.8] of the bone
+[ 3056.8- 3058.2] so I plugged in the item
+[ 3058.2- 3059.1] which is the actual
+[ 3059.1- 3059.8] foot bone
+[ 3060.1- 3060.7] so it finds
+[ 3060.7- 3061.4] how far it is
+[ 3061.4- 3062.1] from where it actually
+[ 3062.1- 3063.0] wants to be
+[ 3063.4- 3064.1] so that's where it was
+[ 3064.1- 3064.9] on the base pose
+[ 3064.9- 3065.4] and that seems
+[ 3065.4- 3066.4] to have improved
+[ 3066.7- 3067.6] but there's an issue
+[ 3067.6- 3068.3] now that if they
+[ 3068.3- 3069.3] all reset at once
+[ 3069.3- 3070.7] because it's moved too fast
+[ 3071.0- 3072.1] they all get reset
+[ 3072.1- 3073.0] on the same timer
+[ 3073.0- 3074.5] so the legs become in sync
+[ 3074.8- 3076.2] so they no longer offset
+[ 3076.5- 3077.9] using the cycle timer
+[ 3077.9- 3078.5] that we had
+[ 3079.3- 3079.9] because they all
+[ 3079.9- 3081.5] reset into the same position
+[ 3081.8- 3082.3] so I'm just
+[ 3082.3- 3083.1] tweaking the values
+[ 3083.1- 3084.3] just to demonstrate that
+[ 3084.5- 3085.0] so you can see
+[ 3085.0- 3086.1] they're all in sync
+[ 3086.1- 3086.8] and all the legs
+[ 3086.8- 3087.4] are trying to move
+[ 3087.4- 3087.9] at once
+[ 3087.9- 3089.1] because they all
+[ 3089.1- 3090.1] leave the
+[ 3090.6- 3091.4] distance
+[ 3091.4- 3091.7] or they
+[ 3091.7- 3092.4] leave the area
+[ 3092.4- 3092.8] of where they're
+[ 3092.8- 3093.3] trying to be
+[ 3093.3- 3094.1] at the same time
+[ 3096.0- 3096.5] so I'm just
+[ 3096.5- 3097.1] going to play around
+[ 3097.1- 3097.7] with the values
+[ 3097.7- 3098.9] to see if we can
+[ 3099.4- 3100.5] get the range
+[ 3100.5- 3101.1] right
+[ 3101.1- 3101.8] so I'll try
+[ 3101.8- 3102.3] going back to
+[ 3102.3- 3103.6] 1,200
+[ 3105.2- 3106.5] and that seems
+[ 3106.5- 3107.2] about right
+[ 3107.4- 3108.1] it's not going to work
+[ 3108.1- 3109.4] in all situations
+[ 3109.9- 3110.4] depends
+[ 3110.4- 3111.6] if they move too fast
+[ 3111.6- 3112.0] there's
+[ 3112.0- 3112.6] there's no way
+[ 3112.6- 3113.1] that the legs
+[ 3113.1- 3114.0] are going to make sense
+[ 3114.0- 3114.6] when it's moving
+[ 3114.6- 3115.2] that fast
+[ 3116.5- 3116.9] but I think
+[ 3116.9- 3117.4] the main issue
+[ 3117.4- 3117.8] is that
+[ 3117.8- 3118.3] all the legs
+[ 3118.3- 3119.0] are syncing up
+[ 3119.0- 3120.4] so to try
+[ 3120.4- 3121.1] to fix that
+[ 3121.1- 3121.5] there's
+[ 3121.5- 3122.0] there's probably
+[ 3122.0- 3122.5] better ways
+[ 3122.5- 3122.9] to do it
+[ 3122.9- 3123.3] but what I'm
+[ 3123.3- 3124.1] going to do is
+[ 3124.3- 3125.2] instead of setting
+[ 3125.2- 3125.8] the value
+[ 3125.8- 3126.6] to 0
+[ 3127.1- 3127.9] of the timer
+[ 3127.9- 3128.8] when it resets
+[ 3129.2- 3129.7] I'm going to set
+[ 3129.7- 3130.4] it to
+[ 3130.4- 3131.5] a negative number
+[ 3132.8- 3133.6] and that's only
+[ 3133.6- 3134.3] in the case
+[ 3134.3- 3135.8] if the reset
+[ 3135.8- 3136.4] is because
+[ 3136.4- 3137.7] it's out of the range
+[ 3138.4- 3139.2] so what
+[ 3139.2- 3139.7] I'll do with
+[ 3139.7- 3140.2] that is
+[ 3140.2- 3141.2] I'll
+[ 3141.2- 3142.2] get the index
+[ 3142.2- 3142.7] for the current
+[ 3142.7- 3143.7] foot as the seed
+[ 3143.7- 3144.2] so that it's
+[ 3144.2- 3145.7] always different
+[ 3145.7- 3146.7] and
+[ 3146.7- 3147.2] we'll set
+[ 3147.2- 3147.7] some minimum
+[ 3147.7- 3149.7] maximum values
+[ 3149.7- 3150.2] just so that
+[ 3150.2- 3151.0] the timers get
+[ 3151.0- 3152.2] reset to some
+[ 3152.2- 3152.7] random
+[ 3152.7- 3155.9] offset variables
+[ 3155.9- 3156.4] and if
+[ 3156.4- 3156.9] that's the case
+[ 3156.9- 3157.4] we plug it into
+[ 3157.4- 3157.9] true
+[ 3157.9- 3158.4] otherwise false
+[ 3158.4- 3158.9] we say
+[ 3158.9- 3159.4] it to 0
+[ 3159.4- 3159.9] cause that's
+[ 3159.9- 3160.4] just a natural
+[ 3160.4- 3161.4] reset
+[ 3161.4- 3161.9] and now you can
+[ 3161.9- 3162.4] see that
+[ 3162.4- 3163.4] even though
+[ 3163.4- 3163.9] the legs are
+[ 3163.9- 3164.4] moving
+[ 3164.4- 3165.4] out of their range
+[ 3165.4- 3165.9] at the same time
+[ 3165.9- 3166.4] they still
+[ 3166.4- 3166.9] stay
+[ 3166.9- 3167.4] out of sync
+[ 3167.4- 3167.9] because we've
+[ 3167.9- 3168.9] added some randomness
+[ 3168.9- 3169.9] to it
+[ 3169.9- 3170.3] and to
+[ 3170.3- 3170.8] help with
+[ 3170.8- 3171.3] this
+[ 3171.3- 3171.8] just to
+[ 3171.8- 3172.3] avoid the
+[ 3172.3- 3172.8] issue
+[ 3172.8- 3173.3] happening
+[ 3173.3- 3174.3] the first place
+[ 3174.3- 3174.8] when
+[ 3174.8- 3175.8] the velocity
+[ 3175.8- 3176.3] it gets
+[ 3176.3- 3176.8] to a certain
+[ 3176.8- 3177.3] level
+[ 3177.3- 3177.8] it's
+[ 3177.8- 3178.3] going to
+[ 3178.3- 3178.8] increase
+[ 3178.8- 3179.3] the time
+[ 3179.3- 3179.8] speed
+[ 3179.8- 3180.3] so I'm
+[ 3180.3- 3180.8] getting
+[ 3180.8- 3181.3] the calculated
+[ 3181.3- 3181.8] velocity
+[ 3181.8- 3182.3] the length
+[ 3182.3- 3182.8] of it
+[ 3182.8- 3183.3] and remapping
+[ 3183.3- 3184.3] that value
+[ 3184.3- 3185.3] so
+[ 3185.3- 3185.8] this will
+[ 3185.8- 3186.3] speed up
+[ 3186.3- 3186.8] essentially
+[ 3186.8- 3187.3] when
+[ 3187.3- 3187.8] it increases
+[ 3187.8- 3188.3] the time
+[ 3188.3- 3188.8] as it'll
+[ 3188.8- 3189.3] increase
+[ 3189.3- 3189.8] the delta
+[ 3189.8- 3190.3] time
+[ 3190.3- 3190.8] that it increases
+[ 3190.8- 3191.3] by
+[ 3191.3- 3192.3] when
+[ 3192.3- 3193.3] the calculated
+[ 3193.3- 3194.3] velocity increases
+[ 3194.3- 3195.8] so essentially
+[ 3195.8- 3196.8] the cycle
+[ 3196.8- 3197.3] time
+[ 3200.3- 3201.3] at
+[ 3201.3- 3202.3] and
+[ 3202.3- 3203.3] I'm
+[ 3203.3- 3204.3] going to
+[ 3204.3- 3205.3] use
+[ 3205.3- 3206.3] the
+[ 3206.3- 3207.3] same
+[ 3207.3- 3208.3] except
+[ 3208.3- 3209.3] the
+[ 3209.3- 3210.3] inverse
+[ 3210.3- 3211.3] of
+[ 3211.3- 3212.3] that
+[ 3212.3- 3213.3] for
+[ 3213.3- 3214.3] scaling
+[ 3214.3- 3215.3] the
+[ 3215.3- 3216.3] clamp
+[ 3216.3- 3217.3] so
+[ 3217.3- 3218.3] now
+[ 3218.3- 3219.3] that
+[ 3219.3- 3220.3] when
+[ 3220.3- 3221.3] the
+[ 3221.3- 3222.3] legs
+[ 3222.3- 3223.3] are
+[ 3223.3- 3224.3] moving faster
+[ 3224.3- 3225.3] it brings
+[ 3225.3- 3226.3] it scales
+[ 3226.3- 3227.3] down
+[ 3227.3- 3228.3] the length
+[ 3228.3- 3229.3] that
+[ 3229.3- 3230.3] saving
+[ 3230.3- 3231.3] a global
+[ 3231.3- 3232.3] position
+[ 3232.3- 3233.3] and not a
+[ 3233.3- 3234.3] local
+[ 3234.3- 3235.3] position
+[ 3235.3- 3236.3] so the
+[ 3236.3- 3237.3] legs
+[ 3237.3- 3238.3] are
+[ 3238.3- 3239.3] moving
+[ 3239.3- 3240.3] locally
+[ 3240.3- 3241.3] and
+[ 3241.3- 3242.3] that
+[ 3242.3- 3243.3] can be difficult
+[ 3243.3- 3244.3] to explain
+[ 3244.3- 3245.3] so I'll
+[ 3245.3- 3246.3] tryand
+[ 3246.3- 3247.3] demonstrate
+[ 3247.3- 3248.3] that better
+[ 3248.3- 3249.3] because this
+[ 3249.3- 3250.3] will come up
+[ 3250.3- 3251.3] in a lot
+[ 3251.3- 3252.3] of projects
+[ 3252.3- 3253.3] so
+[ 3253.3- 3254.3] if we imagine
+[ 3254.3- 3255.3] the spider
+[ 3255.3- 3256.3] once again
+[ 3256.3- 3257.3] is moving
+[ 3257.3- 3258.3] from the
+[ 3258.3- 3259.3] leg
+[ 3259.3- 3260.3] is still
+[ 3260.3- 3261.3] back there
+[ 3261.3- 3263.3] because it's only through some portion of the move
+[ 3263.3- 3264.3] so the lurp is still
+[ 3264.3- 3267.3] saying that the leg wants to be far behind
+[ 3267.3- 3269.3] because it's still locked in world space
+[ 3269.3- 3271.3] far behind the actual spider
+[ 3271.3- 3273.3] whereas if we switch to local space
+[ 3273.3- 3274.3] the arc is now
+[ 3274.3- 3276.3] all within the local space
+[ 3276.3- 3277.3] of the spider
+[ 3277.3- 3279.3] or the global space, rig space
+[ 3279.3- 3280.3] if you want to call it that
+[ 3280.3- 3281.3] so wherever the spider moves
+[ 3281.3- 3283.3] it's still making the same arc
+[ 3283.3- 3286.3] regardless of where it was locked in world space
+[ 3286.3- 3287.3] so to do that
+[ 3287.3- 3288.3] you might find
+[ 3288.3- 3290.3] where the leg is in local space
+[ 3290.3- 3292.3] even though it's locked at a world position
+[ 3292.3- 3295.3] and where the local position is for that leg
+[ 3295.3- 3297.3] and then set that as the new
+[ 3297.3- 3299.3] starting point in local space
+[ 3299.3- 3302.3] and then predict forward again in local space
+[ 3302.3- 3304.3] and then make it do the arc
+[ 3304.3- 3305.3] and then when it lands down
+[ 3305.3- 3307.3] you switch back to world space
+[ 3307.3- 3309.3] and lock it in a world space location
+[ 3309.3- 3311.3] and that's quite complex
+[ 3311.3- 3312.3] and not something we're going to do
+[ 3312.3- 3313.3] for this project
+[ 3313.3- 3314.3] because it doesn't need it
+[ 3314.3- 3315.3] but you might find that
+[ 3315.3- 3316.3] with certain
+[ 3316.3- 3319.3] speeds and especially with human characters
+[ 3319.3- 3321.3] that it looks a lot less natural
+[ 3321.3- 3323.3] if everything's based in world space
+[ 3323.3- 3325.3] and you're not switching back and forth
+[ 3325.3- 3327.3] between local and world
+[ 3327.3- 3329.3] so back to reality
+[ 3329.3- 3331.3] we're going to create a new function
+[ 3331.3- 3332.3] and call it
+[ 3332.3- 3334.3] calculate average foot location
+[ 3334.3- 3336.3] and what we're going to do
+[ 3336.3- 3338.3] is basically loop through the legs
+[ 3338.3- 3339.3] as we've done before
+[ 3339.3- 3341.3] get the average location of the feet
+[ 3341.3- 3343.3] and then we're going to use that
+[ 3343.3- 3344.3] to try and make the body move
+[ 3344.3- 3345.3] a bit more naturally
+[ 3345.3- 3346.3] so it will
+[ 3346.3- 3348.3] try to move the pelvis
+[ 3348.3- 3349.3] towards the average position
+[ 3349.3- 3350.3] of all the legs
+[ 3350.3- 3351.3] so if some legs are a bit
+[ 3351.3- 3352.3] far forward
+[ 3352.3- 3353.3] the pelvis will move forward
+[ 3353.3- 3354.3] if it's to the left
+[ 3354.3- 3355.3] it'll move to the left and so on
+[ 3355.3- 3356.3] so essentially
+[ 3356.3- 3357.3] we're just adding
+[ 3357.3- 3359.3] the vector of each
+[ 3359.3- 3360.3] foot position
+[ 3360.3- 3362.3] to a location tally
+[ 3362.3- 3363.3] where we just keep adding
+[ 3363.3- 3364.3] on to the same value
+[ 3364.3- 3365.3] and then later
+[ 3365.3- 3366.3] we're going to divide
+[ 3366.3- 3367.3] it to find the average
+[ 3367.3- 3369.3] so before we return
+[ 3369.3- 3370.3] from the function
+[ 3370.3- 3371.3] what we want to dois
+[ 3371.3- 3373.3] get the location tally
+[ 3373.3- 3374.3] which is all the locations
+[ 3374.3- 3375.3] added up
+[ 3375.3- 3376.3] we're going to create
+[ 3376.3- 3377.3] an output
+[ 3377.3- 3378.3] for average location
+[ 3378.3- 3379.3] and
+[ 3380.3- 3381.3] we need to know
+[ 3381.3- 3382.3] how many times
+[ 3382.3- 3383.3] we've added
+[ 3383.3- 3384.3] a vector
+[ 3384.3- 3385.3] to this tally
+[ 3385.3- 3386.3] so we'll create
+[ 3386.3- 3387.3] an integer
+[ 3387.3- 3388.3] feet counted
+[ 3388.3- 3389.3] each time
+[ 3389.3- 3390.3] we add something
+[ 3390.3- 3391.3] to the tally
+[ 3391.3- 3392.3] we'll add one
+[ 3392.3- 3393.3] to that value
+[ 3393.3- 3394.3] and then
+[ 3394.3- 3395.3] before we return
+[ 3395.3- 3396.3] it we do
+[ 3396.3- 3397.3] getlocation tally
+[ 3397.3- 3398.3] and then we divide
+[ 3398.3- 3399.3] it and we're going
+[ 3399.3- 3400.3] to divide it
+[ 3400.3- 3401.3] by the feet
+[ 3401.3- 3402.3] counted integer
+[ 3402.3- 3403.3] so we need
+[ 3403.3- 3404.3] now we just plug it
+[ 3404.3- 3405.3] into x, y and z
+[ 3405.3- 3406.3] and then we get
+[ 3406.3- 3407.3] the average
+[ 3407.3- 3409.6] location
+[ 3409.6- 3410.6] of all the feet
+[ 3410.6- 3411.6] and then we need
+[ 3411.6- 3412.6] to call that
+[ 3412.6- 3413.6] function somewhere
+[ 3413.6- 3414.6] but I'm not going
+[ 3414.6- 3415.6] to do it before
+[ 3415.6- 3416.6] we start
+[ 3416.6- 3417.6] moving the feet
+[ 3417.6- 3418.6] around there
+[ 3418.6- 3419.6] I'm going to do
+[ 3419.6- 3420.6] after all of the loops
+[ 3420.6- 3421.6] and the reason
+[ 3421.6- 3422.6] for that is
+[ 3422.6- 3423.6] we don't want
+[ 3423.6- 3424.6] the pelvis
+[ 3424.6- 3425.6] to move
+[ 3425.6- 3426.6] after
+[ 3426.6- 3427.6] the legs
+[ 3427.6- 3428.6] have moved
+[ 3428.6- 3429.6] because then
+[ 3429.6- 3430.6] the legs
+[ 3430.6- 3431.6] will also move
+[ 3431.6- 3432.6] along with the feet
+[ 3432.6- 3433.6] so essentially
+[ 3433.6- 3435.6] the
+[ 3435.6- 3436.6] location
+[ 3436.6- 3437.6] vector
+[ 3437.6- 3438.6] and now
+[ 3438.6- 3439.6] what we're going
+[ 3439.6- 3440.6] to dois
+[ 3440.6- 3441.6] insteadof using
+[ 3441.6- 3442.6] the pelvis
+[ 3442.6- 3443.6] location
+[ 3443.6- 3444.6] as the trace
+[ 3444.6- 3445.6] we're actually
+[ 3445.6- 3446.6] using
+[ 3446.6- 3447.6] this
+[ 3447.6- 3448.6] saved
+[ 3448.6- 3449.6] variable
+[ 3449.6- 3450.6] so it will
+[ 3450.6- 3451.6] try to move
+[ 3451.6- 3452.6] to the
+[ 3452.6- 3453.6] saved
+[ 3453.6- 3454.6] location
+[ 3454.6- 3455.6] and as
+[ 3455.6- 3456.6] you can
+[ 3456.6- 3457.6] see that
+[ 3457.6- 3458.6] when it moves
+[ 3458.6- 3459.6] the pelvis
+[ 3459.6- 3460.6] is actually
+[ 3460.6- 3461.6] moving
+[ 3461.6- 3462.6] away from
+[ 3462.6- 3463.6] it looks
+[ 3463.6- 3464.6] a lot less static
+[ 3464.6- 3465.6] and more realistic
+[ 3465.6- 3466.6] and
+[ 3466.6- 3467.6] we're still using
+[ 3467.6- 3468.6] the spring
+[ 3468.6- 3469.6] interp for where
+[ 3469.6- 3470.6] the pelvis moves to
+[ 3470.6- 3471.6] so it's not
+[ 3471.6- 3472.6] instantly snapping
+[ 3472.6- 3473.6] to the average
+[ 3473.6- 3474.6] location of the legs
+[ 3474.6- 3475.6] it's
+[ 3475.6- 3476.6] gradually getting
+[ 3476.6- 3477.6] there using
+[ 3477.6- 3478.6] the interp
+[ 3478.6- 3479.6] so hopefully
+[ 3479.6- 3480.6] you've found
+[ 3480.6- 3482.6] some useful information
+[ 3482.6- 3483.6] from this video
+[ 3483.6- 3484.6] if not
+[ 3484.6- 3485.6] let me know
+[ 3485.6- 3486.6] in the comments
+[ 3486.6- 3488.6] and I'll delete it
+[ 3488.6- 3489.6] and if you have
+[ 3489.6- 3490.6] any questions
+[ 3490.6- 3491.6] and things
+[ 3491.6- 3492.6] you're clarifying
+[ 3492.6- 3493.6] or suggestions
+[ 3493.6- 3494.6] for other videos
+[ 3494.6- 3495.6] in this format
+[ 3495.6- 3496.6] then
+[ 3496.6- 3497.6] let me know
+[ 3497.6- 3498.6] in the comments
+[ 3498.6- 3499.6] aswell
+[ 3499.6- 3500.6] and in the future
+[ 3500.6- 3501.6] I may do a short video
+[ 3501.6- 3502.6] showing how
+[ 3502.6- 3503.6] I actually made
+[ 3503.6- 3504.6] the spider model
+[ 3504.6- 3505.6] I've been using
+[ 3505.6- 3506.6] herein blender
+[ 3506.6- 3507.6] because I did
+[ 3507.6- 3508.6] record that
+[ 3508.6- 3509.6] whilst I was doing it
+[ 3509.6- 3510.6] but it didn't seem
+[ 3510.6- 3511.6] relevant for this video
+[ 3511.6- 3512.6] so thanks
+[ 3512.6- 3513.6] for watching
+[ 3513.6- 3514.6] like and subscribe

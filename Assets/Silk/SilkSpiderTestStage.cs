@@ -506,22 +506,43 @@ public class SilkSpiderTestStage : MonoBehaviour
         }
 
         SilkSpiderBody body = FindObjectOfType<SilkSpiderBody>();
-        if (body != null && body.Legs != null)
+        int boneCount = 0;
+        int bodyPartCount = 0;
+        string gaitInfo = "未建";
+        if (body != null && body.Anatomy != null)
         {
-            // 只数已 BuildVisual 的（Legs 数组长度固定 8，但元素可能还没填）
-            for (int i = 0; i < body.Legs.Length; i++)
-                if (body.Legs[i] != null) legCount++;
+            /*★★ 2026-10-09：HUD 改读 SilkSpiderAnatomy。
+             *   旧的单段直线版腿部实现已删除，其成员（Legs 数组）也已不存在，
+             *   → 继续读会 CS1061 / NullReference。*/
+            SilkSpiderAnatomy anat = body.Anatomy;
+            bodyPartCount = 1;
+            if (anat.Cephalothorax != null) bodyPartCount++;
+            if (anat.Abdomen != null) bodyPartCount++;
+
+            // 骨节总数 = 8 条腿 × 每条节数 → 检验「多节腿」真的建出来了
+            if (anat.LegRoots != null)
+            {
+                for (int i = 0; i < anat.LegRoots.Length && i < 8; i++)
+                {
+                    int segs = anat.GetLimbSegmentCount(i);
+                    if (segs > 0) boneCount += segs;
+                }
+            }
+            gaitInfo = "交替四足步态 duty=" + body.dutyFactor.ToString("F2")
+                      + " → 着地≈ " + (8 * body.dutyFactor).ToString("F1") + " 条";
         }
 
         mode = ballInScene ? "Parkour（球已建）" : "FreeFly（未按 Tab）";
 
         string text =
-            "蜘蛛假骨骼 自检\n" +
+            "蜘蛛自检（真解剖 + FABRIK IK）\n" +
             "模式: " + mode + "\n" +
             "球: " + (ballInScene ? "存在  心(" + ballPos.x.ToString("F1") + ", "
                                   + ballPos.y.ToString("F1") + ", "
                                   + ballPos.z.ToString("F1") + ")" : "不存在") + "\n" +
-            "腿: " + legCount + " / 8条\n" +
+            "身体段: " + bodyPartCount + " / 3（头胸+腹部+腹柄）\n" +
+            "腿骨节: " + boneCount + " （8条 × 5节 = 40）\n" +
+            gaitInfo + "\n" +
             "相机↔球: " + camDist.ToString("F1") + " 格\n" +
             (cam != null ? "相机(" + cam.transform.position.x.ToString("F0") + ", "
                                + cam.transform.position.y.ToString("F0") + ", "
@@ -529,7 +550,7 @@ public class SilkSpiderTestStage : MonoBehaviour
             (ballInScene ? "WASD走位 空格跳 鼠标转视角"
                          : "★ 现在按 Tab 切到 Parkour 才会建球");
 
-        GUI.Label(new Rect(10, 10, 460, 170), text, HudStyle);
+        GUI.Label(new Rect(10, 10, 480, 210), text, HudStyle);
     }
 
     /// <summary>HUD 文字样式（只初始化一次）。</summary>
@@ -581,11 +602,13 @@ public class SilkSpiderTestStage : MonoBehaviour
         }
 
         Debug.Log("[SpiderTest] ===== 测试场就绪 =====\n"
-                + "  ★ 现在按一下 Tab 切到 Parkour —— 球会自动落到地板上、长出 8 条腿。\n"
+                + "  ★ 现在按一下 Tab 切到 Parkour —— 球会自动落到地板上、长出蜘蛛。\n"
                 + "  ★ 不按 Tab 看不到球：mode 初值是 FreeFly，控制器只在 Parkour 建球\n"
                 + "    （SilkBuilder.cs:4475）。这是原有设计，不是 bug。\n"
-                + "  开关默认已全部开启（Enable Input / Show Debug / Enable Legs），\n"
-                + "  不需要去检查器里手动勾 —— 组件是运行时自动挂的，检查器里看不到。");
+                + "  开关默认全部开启（Show Debug / Enable Legs / Show Gait Diagram），\n"
+                + "  不需要去检查器里手动勾 —— 组件是运行时自动挂的，检查器里看不到。\n"
+                + "  ★ 想看步态对不对 → 打开 SilkSpiderBody 的 Show Gait Diagram，\n"
+                + "    屏幕右上角会画出 8 条腿的时序条带（黑=支撑 / 蓝=摆动）。");
     }
 
     /// <summary>手动调用也能建（可从 Unity 编辑器右键菜单触发）。</summary>
@@ -649,8 +672,10 @@ public class SilkSpiderTestStage : MonoBehaviour
                 + " 格 / " + stairCount + " 级台阶 / 横梁 z=" + beamHeight
                 + " / 内角在 (" + (wallWidth * 0.5f + 4f) + ", -4)。\n"
                 + "★ 现在按一下 Tab 切到 Parkour —— 球会自动落到地板上。\n"
-                + "  开关：SilkSpiderSurfaceMove 的 Enable Input 与Show Debug，\n"
-                + "        SilkSpiderBody 的 Enable Legs。");
+                + "  蜘蛛：SilkSpiderAnatomy（头胸部+腹部+腹柄+螯肢+8条5节腿）\n"
+                + "        SilkSpiderLimb 用 FABRIK IK 让足端精确踩地\n"
+                + "  步态：SilkSpiderBody 的 alternating tetrapod（交替四足步态）\n"
+                + "        开关 Show Gait Diagram 可在屏幕上看时序条带。");
     }
 
     /// <summary>

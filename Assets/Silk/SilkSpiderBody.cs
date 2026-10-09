@@ -1,168 +1,215 @@
 using UnityEngine;
 
 /// <summary>
-/// 蜘蛛假骨骼 —— 8 条腿的步态调度。
+/// 蜘蛛步态调度 —— ★ 交替四足步态（alternating tetrapod gait）。
 ///
-/// 【★ 本文件的12 条机制全部来自 58 分钟 UE5 程序动画视频 + MIT 开源仓库】
-///   详细来源分析见 Docs/参考视频转写/三个资源完整分析_2026-10-09.md
-///   每条机制在下面都有「来源」标注。
+/// 【★★★ 本文件是第1 次「真重构」，推翻原单段直线版】
 ///
-/// 【★ 零新增按键 —— 本文件完全不读输入】
-///   它只跟着 SilkSpiderSurfaceMove 的身体走，没有自己的操作。
-///   用户的 8 键硬规则不受影响。
+///   用户原话（2026-10-09）：
+///   「现在的蜘蛛的腿好像不对。而且比例也不对。移动两步就需要重来。
+///     现在的蜘蛛像是小球加腿啊。我要的是蜘蛛啊，不是小球加腿啊。」
 ///
-/// 【坐标系】Z-up。腿的局部系由 SilkSpiderSurfaceMove 对齐到表面法线，
-///   所以地面 / 墙面 / 天花板 / 转角用的是同一套腿，不需要任何特判。
+/// 【★ 推翻的两处根本错误】
+///
+///   错误 1：相位 `(i / 8f) * cycleTime`
+///     → 这是「8 条腿均匀错开 1/8 周期」，产生的是**波浪式乱步**。
+///     → 真实蜘蛛不是这样走的。
+///     ★ 生物学实测（Grammostola rosea，Wiley 2019，DOI 10.1155/2019/4617212）：
+///         蜘蛛平地行走用 **交替四足步态**（alternating tetrapod gait），
+///         8 条腿分成**两组各4 条**，交替支撑。
+///         · 同侧：**L1 与 L3 同相**，**L2 与 L4 同相**（R 同理）
+///         · 对角：**L1 与 R2 同相**，L2 与 R1 同相，L3 与 R4 同相，L4 与 R3 同相
+///         · 相邻腿**反相**：L1 支撑时 L2 摆动
+///         · 典型起步顺序 4-2-3-1（68.1% 出现率）或其轮换
+///         · 占空比 duty factor = 0.6~0.75 → **大部分时间 5~6 条腿着地**
+///         · 任何一组4 条腿忽略 → 退化成三角步态（很多节肢动物用）
+///     → 论文原文：平地上「at least five legs on the ground at all times」
+///       「Most of the time, six legs were on the ground」。
+///
+///   错误 2：腿只有 1 段（LineRenderer 直线）
+///     → 没有膝关节折角 → 从任何角度都不是蜘蛛。
+///     → 现在改为 SilkSpiderAnatomy + SilkSpiderLimb（5 节骨骼 + FABRIK IK）。
+///     形态依据：Locomotor 教程视频的真实 FBX 骨架
+///     `leg_L_1_1 → leg_L_1_2 → ... → leg_L_1_5`（每条腿 5 节）。
+///
+/// 【★ 保留原实现里已经踩过坑验证过的部分】
+///   · 足端射线的**起点插值**（footRayStartBlend=0.5）——
+///     来源视频 14:20–16:10，作者先试「只用骨盆上方」明确 did not help。
+///   · 顺序：脚当前点 + 速度向量 → 从投影点 trace → 命中点。
+///     反过来做腿会插进地面（视频最大的坑）。
+///   · footRay 必须先于腿建立（TraceGround 第一件事就SetRadius）。
+///   · 距离触发时给随机负偏移，否则所有腿重新同步（视频 58:30）。
+///   · 速度平滑 0.1 低通滤波，防止帧率抖动传导到落点预测。
+///   · 射线 ignore 自身 Collider，否则打到自己导致贴面抖动。
+///
+/// 【坐标系】Z-up。
+/// 【零新增按键】本文件完全不读输入，跟随 SilkSpiderSurfaceMove。
 /// </summary>
 [RequireComponent(typeof(SilkSpiderSurfaceMove))]
 [DisallowMultipleComponent]
 public class SilkSpiderBody : MonoBehaviour
 {
     // ================================================================
-    //  体形参数（全部由 visualRadius 推导，不写字面量）
+    //  步态参数
     // ================================================================
 
-    [Header("体形")]
-    [Tooltip("身体半长（前后方向半轴）。默认取球半径的 1.0倍")]
-    public float bodyHalfLength = -1f;
+    [Header("步态 —— 交替四足步态")]
+    [Tooltip("一个完整步态周期（秒）。★ 交替四足步态一个周期 = 每条腿走1 步。\n"
+        + "生物实测平地行走频率约 1~2 Hz，这里默认 1.1 Hz。")]
+    public float cycleTime = 0.9f;
 
-    [Tooltip("身体半宽（左右方向半轴）。默认取球半径的 1.1 倍——\n"
-        + "★ 比半长宽，因为 90 秒视频 u90 帧显示蜘蛛是「腿朝两侧张开」的")]
-    public float bodyHalfWidth = -1f;
+    [Tooltip("★ 占空比duty factor —— 腿在「一个周期内着地」的时间占比。\n"
+        + "来源：Grammostola rosea 实测 0.60~0.75（平硬地面偏大，斜软地面偏小）。\n"
+        + "★ 含义：0.65 表示 65% 时间这条腿在地上支撑，35% 在空中摆动。\n"
+        + "  取 0.65 → 平均同时着地腿数 = 8 × 0.65 ≈ 5.2 条，\n"
+        + "  与论文「大部分时间 6 条腿着地、最少 5 条」吻合。\n"
+        + "★ 必须 ≥0.5，否则着地腿数 < 4 → 站不住。")]
+    [Range(0.5f, 0.9f)] public float dutyFactor = 0.65f;
 
-    [Tooltip("身体离表面的高度。默认取球半径的 0.9 倍")]
-    public float bodyHeight = -1f;
+    [Tooltip("★ 每条腿的相位偏移（归一化 0~1，一个周期为单位）。\n"
+        + "**这个数组就是交替四足步态的全部秘密** ——\n"
+        + "  8 个数按 L1,L2,L3,L4,R1,R2,R3,R4 排列。\n"
+        + "  当前值来自生物实测：同侧隔条同相、对角同相、相邻反相。\n"
+        + "  改这个数组就能换步态，不用改代码。")]
+    public float[] phaseOffsets = new float[]
+    {
+        0.00f,   // L1
+        0.50f,   // L2  ← 与 L1 反相
+        0.00f,   // L3  ← 与 L1 同相（隔一条同相）
+        0.50f,   // L4  ← 与 L3 反相
+        0.50f,   // R1  ← 与 L2 同相（对角同相）
+        0.00f,   // R2  ← 与 L1 同相（对角同相）
+        0.50f,   // R3
+        0.00f,// R4
+    };
 
-    [Tooltip("每条腿的最大长度（从腿根到足端）。默认取球半径的 2.4 倍")]
-    public float legLength = -1f;
+    [Tooltip("起步顺序偏移（秒）。★ 来源：论文实测起步顺序 4-2-3-1 占 68.1%。\n"
+        + "给四条主相位的腿加微小时差，避免 8 条腿整齐同步启动。\n"
+        + "0 = 关闭（会看到腿整齐同步，很机械）")]
+    public float startStagger = 0.06f;
 
-    [Tooltip("线段粗细。默认取球半径的 0.16 倍")]
-    public float legThickness = -1f;
+    [Tooltip("★ 抬腿插值窗口（占周期的比例）。\n"
+        + "只在摆动相的前半段完成抬落，后半段已经在支撑。\n"
+        + "交替四足步态的摆动相 = (1 - dutyFactor) = 0.35 → 取 0.22 合理。")]
+    [Range(0.05f, 0.6f)] public float swingPortion = 0.22f;
 
-    [Tooltip("腿的颜色")]
-    public Color legColor = new Color(0.22f, 0.18f, 0.16f, 1f);
+    [Header("抬腿")]
+    [Tooltip("抬腿峰值高度（格）。默认取球半径的 0.9 倍")]
+    public float liftHeight = -1f;
 
-    [Tooltip("腿根相对身体中心的额外外扩（沿左右方向）。负值 = 收到身体内侧")]
-    public float legRootSpread = -1f;
+    [Tooltip("★ 抬腿高度按速度缩放 —— 静止时不抬腿。\n"
+        + "来源视频 47:00–49:00。0 = 关闭（会看到站着不动也在原地踏步）")]
+    public bool scaleLiftBySpeed = true;
 
-    [Tooltip("腿的静态初始角度（沿前后方向的张开程度）。\n"
-        + "★ 越大则前腿越靠前、后腿越靠后，看起来像张开的蜘蛛")]
-    public float legSplay = 1.35f;
+    [Tooltip("抬到满高度所需速度（格/秒）。默认取 runSpeed")]
+    public float liftFullSpeed = -1f;
 
     [Header("落点探测")]
-    [Tooltip("足端射线的上探长度（格）。默认取球半径的 3 倍")]
+    [Tooltip("足端射线上探长度（格）。默认取球半径的 3 倍")]
     public float footRayUp = -1f;
-
-    [Tooltip("足端射线的下探长度（格）。默认取球半径的 3 倍")]
+    [Tooltip("足端射线下探长度（格）。默认取球半径的 3 倍")]
     public float footRayDown = -1f;
 
-    [Tooltip("★ 射线起点在「骨盆上方」与「脚上方」之间的插值比例（来源：视频 14:20–16:10）。\n"
+    [Tooltip("★ 射线起点在「骨盆上方」与「脚上方」之间的插值比例。\n"
         + "0 = 从脚正上方打；1 = 从骨盆正上方打；0.5 = 两者中间。\n"
-        + "★ 为什么不能写死：射线是垂直的但腿是斜的，脚越过边缘时\n"
-        + "  用脚正上方会打偏→ 腿插进几何体。作者试过「只用骨盆上方」，\n"
-        + "  明确说 did not help，只有插值才解决。")]
+        + "★ 为什么不能写死：射线垂直但腿是斜的，脚越过边缘时用脚正上方会打偏\n"
+        + "  → 腿插进几何体。作者试过「只用骨盆上方」，明确说 did not help。")]
     [Range(0f, 1f)] public float footRayStartBlend = 0.5f;
+
+    [Tooltip("足端射线半径（格）。默认取球半径的 0.12 倍")]
+    public float footRayRadius = -1f;
 
     [Tooltip("射线的碰撞层。默认 Everything —— 与 SilkSpiderSurfaceMove 一致")]
     public LayerMask surfaceMask = ~0;
 
-    // ================================================================
-    //  步态参数
-    // ================================================================
-
-    [Header("步态")]
-    [Tooltip("一次完整迈步的周期（秒）。视频作者用的2 秒")]
-    public float cycleTime = 2f;
-
-    [Tooltip("★ 插值进度用 Remap(0 → 0.2) 而非 Clamp(0 → 1)（来源：视频 45:00）。\n"
-        + "含义：计时到 0.2 时插值就走完，剩下 1.8 秒脚都不动。\n"
-        + "★ 为什么不用 clamp：clamp 会让脚在原地反复抖 ——\n"
-        + "  目标不变但计时一直涨，alpha 卡在 1 又被重置，来回抖。")]
-    [Range(0.01f, 1f)] public float moveAlphaWindow = 0.2f;
-
-    [Tooltip("脚离当前落点多远就强制迈步（格）。\n"
-        + "★ 用「离锁定点」而不是「离身体」，这是视频踩过的坑 ——\n"
-        + "  用身体算距离时，脚实际想去的地方和身体不是一回事，判据失真。\n"
-        + "0 = 用 legLength 的 80%")]
+    [Tooltip("脚离当前锁定点多远就强制换落点（格）。0 = 用腿长的 70%")]
     public float forceStepDistance = -1f;
 
-    [Tooltip("★ 强制迈步后给该腿的随机负偏移（秒）。\n"
-        + "来源：视频 58:30——「距离触发时设0 会让所有腿重新同步」。\n"
-        + "0 = 关闭随机（会看到 8 条腿齐步走）")]
-    public float desyncJitter = 0.35f;
+    [Tooltip("★ 强制换点时给该腿的随机负偏移（秒）。\n"
+        + "来源视频 58:30：「都重置到同一时刻，腿就同步了」。\n"
+        + "0 = 关闭（会看到 8 条腿齐步走）")]
+    public float desyncJitter = 0.18f;
 
-    [Tooltip("速度预测的投射比例。1 = 完全按当前速度投射落点")]
+    [Header("运动预测")]
+    [Tooltip("速度预测投射比例。1 = 完全按当前速度投射落点")]
     [Range(0f, 2f)] public float velocityPrediction = 1f;
-
-    [Tooltip("速度向量长度的上限（格）。★ 必须有，否则跑起来腿会被甩到身后")]
+    [Tooltip("速度向量长度上限（格）。★ 必须有，否则跑起来腿会被甩到身后")]
     public float maxPredictLength = -1f;
-
-    [Tooltip("速度平滑系数。★ 视频里作者用 0.1，理由：\n"
-        + "「用 0.1 会逐渐逼近真实值，不会一直累积误差」")]
+    [Tooltip("速度平滑系数。★ 视频里作者用 0.1：「逐渐逼近真实值，不会一直累积误差」")]
     [Range(0.01f, 1f)] public float velocitySmoothing = 0.1f;
 
-    [Header("抬腿")]
-    [Tooltip("抬腿峰值高度（格）。默认取球半径的 1.2 倍")]
-    public float liftHeight = -1f;
+    [Header("身体")]
+    [Tooltip("★ 身体随步伐起伏的幅度（格）。\n"
+        + "真实蜘蛛行走时头胸部有轻微的上下起伏与侧摆（步态副产物）。\n"
+        + "0 = 完全不动（身体像一块滑板，很假）")]
+    public float bodyBobAmount = -1f;
 
-    [Tooltip("★ 抬腿高度按速度缩放：静止时不抬腿（来源：视频 47:00–49:00）。\n"
-        + "0 = 关闭这个行为（会看到站着不动也在原地踏步）")]
-    public bool scaleLiftBySpeed = true;
+    [Tooltip("身体起伏的频率倍数（相对步态周期）")]
+    public float bodyBobFreqMul = 2f;
 
-    [Tooltip("抬到满高度所需的速度（格/秒）。默认取 runSpeed")]
-    public float liftFullSpeed = -1f;
-
-    [Header("骨盆起伏")]
-    [Tooltip("★ 骨盆追平均脚位置（来源：视频 58:30 最后一节）。\n"
-        + "8 条脚的落点求平均，骨盆朝那个点移动 —— 身体会随步伐轻微摇摆。\n"
-        + "0 = 关闭（身体完全不晃，很机械）")]
-    [Range(0f, 1f)] public float bodyFollow = 0.35f;
-
-    [Tooltip("骨盆追平均的插值速度")]
-    public float bodyFollowSpeed = 6f;
+    [Tooltip("★ 身体跟随平均足位（0~1）。腿动时身体朝那侧偏，像真的有重量。")]
+    [Range(0f, 1f)] public float bodyFollow = 0.22f;
 
     [Header("调试")]
     [Tooltip("画出每条腿的锁定点（绿）、目标点（黄）、足端（青）")]
     public bool showDebug = false;
 
-    [Tooltip("★ **默认勾上** —— 不勾就看不到腿，等于交付物不可见。\n"
-        + "每帧要跑 8 次球形射线，比普通贴面移动贵。\n"
-        + "★ 步态确认没问题后可以取消，省下这部分开销。")]
+    [Tooltip("★ 默认勾上 —— 不勾就看不到腿，等于交付物不可见。")]
     public bool enableLegs = true;
 
+    [Tooltip("显示实时步态图（8 条腿的时序条带）—— ★ 判断步态对不对最直观的工具")]
+    public bool showGaitDiagram = false;
+
     // ================================================================
-    //  运行时状态
+    //  运行时
     // ================================================================
 
     private SilkParkourController ctrl;
     private SilkSpiderSurfaceMove mover;
-    private SilkSpiderLeg[] legs = new SilkSpiderLeg[8];
-    private Transform visualRoot;      //腿的父节点（跟着身体起伏偏移）
-    private Transform bodyPivot;       // 骨盆（做起伏的节点）
+    private SilkSpiderAnatomy anatomy;
+
+    /// <summary>每条腿的落点状态。</summary>
+    private struct LegState
+    {
+        public Vector3 LockedTarget;     // 当前着地点
+        public Vector3 NextTarget;       // 下一个落点
+        public float Phase;              // 0~1 的步态相位
+        public bool Initialized;
+    }
+
+    private LegState[] legState = new LegState[8];
+    private Vector3[] footWorld = new Vector3[8];
+    private Vector3[] rootWorld = new Vector3[8];
 
     private Vector3 previousWorldPos;
     private Vector3 velocity;
     private bool initialized;
     private Collider selfCollider;
-
     private SilkSphereCast footRay;
+    private float gaitClock;
+    private Vector3 bodyBasePos;
 
-    /// <summary>8 条腿，供外部查询（如调试 UI）。</summary>
-    public SilkSpiderLeg[] Legs => legs;
+    /// <summary>解剖结构（HUD / 调试查询用）。</summary>
+    public SilkSpiderAnatomy Anatomy => anatomy;
 
-    /// <summary>腿当前的移动速度（格/秒，已平滑）。</summary>
-    public Vector3 SmoothedVelocity => velocity;
+    /// <summary>腿是否已建（HUD 查询）。</summary>
+    public bool LegsBuilt => anatomy != null;
+
+    /// <summary>球半径 —— 全项目唯一读取入口。</summary>
+    private float BallRadius
+    {
+        get
+        {
+            ResolveReferences();
+            if (ctrl != null && ctrl.visualRadius > 0f) return ctrl.visualRadius;
+            return 1f;
+        }
+    }
 
     // ================================================================
-    //  自动挂载
+    //  生命周期
     // ================================================================
 
-    /// <summary>
-    /// ★ 自动挂载 —— 与 SilkSpiderSurfaceMove 用同一套办法，
-    ///   **不改动 SilkBuilder.cs**。
-    ///   但注意：挂载有顺序问题 —— 必须在 SurfaceMove 之后。
-    ///   所以这里不自动 AddComponent，而是由 SilkSpiderSurfaceMove 负责挂。
-    /// </summary>
     public static SilkSpiderBody AttachTo(SilkParkourController target)
     {
         SilkSpiderBody exist = target.GetComponent<SilkSpiderBody>();
@@ -175,57 +222,15 @@ public class SilkSpiderBody : MonoBehaviour
         ResolveReferences();
     }
 
-    /// <summary>
-    /// ★ 解析所有外部引用。**幂等**，可在 Awake 与 Start 各调一次。
-    ///
-    /// 【为什么要两次】
-    ///   本组件由 `SilkSpiderSurfaceMove.AutoAttach` 在
-    ///   `RuntimeInitializeLoadType.AfterSceneLoad` 阶段挂上。
-    ///   那个阶段里，场景原有物体的 Awake 已跑完，Start 还没跑。
-    ///   而本组件的 Awake 是在 `AddComponent` 时**立刻**执行的 ——
-    ///   也就是说：**本组件的 Awake 会先于场景原有物体的 Start**。
-    ///   ★ 这其实是好事（能抢到前面），但也意味着依赖链上的
-    ///   `SilkParkourController` 此刻状态未知。
-    ///   → 所以 Start 里必须再解析一次。
-    ///
-    /// 【为什么用 provider 字段而不是到处 GetComponent】
-    ///   球是**运行时**创建的（`SilkParkourController.CreateVisual()`），
-    ///   `visualRadius` 在 Awake 阶段可能还是默认值。
-    ///   → 所有读取球半径的地方都必须走这个方法，
-    ///   绝不能缓存成局部变量或字段。
-    /// </summary>
     private void ResolveReferences()
     {
         if (ctrl == null) ctrl = GetComponent<SilkParkourController>();
+        if (ctrl == null) ctrl = FindObjectOfType<SilkParkourController>();
         if (mover == null) mover = GetComponent<SilkSpiderSurfaceMove>();
-    }
-
-    /// <summary>
-    /// ★ 球半径 —— 全项目唯一的读取入口。
-    ///
-    /// 【为什么不能用 ctrl.visualRadius 直接读】
-    ///   球是运行时创建的，`visualRadius` 可能在 Awake 时还是默认值 0。
-    ///   直接用会得到 0 → 射线半径 0 → SphereCast 打空 → 永远探测不到地面。
-    ///   → 这里做兜底，绝不让它返回 0。
-    /// </summary>
-    private float BallRadius
-    {
-        get
-        {
-            ResolveReferences();
-
-            if (ctrl != null && ctrl.visualRadius > 0f) return ctrl.visualRadius;
-
-            // 实在拿不到（控制器缺失/半径未初始化）→ 用球半径的常见值当兜底。
-            // ★ 宁可数值不对，也不要 NullReferenceException。
-            return 1f;
-        }
     }
 
     private void Start()
     {
-        /* ★ mover 必须在 Start 里再取一次，不能只靠 Awake。
-         *   见 ResolveReferences 的说明 —— Awake 时依赖链可能还没就绪。*/
         ResolveReferences();
 
         if (mover == null)
@@ -234,65 +239,46 @@ public class SilkSpiderBody : MonoBehaviour
             Debug.LogWarning("[SpiderBody] 缺少 SilkSpiderSurfaceMove，已自动补挂。");
         }
 
-        // ★ 所有体形参数由 BallRadius 推导，不写字面量 —— 球径改了自动跟随
         float r = BallRadius;
-        if (r <= 0f) r = 1f;
-
-        if (bodyHalfLength <= 0f) bodyHalfLength = r * 1.0f;
-        if (bodyHalfWidth <= 0f) bodyHalfWidth = r * 1.1f;
-        if (bodyHeight <= 0f) bodyHeight = r * 0.9f;
-        if (legLength <= 0f) legLength = r * 2.4f;
-        if (legThickness <= 0f) legThickness = r * 0.16f;
-        if (legRootSpread <= 0f) legRootSpread = r * 0.75f;
-
+        if (liftHeight <= 0f) liftHeight = r * 0.9f;
         if (footRayUp <= 0f) footRayUp = r * 3f;
         if (footRayDown <= 0f) footRayDown = r * 3f;
-        if (liftHeight <= 0f) liftHeight = r * 1.2f;
+        if (footRayRadius <= 0f) footRayRadius = r * 0.12f;
         if (maxPredictLength <= 0f) maxPredictLength = r * 3f;
-        if (forceStepDistance <= 0f) forceStepDistance = legLength * 0.8f;
+        if (bodyBobAmount <= 0f) bodyBobAmount = r * 0.16f;
 
-        /*★★ 顺序：先建射线，再建腿。
-         *
-         * 【踩过的坑】
-         *   原来顺序是 BuildBody → BuildLegs → BuildFootRay，
-         *   而 BuildLegs 里会调 InitializeFootTargets() → TraceGround()，
-         *   **TraceGround 第一件事就是 footRay.SetRadius(...)**。
-         *   → 抛 NullReferenceException。
-         *
-         *   ★ 为什么静态检查没抓到：
-         *     `footRay` 是合法声明的字段，`BuildFootRay()` 也确实存在，
-         *     只是一次性初始化的**顺序**错了。
-         *     文本正则判断不了「哪个方法先跑」。
-         *
-         * 【为什么 InitializeFootTargets 要在 BuildLegs 里】
-         *   它需要 legs[] 已经填好才能算8 条腿的初始落点。
-         *   所以正确的约束是「射线 < 腿」，不是把 InitializeFootTargets 挪走。
-         */
-        BuildBody();
-        BuildFootRay();   // ★ 必须在 BuildLegs 之前
-        BuildLegs();
+        //★ 步态时序：footRay 必须先于 anatomy 建立，
+        //  因为 InitializeFootTargets() 会调 TraceGround()，
+        //  而 TraceGround 第一件事就是 footRay.SetRadius(...)
+        //  → 顺序错了抛 NullReferenceException（踩过一次）。
+        BuildFootRay();
+        BuildAnatomy();
+        InitializeFootTargets();
 
         previousWorldPos = transform.position;
+        bodyBasePos = anatomy.VisualRoot.localPosition;
+        gaitClock = 0f;
         initialized = true;
+
+        Debug.Log("[SpiderBody] 蜘蛛就绪：头胸部 + 腹部 + 腹柄 + 螯肢 + "
+                + "8 条五节腿（FABRIK IK）。步态 = 交替四足步态，"
+                + "dutyFactor=" + dutyFactor.ToString("F2")
+                + " → 平均着地腿数≈ " + (8 * dutyFactor).ToString("F1") + " 条。");
     }
 
     private System.Collections.IEnumerator AttachSelfColliderNextFrame()
     {
         yield return null;
-
         selfCollider = FindSelfCollider();
         if (selfCollider == null)
             Debug.LogWarning("[SpiderBody] 找不到自身 Collider，足端射线会打到自己。");
-
         if (footRay != null) footRay.SetIgnore(selfCollider);
     }
 
-    /// <summary>找自身碰撞体（在子物体上，见 SilkSpiderSurfaceMove 的说明）。</summary>
     private Collider FindSelfCollider()
     {
         Collider c = GetComponent<Collider>();
         if (c != null) return c;
-
         Collider[] kids = GetComponentsInChildren<Collider>(true);
         for (int i = 0; i < kids.Length; i++)
             if (kids[i] != null) return kids[i];
@@ -300,152 +286,58 @@ public class SilkSpiderBody : MonoBehaviour
     }
 
     // ================================================================
-    //  搭建
+    //  构建
     // ================================================================
 
-    private void BuildBody()
+    private void BuildAnatomy()
     {
-        var rootGo = new GameObject("SpiderVisual");
-        rootGo.transform.SetParent(transform, false);
-        visualRoot = rootGo.transform;
+        anatomy = GetComponent<SilkSpiderAnatomy>();
+        if (anatomy == null)
+            anatomy = gameObject.AddComponent<SilkSpiderAnatomy>();
 
-        var pivotGo = new GameObject("SpiderPelvis");
-        pivotGo.transform.SetParent(visualRoot, false);
-        bodyPivot = pivotGo.transform;
-
-        /*★★★ 腹部网格 —— 没有它屏幕上只有 8 条线飘着，看不出「蜘蛛」，
-         *   用户会以为腿是凭空出现的（这正是「啥也没看到」的一部分）。
-         *
-         * 【为什么用 CreatePrimitive(Sphere) 而不是 new GameObject】
-         *   空 GameObject 没有 MeshFilter/MeshRenderer → 完全不可见。
-         *   CreatePrimitive 自带网格 + 渲染器。
-         *
-         * 【★ 必须销毁 Collider】
-         *   Sphere 自带 SphereCollider，而本项目的球**已经**有一个 Collider，
-         *   多一个会干扰 SilkSpiderSurfaceMove 的射线判定
-         *   （射线会打到蜘蛛自己的肚子上）。腿的 Collider 同样已删。
-         *
-         * 【尺寸】扁椭球：X/Z 略宽、Y 略扁 —— 蜘蛛腹部的经典轮廓。*/
-        var bodyGo = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        bodyGo.name = "SpiderAbdomen";
-        bodyGo.transform.SetParent(bodyPivot, false);
-        // 单位球半径 0.5 → 缩放即直径。用体形参数推导，不写字面量。
-        bodyGo.transform.localScale = new Vector3(
-            bodyHalfWidth * 2f, bodyHalfLength * 2f, bodyHeight * 2f);
-
-        Collider bodyCol = bodyGo.GetComponent<Collider>();
-        if (bodyCol != null) Destroy(bodyCol);
-
-        MeshRenderer bodyMr = bodyGo.GetComponent<MeshRenderer>();
-        if (bodyMr != null)
-        {
-            // 用不受光照影响的纯色，保证任何角度都看得见轮廓
-            Shader sh = Shader.Find("Unlit/Color");
-            if (sh == null) sh = Shader.Find("Standard");
-            if (sh == null) sh = Shader.Find("Diffuse");
-
-            if (sh != null)
-            {
-                bodyMr.material = new Material(sh);
-                if (bodyMr.material.HasProperty("_Color"))
-                    bodyMr.material.color = legColor;
-            }
-        }
-    }
-
-    /// <summary>
-    /// 8 条腿的布局：左右各 4 条，沿前后方向展开。
-    ///
-    /// ★ 为什么左右各 4 而不是前后各 4：
-    ///   90 秒视频 u90 帧显示蜘蛛是「蹲姿、身体压低、腿朝两侧张开」。
-    ///   → 左右是主要的展开方向，前后只用来错开前后腿的位置。
-    /// </summary>
-    private void BuildLegs()
-    {
-        for (int i = 0; i < 8; i++)
-        {
-            var leg = new SilkSpiderLeg();
-            leg.Index = i;
-            leg.SideSign = (i < 4) ? -1f : 1f;
-
-            // 同侧 4 条腿沿前后均布：-1, -1/3, +1/3, +1
-            int k = i % 4;
-            leg.ForwardT = (k / 3f) * 2f - 1f;
-
-            /*★ 相位错开 —— 8 条腿不同步的**唯一**来源。
-             *   视频里作者写的是 footTimings[i] = i / 8，注释原文：
-             *   「这是八分之一秒，所以每条腿会错开 0.125」——
-             *   「这是唯一解决所有脚同时动的方法」。
-             *
-             *   ★ 必须写进 Timing 而不是只存在 Phase：
-             *     视频是把i/8 写进计时器数组本身。
-             *     只存Phase 不写进 Timing 的话，8 条腿第一帧会同时从 0 开始迈步。
-             */
-            leg.Timing = (i / 8f) * cycleTime;
-
-            leg.BuildVisual(bodyPivot, "Leg_" + i, legThickness, legColor);
-            legs[i] = leg;
-        }
-
-        /* ★ 初始落点必须落在身体下方 —— 不初始化的话默认是 Vector3.zero，
-         *   8 条腿第一帧会全部朝世界原点伸过去（表现为瞬间炸开成一团）。
-         *   这与「往数组里写值之前要先给数组 8 个初始项」是同一个坑
-         *   （视频里作者也踩了：writes to blank array → out of bounds）。
-         *   在这里等价于：给每个数组元素一个初值。*/
-        InitializeFootTargets();
-    }
-
-    /// <summary>把每条腿的初始锁定点/目标点落到身体下方的地面上。</summary>
-    private void InitializeFootTargets()
-    {
-        /* ★ mover 可能还是 null —— 它由 SilkSpiderSurfaceMove.AutoAttach 挂上，
-         *   而 AutoAttach 在 RuntimeInitializeLoadType.AfterSceneLoad 阶段跑，
-         *   那时本组件可能已经进了 Start。
-         *   Start 里做了兜底重取，但万一GetComponent 真的拿不到（异常场景），
-         *   这里的 mover.SurfaceNormal 就会 NullReferenceException。
-         *   → 这里再兜一层，绝不让初始化抛异常打断整个 Start。*/
-        Vector3 up = transform.up;
-        if (mover != null)
-        {
-            Vector3 n = mover.SurfaceNormal;
-            if (n.sqrMagnitude > 0.0001f) up = n;
-        }
-
-        for (int i = 0; i < 8; i++)
-        {
-            Vector3 root = LegRootWorld(i);
-            Vector3 guess = root - up * bodyHeight * 0.5f;
-
-            Vector3 hit;
-            if (TraceGround(i, guess, up, out hit))
-                legs[i].LockedTarget = hit;
-            else
-                legs[i].LockedTarget = guess;
-
-            legs[i].NextTarget = legs[i].LockedTarget;
-        }
+        anatomy.Build(transform);
     }
 
     private void BuildFootRay()
     {
-        /* ★ 用**不绑父**的构造函数。
+        /* ★ 用不绑父的构造函数。
          *   绑定父版本会把端点存成父的局部坐标，
-         *   适合 SurfaceMove 那种「方向恒定」的射线。
-         *   但足端射线每帧都传显式起点终点（CastBetween），
-         *   绑父只会让 GetOrigin() 拿到无意义的值 → 反而误导。
-         *
-         *   ★ 注意：ignoreRoot 会因此是 null —— 但没关系，
-         *     CastBetween 里对 ignoreRoot 做了 null 判断，
-         *     而真正生效的排除靠的是 ignoreCollider（球自己的 Collider）。
-         *     腿本身没有 Collider（BuildVisual 里已确保），
-         *     所以只需排除球即可。
-         */
+         *   但足端射线每帧都传显式起止（CastBetween），绑父反而误导。*/
         footRay = new SilkSphereCast(
             transform.position,
             transform.position - transform.up * footRayDown,
-            BallRadius * 0.15f);
+            footRayRadius);
 
         StartCoroutine(AttachSelfColliderNextFrame());
+    }
+
+    /// <summary>
+    /// 初始化 8 条腿的落点。
+    /// ★ 必须给全部 8 条都赋初值 —— 否则默认 Vector3.zero，
+    ///   腿会朝世界原点伸过去（表现为瞬间炸开成一团）。
+    ///   与视频作者踩的 "writes to blank array → out of bounds" 是同一个坑。
+    /// </summary>
+    private void InitializeFootTargets()
+    {
+        Vector3 up = SafeUp();
+
+        for (int i = 0; i < 8; i++)
+        {
+            Vector3 root = RootWorld(i);
+            Vector3 guess = root - up * (BallRadius * 0.5f);
+
+            Vector3 hit;
+            if (TraceGround(guess, up, out hit))
+                legState[i].LockedTarget = hit;
+            else
+                legState[i].LockedTarget = guess;
+
+            legState[i].NextTarget = legState[i].LockedTarget;
+            legState[i].Initialized = true;
+            footWorld[i] = legState[i].LockedTarget;
+
+            rootWorld[i] = root;
+        }
     }
 
     // ================================================================
@@ -462,166 +354,286 @@ public class SilkSpiderBody : MonoBehaviour
         UpdateVelocity(dt);
 
         if (enableLegs) UpdateLegs(dt);
+        else PushLimbsToRest();
     }
 
-    /// <summary>
-    /// 速度计算 —— 视频里的 `Calculate Velocity` 函数。
-    ///
-    /// 【★ 必须平滑，理由来自视频】
-    ///   作者原话：「如果一直用 0.1，它会不断累积、越来越接近真实值」
-    ///   → 意思是 Lerp(0.1) 是低通滤波，防止帧率抖动传导到落点预测。
-    /// </summary>
     private void UpdateVelocity(float dt)
     {
         Vector3 current = transform.position;
         Vector3 raw = (current - previousWorldPos) / dt;
         previousWorldPos = current;
-
         velocity = Vector3.Lerp(velocity, raw, velocitySmoothing);
     }
 
+    /// <summary>
+    /// ★ 步态主更新 —— 交替四足步态。
+    /// </summary>
     private void UpdateLegs(float dt)
     {
-        Vector3 up = mover.SurfaceNormal;
-        if (up.sqrMagnitude < 0.0001f) up = transform.up;
+        Vector3 up = SafeUp();
 
-        // 速度限制长度 —— ★ 没有这个腿会被甩到身后（视频 52:00）
-        Vector3 predictVel = velocity * velocityPrediction;
-        if (predictVel.magnitude > maxPredictLength)
-            predictVel = predictVel.normalized * maxPredictLength;
+        gaitClock += dt;
+        if (gaitClock >= cycleTime) gaitClock -= cycleTime;
 
-        // 抬腿高度按速度缩放—— 静止时不抬（视频 47:00）
+        // ---- 抬腿高度按速度缩放（静止不抬腿）----
         float lift = liftHeight;
         if (scaleLiftBySpeed)
         {
             float refSpeed = liftFullSpeed > 0f
                 ? liftFullSpeed
-                : Mathf.Max(1f, mover.runSpeed);
+                : Mathf.Max(1f, mover != null ? mover.runSpeed : 5f);
             lift *= Mathf.Clamp01(velocity.magnitude / refSpeed);
         }
 
-        Vector3 pelvisAvg = Vector3.zero;
-        int counted = 0;
+        // ---- 速度预测（clamp 长度，否则腿被甩到身后）----
+        Vector3 predictVel = velocity * velocityPrediction;
+        float pvLen = predictVel.magnitude;
+        if (pvLen > maxPredictLength)
+            predictVel = predictVel.normalized * maxPredictLength;
+
+        // ---- 起步顺序错开：给主相位加微小延迟 ----
+        //   论文实测起步顺序 4-2-3-1 最多 → 用一个固定的错开序列近似。
+        //   数组下标 = 腿序号 0..7（L1..L4,R1..R4）
+        float[] stagger = StaggerOffsets();
+
+        Vector3 feetAvg = Vector3.zero;
 
         for (int i = 0; i < 8; i++)
         {
-            legs[i].Timing += dt;
-            SolveLeg(i, up, predictVel, lift);
+            rootWorld[i] = RootWorld(i);
 
-            pelvisAvg += legs[i].FootWorld;
-            counted++;
-        }
+            // ---- 计算本腿当前相位（0~1，循环）----
+            float phase = ComputePhase(i, gaitClock, stagger);
+            legState[i].Phase = phase;
 
-        // ★ 骨盆追平均脚位置 —— 放在所有腿之后算（视频 58:30）
-        //   原文理由：「不想让骨盆在腿动完之后才动，
-        //   那样腿也会跟着脚一起被带走」
-        if (counted > 0 && bodyFollow > 0f)
-        {
-            pelvisAvg /= counted;
-            Vector3 goal = Vector3.Lerp(bodyPivot.position, pelvisAvg, bodyFollow);
-            bodyPivot.position = Vector3.Lerp(
-                bodyPivot.position, goal,
-                Mathf.Clamp01(bodyFollowSpeed * dt));
-        }
-    }
+            // ---- 相位 → 支撑/摆动 + 插值进度 ----
+            //★ 交替四足步态的时序：
+            //   phase ∈[0, dutyFactor)                → 支撑相（脚不动）
+            //   phase ∈ [dutyFactor, dutyFactor+swing) → 摆动相（脚划弧线）
+            //   phase ∈ [dutyFactor+swing, 1)          → 支撑（已经落地）
+            float stepAlpha;
+            bool inSwing;
 
-    /// <summary>
-    /// 解算单条腿 —— 对应视频里的 `Calculate New Foot Targets` +抬腿。
-    ///
-    /// 【顺序不可颠倒★ 视频踩过的最大的坑】
-    ///   错误顺序：脚当前点 → trace 打点 →命中点 + 速度向量
-    ///     → 移动时腿会插进地面，因为「加完速度」的位置从没验证过有地面
-    ///   正确顺序：脚当前点 + 速度向量 → 从投影点 trace → 命中点
-    ///     作者原话：「现在你能看到脚移动时总是踩到地面了」
-    /// </summary>
-    private void SolveLeg(int i, Vector3 up, Vector3 predictVel, float lift)
-    {
-        SilkSpiderLeg leg = legs[i];
-        Vector3 rootWorld = LegRootWorld(i);
-
-        // ---- 1. 插值进度：Remap(0 → moveAlphaWindow)，不是 Clamp(0 → 1) ----
-        float alpha = Mathf.Clamp01(leg.Timing / moveAlphaWindow);
-
-        // ---- 2. 当前足端应该在的位置 ----
-        Vector3 footWorld = Vector3.Lerp(leg.LockedTarget, leg.NextTarget, alpha);
-
-        // ---- 3. 抬腿弧线（抬的是足端目标，腿自然跟着拱起）----
-        float stepLift = lift * SilkSpiderLeg.LiftCurveAt(alpha);
-        footWorld += up * stepLift;
-
-        // ---- 4. 是否需要换落点 ----
-        bool outOfRange = Vector3.Distance(leg.LockedTarget, footWorld) > forceStepDistance;
-        bool timeUp = leg.Timing > cycleTime;
-
-        if (outOfRange || timeUp)
-        {
-            Vector3 projected = footWorld + predictVel;
-            Vector3 hit;
-            if (TraceGround(i, projected, up, out hit))
+            if (phase < dutyFactor)
             {
-                // 旧目标变成锁定点，立刻生成新目标
-                leg.LockedTarget = hit;
-                leg.NextTarget = projected;
-
-                // ★ 距离触发时给一个随机负偏移，否则 8 条腿会重新同步
-                //   （视频 58:30 的原话：「都重置到同一时刻，腿就同步了」）
-                if (outOfRange && desyncJitter > 0f)
-                    leg.Timing = -desyncJitter * Random.Range(0.3f, 1f);
-                else
-                    leg.Timing = 0f;
-
-                footWorld = leg.LockedTarget;
-                stepLift = lift * SilkSpiderLeg.LiftCurveAt(
-                    Mathf.Clamp01(leg.Timing / moveAlphaWindow));
-                footWorld += up * stepLift;
+                inSwing = false;
+                stepAlpha = 1f;
             }
             else
             {
-                //打不到地面（悬空边缘）→ 只是把计时压回去，下一帧再试
-                leg.Timing = cycleTime * 0.5f;
+                float swingStart = dutyFactor;
+                float swingEnd = dutyFactor + swingPortion;
+                if (phase < swingEnd)
+                {
+                    inSwing = true;
+                    stepAlpha = (phase - swingStart) / swingPortion;
+                }
+                else
+                {
+                    inSwing = false;
+                    stepAlpha = 1f;
+                }
             }
+
+            // ---- 当前足端世界坐标 ----
+            Vector3 foot = Vector3.Lerp(
+                legState[i].LockedTarget, legState[i].NextTarget,
+                Mathf.Clamp01(stepAlpha));
+
+            if (inSwing)
+            {
+                // ★ 抬腿弧线：sin 曲线，中段最高。
+                //   抬的是足端目标 → FABRIK 会让整条腿跟着拱起。
+                float h = Mathf.Sin(Mathf.Clamp01(stepAlpha) * Mathf.PI);
+                foot += up * (lift * h);
+            }
+
+            // ---- 换落点判定 ----
+            float distFromLocked = Vector3.Distance(legState[i].LockedTarget, foot);
+            bool outOfRange = distFromLocked > (forceStepDistance > 0f
+                ? forceStepDistance
+                : BallRadius * 1.8f);
+
+            if (outOfRange)
+            {
+                //★ 顺序不可颠倒（视频踩过的最大的坑）：
+                //  正确：脚当前点 + 速度向量 → 从投影点 trace → 命中点
+                //  错误：脚当前点 → trace → 命中点 + 速度向量
+                //  后者会让腿插进地面，因为「加完速度」的位置从没验证过有地面。
+                Vector3 projected = foot + predictVel;
+                Vector3 hit;
+                if (TraceGround(projected, up, out hit))
+                {
+                    legState[i].LockedTarget = hit;
+                    legState[i].NextTarget = projected;
+
+                    //★ 随机负偏移：否则所有腿重新同步（视频 58:30）
+                    if (desyncJitter > 0f)
+                        legState[i].Phase = -desyncJitter * Random.Range(0.3f, 1f);
+                }
+                else
+                {
+                    // 打不到地面（悬空边缘）→ 把相位压回支撑相，下一帧再试
+                    legState[i].Phase = dutyFactor * 0.5f;
+                }
+
+                foot = Vector3.Lerp(legState[i].LockedTarget, legState[i].NextTarget, 0f);
+            }
+
+            footWorld[i] = foot;
+            feetAvg += foot;
         }
 
-        leg.Solve(rootWorld, footWorld, up, 0f, bodyPivot);
+        // ---- 把足点交给解剖结构做 FABRIK 求解 ----
+        if (anatomy != null)
+        {
+            anatomy.UpdateLimbs(rootWorld, footWorld, up);
+        }
+
+        // ---- 身体起伏与跟随 ----
+        UpdateBodyPosture(feetAvg, dt, up);
+    }
+
+    /// <summary>关掉腿时保持静止姿态。</summary>
+    private void PushLimbsToRest()
+    {
+        Vector3 up = SafeUp();
+        if (anatomy == null) return;
+        for (int i = 0; i < 8; i++)
+        {
+            if (rootWorld[i] == Vector3.zero) rootWorld[i] = RootWorld(i);
+            if (footWorld[i] == Vector3.zero) footWorld[i] = legState[i].LockedTarget;
+        }
+        anatomy.UpdateLimbs(rootWorld, footWorld, up);
+    }
+
+    /// <summary>
+    /// ★ 身体姿态：随步伐上下起伏 + 追平均足位。
+    ///
+    /// 【来源】
+    ///   · 起伏：真实蜘蛛行走时头胸部有轻微上下运动（步态的副产物），
+    ///     且**一个周期内起伏两次**（8 条腿各抬一次 → 但按四足步态是4 组交替，
+    ///     视觉上身体上下摆 2 次最自然）→ bodyBobFreqMul = 2。
+    ///   · 追平均脚位：视频 58:30 最后一节，作者明确做了这个。
+    ///     放在所有腿之后算 —— 「不想让骨盆在腿动完之后才动」。
+    /// </summary>
+    private void UpdateBodyPosture(Vector3 feetAvg, float dt, Vector3 up)
+    {
+        if (anatomy == null || anatomy.VisualRoot == null) return;
+
+        // 起伏：sin(2π × phase × freqMul)
+        float bobPhase = gaitClock / Mathf.Max(0.01f, cycleTime);
+        float bob = Mathf.Sin(bobPhase * Mathf.PI * 2f * bodyBobFreqMul) * bodyBobAmount;
+
+        Vector3 target = bodyBasePos + up * bob;
+
+        // 追平均足位（横向偏移）
+        if (feetAvg != Vector3.zero && bodyFollow > 0f)
+        {
+            Vector3 lateral = feetAvg - transform.position;
+            // 只取「平行于表面」的分量 —— 法线方向由 up 决定，
+            // 若把高度差也算进去，身体会被按到地里。
+            lateral -= up * Vector3.Dot(lateral, up);
+            target += lateral * bodyFollow * 0.35f;
+        }
+
+        anatomy.VisualRoot.localPosition = Vector3.Lerp(
+            anatomy.VisualRoot.localPosition, target,
+            Mathf.Clamp01(6f * dt));
+    }
+
+    /// <summary>
+    /// ★ 计算某条腿当前相位。
+    ///
+    /// 【交替四足步态的相位表】
+    ///   phaseOffsets = { L1:0, L2:0.5, L3:0, L4:0.5, R1:0.5, R2:0, R3:0.5, R4:0 }
+    ///   校验这 8 个数是否满足论文里的三条规律：
+    ///     ① 同侧隔条同相：L1(0)=L3(0) ✓  L2(0.5)=L4(0.5) ✓  R1(0.5)=R3(0.5) ✓
+    ///        R2(0)=R4(0) ✓
+    ///     ② 对角同相：L1(0)=R2(0) ✓  L2(0.5)=R1(0.5) ✓  L3(0)=R4(0) ✓
+    ///        L4(0.5)=R3(0.5) ✓
+    ///     ③ 相邻反相：L1(0) vs L2(0.5) ✓  L2(0.5) vs L3(0) ✓  L3(0) vs L4(0.5) ✓
+    ///     → 全部成立。这就是交替四足步态。
+    /// </summary>
+    private float ComputePhase(int legIndex, float clock, float[] stagger)
+    {
+        float basePhase = 0f;
+        if (phaseOffsets != null && legIndex < phaseOffsets.Length)
+            basePhase = phaseOffsets[legIndex];
+
+        float offset = stagger != null && legIndex < stagger.Length ? stagger[legIndex] : 0f;
+
+        float p = (clock / Mathf.Max(0.01f, cycleTime)) + basePhase - offset;
+        p -= Mathf.Floor(p);      // 归一到 [0,1)
+        return p;
+    }
+
+    /// <summary>
+    /// 起步顺序错开量。
+    /// 论文实测：**4-2-3-1** 是最常见的同侧起步顺序（68.1%），
+    /// 其次 4-1-3-2（14.8%）、4-3-1-2（12.8%）。
+    /// → 给第4 条腿（索引 3）最小延迟，第 1 条（索引 0）最大延迟。
+    /// 这样「4 → 2 → 3 → 1」依次启动，而不是 8 条一起动。
+    /// </summary>
+    private float[] staggerCache;
+    private float[] StaggerOffsets()
+    {
+        if (staggerCache == null) staggerCache = new float[8];
+
+        // 4-2-3-1 → 延迟量：腿4=0, 腿2=1步, 腿3=2步, 腿1=3步
+        // 步长 = startStagger（秒）
+        float s = Mathf.Max(0f, startStagger);
+        // 左半侧 0..3 = L1..L4，右半侧 4..7 = R1..R4（对角同延迟）
+        staggerCache[0] = s * 3f / 3f;   // L1  最后启动
+        staggerCache[1] = s * 1f;       // L2  第一个启动（4-2-3-1）
+        staggerCache[2] = s * 2f;       // L3
+        staggerCache[3] = s * 0f;       // L4  最先启动
+        staggerCache[4] = s * 3f;       // R1（与 L2 对角）
+        staggerCache[5] = s * 1f;       // R2（与 L3 对角）
+        staggerCache[6] = s * 2f;       // R3（与 L4 对角）
+        staggerCache[7] = s * 0f;       // R4（与 L1 对角）
+        return staggerCache;
+    }
+
+    // ================================================================
+    //  地面探测
+    // ================================================================
+
+    /// <summary>安全取表面法线。</summary>
+    private Vector3 SafeUp()
+    {
+        if (mover != null)
+        {
+            Vector3 n = mover.SurfaceNormal;
+            if (n.sqrMagnitude > 0.0001f) return n;
+        }
+        Vector3 tu = transform.up;
+        return tu.sqrMagnitude > 0.0001f ? tu : Vector3.forward;
     }
 
     /// <summary>
     /// 足端地面探测。
     ///
-    /// 【★★ 射线起点必须在「骨盆上方」与「脚上方」之间插值】
-    ///   来源：视频 14:20–16:10。
-    ///   作者原话：「射线是从脚的正上方向正下方打的，
-    ///   但腿并不是从正上方或正下方来的…… 越过边缘时会突然下坠，
-    ///   腿会插进几何体。」
-    ///   他先试「把起点改成骨盆正上方」→ 明确 did not help；
-    ///   最后用「两者之间的插值」才解决。
+    /// 【★ 射线起点必须在「骨盆上方」与「脚上方」之间插值】
+    ///   来源视频 14:20–16:10。作者先试「只用骨盆上方」→ 明确 did not help；
+    ///   最后用两者之间的插值才解决。
     /// </summary>
-    private bool TraceGround(int legIndex, Vector3 target, Vector3 up, out Vector3 hitPoint)
+    private bool TraceGround(Vector3 target, Vector3 up, out Vector3 hitPoint)
     {
         /* ★ 安全降级：射线没建好就不能探测。
-         *   调用链上有三处会走到这里：
-         *     InitializeFootTargets()（Start 内，BuildFootRay 之后）
-         *     SolveLeg()             （FixedUpdate 内）
-         *   任一处环境异常都不该让整段代码抛 NullReferenceException ——
-         *   **假腿只是调试可视化，坏了不该影响本体运行。**
-         */
+         *   假腿只是可视化，坏了不该让本体抛异常。*/
         if (footRay == null)
         {
             hitPoint = target;
             return false;
         }
 
-        // 骨盆上方 = 身体中心 + up * 足部探测高度
         Vector3 pelvisAbove = transform.position + up * footRayUp;
-
-        // 脚上方 = 目标点 + up * 足部探测高度
         Vector3 footAbove = target + up * footRayUp;
-
-        // ★ 起点插值
         Vector3 start = Vector3.Lerp(footAbove, pelvisAbove, footRayStartBlend);
         Vector3 end = start - up * (footRayUp + footRayDown);
 
-        footRay.SetRadius(BallRadius * 0.15f);
+        footRay.SetRadius(footRayRadius);
 
         RaycastHit rh;
         if (!footRay.CastBetween(start, end, surfaceMask, out rh))
@@ -634,22 +646,19 @@ public class SilkSpiderBody : MonoBehaviour
         return true;
     }
 
-    /// <summary>
-    /// 腿根的世界坐标。
-    ///
-    /// ★ 用身体局部系算，所以贴到墙上时腿会自动「贴」着墙的表面排布。
-    ///   local X = 左右 · local Y = 表面法线方向 · local Z = 前后
-    ///   bodyHeight 取负 → 腿根在身体「下方」（贴着表面那一侧）。
-    /// </summary>
-    private Vector3 LegRootWorld(int i)
+    /// <summary>第 i 条腿的腿根世界坐标（来自解剖结构）。</summary>
+    private Vector3 RootWorld(int i)
     {
-        SilkSpiderLeg leg = legs[i];
+        if (anatomy != null && anatomy.LegRoots != null
+            && i < anatomy.LegRoots.Length && anatomy.LegRoots[i] != Vector3.zero)
+            return anatomy.LegRoots[i];
 
-        float side = leg.SideSign * (bodyHalfWidth + legRootSpread);
-        float along = leg.ForwardT * bodyHalfLength * legSplay;
-
-        Vector3 local = new Vector3(side, -bodyHeight, along);
-        return transform.TransformPoint(local);
+        // 兜底：解剖还没建好 → 用身体位置 + 一个粗略的横向偏移。
+        float side = (i < 4) ? -1f : 1f;
+        float k = (i % 4) / 3f - 0.5f;
+        return transform.position
+             + transform.right * (side * BallRadius * 1.2f)
+             + transform.forward * (k * BallRadius * 1.4f);
     }
 
     // ================================================================
@@ -658,41 +667,103 @@ public class SilkSpiderBody : MonoBehaviour
 
     private void LateUpdate()
     {
-        if (!showDebug || !initialized) return;
-
-        for (int i = 0; i < 8; i++)
-        {
-            SilkSpiderLeg leg = legs[i];
-
-            // 腿根 →锁定点
-            Debug.DrawLine(LegRootWorld(i), leg.LockedTarget, Color.green);
-            // 锁定点 → 目标点（这是本帧即将迈向的位置）
-            Debug.DrawLine(leg.LockedTarget, leg.NextTarget, Color.yellow);
-
-            // 足端实际位置 —— 用十字标记，不依赖 Debug.DrawSphere
-            DrawCross(leg.FootWorld, BallRadius * 0.4f, Color.cyan);
-
-            // 抬腿弧线的高度指示
-            if (enableLegs)
-            {
-                float a = Mathf.Clamp01(leg.Timing / moveAlphaWindow);
-                Vector3 up = mover.SurfaceNormal;
-                Debug.DrawLine(leg.LockedTarget,
-                               leg.LockedTarget + up * liftHeight
-                                   * SilkSpiderLeg.LiftCurveAt(a),
-                               new Color(1f, 0.5f, 0f, 0.6f));
-            }
-        }
+        if (showDebug && initialized) DrawLegDebug();
     }
 
     /// <summary>
-    /// 画一个三维十字标记。
-    ///
-    /// 【为什么不用 Debug.DrawSphere / Debug.DrawWireSphere】
-    ///   这两个 API 在不同 Unity 版本里签名有差异
-    ///   （带 duration 的重载在旧版本不存在），
-    ///   而 Debug.DrawLine 是最古老、最稳定的那个。
-    ///   → 调试辅助代码不值得为它冒编译风险。
+    /// ★ 步态图必须在 OnGUI 里画 —— GUI.DrawTexture / GUI.Label 只在
+    ///   IMGUI 事件（OnGUI / OnGUILayout）里有效。
+    ///   放在 LateUpdate 里**能编译通过但什么都不会显示**，
+    ///   而且不会报任何错 → 极难排查。
+    /// </summary>
+    private void OnGUI()
+    {
+        if (showGaitDiagram && initialized) DrawGaitDiagram();
+    }
+
+    private void DrawLegDebug()
+    {
+        Vector3 up = SafeUp();
+        for (int i = 0; i < 8; i++)
+        {
+            DrawCross(legState[i].LockedTarget, BallRadius * 0.35f, Color.green);
+            DrawCross(legState[i].NextTarget, BallRadius * 0.3f, Color.yellow);
+            DrawCross(footWorld[i], BallRadius * 0.4f, Color.cyan);
+            Debug.DrawLine(rootWorld[i], footWorld[i],
+                new Color(1f, 1f, 1f, 0.35f));
+
+            float h = liftHeight * Mathf.Sin(
+                Mathf.Clamp01(SwingAlpha(i)) * Mathf.PI);
+            Debug.DrawLine(footWorld[i], footWorld[i] + up * h,
+                new Color(1f, 0.5f, 0f, 0.7f));
+        }
+    }
+
+    private float SwingAlpha(int i)
+    {
+        float phase = legState[i].Phase;
+        if (phase < dutyFactor) return 0f;
+        float swingEnd = dutyFactor + swingPortion;
+        if (phase >= swingEnd) return 1f;
+        return (phase - dutyFactor) / swingPortion;
+    }
+
+    /// <summary>
+    /// ★ 步态图 —— 8 条腿的时序条带。
+    ///   黑条 = 支撑相，白底 = 摆动相。
+    ///   对照论文的 gait diagram，一眼能看出是不是交替四足步态。
+    /// </summary>
+    private void DrawGaitDiagram()
+    {
+        const float x0 = 12f;
+        const float w = 240f;
+        const float rowH = 12f;
+        const float top = Screen.height - 20f;
+
+        for (int i = 0; i < 8; i++)
+        {
+            float y = top - rowH * (i + 1);
+            float ph = legState[i].Phase;
+
+            // 底：摆动相（浅色）
+            GUI.color = new Color(0.25f, 0.25f, 0.25f, 0.9f);
+            GUI.DrawTexture(new Rect(x0, y, w, rowH - 1f), Texture2D.whiteTexture);
+
+            // 支撑相：填满 [0, duty) 以及 [duty+swing, 1)
+            GUI.color = new Color(0.85f, 0.75f, 0.2f, 1f);
+            float stanceEnd = dutyFactor * w;
+            GUI.DrawTexture(new Rect(x0, y, stanceEnd, rowH - 1f), Texture2D.whiteTexture);
+
+            // 当前相位游标
+            GUI.color = Color.white;
+            GUI.DrawTexture(
+                new Rect(x0 + ph * w - 1f, y - 2f, 2f, rowH + 3f),
+                Texture2D.whiteTexture);
+
+            GUI.color = Color.white;
+            GUI.Label(new Rect(x0 - 60f, y - 3f, 58f, rowH),
+                LegName(i), GUI.skin.label);
+        }
+
+        // 摆动段高亮
+        GUI.color = new Color(0.4f, 0.8f, 1f, 0.5f);
+        GUI.DrawTexture(new Rect(x0 + dutyFactor * w, top - rowH * 8,
+            swingPortion * w, rowH * 8f), Texture2D.whiteTexture);
+        GUI.color = Color.white;
+    }
+
+    private static string LegName(int i)
+    {
+        string side = i < 4 ? "L" : "R";
+        return side + (i % 4 + 1);
+    }
+
+    /// <summary>
+    /// 画三维十字标记。
+    /// 【为什么不用 Debug.DrawSphere / DrawWireSphere】
+    ///   这两个 API 在不同 Unity 版本里重载签名有差异
+    ///   （带 duration 的重载在旧版本不存在），而 DrawLine 是最稳定的。
+    ///   调试辅助代码不值得为它冒编译风险。★ 已栽过两次。
     /// </summary>
     private static void DrawCross(Vector3 center, float size, Color col)
     {
