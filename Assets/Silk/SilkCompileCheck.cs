@@ -79,7 +79,7 @@ public static class SilkCompileCheck
             if (File.Exists(logPath))
             {
                 var info = new FileInfo(logPath);
-                long readFrom = Math.Max(0, info.Length - 512 * 1024);
+                long readFrom = System.Math.Max(0, info.Length - 512 * 1024);
                 using (var fs = new FileStream(logPath, FileMode.Open, FileAccess.Read,
                                                FileShare.ReadWrite))
                 {

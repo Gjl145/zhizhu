@@ -1,0 +1,487 @@
+using UnityEngine;
+
+/// <summary>
+/// 贴面移动测试场 —— ★ **今天第一个能立刻看到效果的交付物**
+///
+/// 【为什么必须有独立测试场 · MEMORY 迭代纪律】
+///   「一次一特性，每个特性配独立测试关卡」。
+///   贴面移动需要的几何条件很具体：
+///     · 一面**足够高的竖墙**（至少 8 格）—— 验证「爬墙」
+///     · 一段**矮台阶**（2~3 格）—— 验证「上台阶不卡」
+///     · 一个**90° 内角**—— 验证「转角不抽搐」（原项目最难的场景）
+///     · 一段**顶部悬空的横梁**—— 验证「天花板也能走」
+///   这些在现有的住宅关卡里凑不齐，且会互相干扰定位。
+///
+/// 【坐标系】X = 左右 / Y = 前后 / Z = 高度。
+///   所以「竖墙」是 XY 平面上的长方体，「台阶」是抬高 Z。
+///
+/// 【与主关卡的关系】
+///   只在 freeBuildMode（自由搭建模式）下自动生成，
+///   不动 createTestLevel 的原有住宅关卡 —— 用户正在自由搭建，
+///   绝不能把它清掉（MEMORY 第十三节）。
+/// </summary>
+public class SilkSpiderTestStage : MonoBehaviour
+{
+    [Header("开关")]
+    [Tooltip("★ **默认勾上** —— 进 Play 立刻能看到测试场与假骨骼，不用手动建。\n"
+        + "为什么这次默认开：MEMORY 迭代纪律说「一次一特性配独立测试关卡」，\n"
+        + "  测试场就是那个独立关卡。它是纯几何 + 幂等构建，\n"
+        + "  不碰住宅关卡、不碰 freeBuildMode 的自由搭建成果。\n"
+        + "★ 若你要在自己的场景里干净地试，把这个勾掉。")]
+    public bool buildOnStart = true;
+
+    [Header("尺寸（格）")]
+    [Tooltip("主墙高度。至少要8 格以上才看得出「爬墙」")]
+    public float wallHeight = 14f;
+
+    [Tooltip("主墙宽度")]
+    public float wallWidth = 10f;
+
+    [Tooltip("主墙厚度")]
+    public float wallDepth = 2f;
+
+    [Tooltip("墙前方留给球活动的纵深")]
+    public float floorDepth = 16f;
+
+    [Tooltip("台阶数量。三个不同高度，覆盖「上台阶」")]
+    public int stairCount = 3;
+
+    [Tooltip("每级台阶的升高（格）。按 jumpSpeed=32 / g=98 算，\n"
+        + "单次跳跃 apex = 32²/(2×98) = 5.2 格，3 格台阶爬得上去")]
+    public float stairRise = 3f;
+
+    [Tooltip("每级台阶的进深（格）。要大于球径 2.5 格，否则球会卡在棱上")]
+    public float stairRun = 5f;
+
+    [Tooltip("横梁离地高度（格）。做成「天花板」验证倒挂行走")]
+    public float beamHeight = 9f;
+
+    private static readonly Color WallColor = new Color(0.72f, 0.74f, 0.78f);
+    private static readonly Color StairColor = new Color(0.86f, 0.64f, 0.42f);
+    private static readonly Color BeamColor = new Color(0.55f, 0.72f, 0.62f);
+    private static readonly Color FloorColor = new Color(0.62f, 0.64f, 0.68f);
+
+    private void Awake()
+    {
+        /* ★★ 必须在 **Awake** 里做，不能放 Start。
+         *
+         * 【为什么】
+         *   控制器 SilkParkourController.Start()（SilkBuilder.cs 4463起）
+         *   会：① 若 createTestLevel 则 RebuildParkourStage()
+         *        ② transform.position = startPosition     （默认 -30, 0, -32.75）
+         *   本组件的 Start 与它**同帧、顺序不保证**——
+         *   若控制器先跑，住宅已建、球已摆到旧坐标，我再改字段也来不及。
+         *   ★ Unity 保证：同一物体上**所有 Awake 早于所有 Start**。
+         *   → 这是唯一能可靠抢在关卡生成之前改字段的地方。
+         *
+         * 【两件事】
+         *  ① createTestLevel = false → 别建住宅关卡，
+         *     否则两套几何叠加，射线打到住宅的墙，看到的一切都是错的。
+         *  ② freeBuildMode = true    → 球自动落到场景最高处。
+         *     ★ 这条是关键：freeBuildMode 开时控制器走 DetectFreeBuildSpawn()，
+         *       用 OverlapBox 扫全场景找Z 最高的顶面 —— 正好落在测试场的地板上。
+         *       不开的话 startPosition 是写死的住宅坐标 (-30, 0, -32.75)，
+         *       那里**没有地板**，球会直接掉出场景（就是「小球很容易丢了」那个老问题）。
+         *
+         * 【恢复方式】
+         *   SilkBuilder 的 Create Test Level 与 Free Build Mode 都勾回去，
+         *   并把本组件的 Build On Start 勾掉。
+         */
+        if (!buildOnStart) return;
+
+        SilkBuilder builder = GetComponent<SilkBuilder>();
+        if (builder == null) return;
+
+        if (builder.createTestLevel)
+        {
+            builder.createTestLevel = false;
+            Debug.Log("[SpiderTest] 已自动关掉 Create Test Level —— "
+                    + "测试场与代码生成的住宅关卡不能共存。");
+        }
+
+        /* freeBuildMode 只在它本来是false 时才改。
+         * ★ 若用户本来就开着（自己在搭场景），不能覆盖 ——
+         *   那是他的选择，而且 DetectFreeBuildSpawn 本来就是他要的。*/
+        if (!builder.freeBuildMode)
+        {
+            builder.freeBuildMode = true;
+            Debug.Log("[SpiderTest] 已自动开Free Build Mode —— "
+                    + "让球自动落到测试场地板上，而不是住宅区的旧坐标。");
+        }
+
+        /* ★★ 关键：测试场必须在**这里（Awake）就建好**，不能等 Start。
+         *
+         * 【为什么】
+         *   控制器 Start() 里是：
+         *       transform.position = startPosition;
+         *       CreateVisual();          ← 球在这里建出来
+         *   ★ 但它用的是 **startPosition**（写死的字段），
+         *     **不是** EffectiveStartPosition（那个才走 DetectFreeBuildSpawn）。
+         *     → 所以 freeBuildMode 在 Start 阶段对落点**毫无影响**。
+         *
+         *   而 Tab 切到 Parkour 时（HandleModeSwitch, 5054行）才走：
+         *       if (builder.freeBuildMode) startPosition = DetectFreeBuildSpawn();
+         *
+         *   → **结论：球要正确落在地板上，必须切一次 Tab。**
+         *     这也是原项目「小球很容易丢了」的同一个老问题的解法。
+         *
+         *   ★ 无论地板建在Awake 还是 Start 都不影响这一点 ——
+         *     因为 DetectFreeBuildSpawn 只在 Tab 切换时被调用。
+         *     建早一点只是保证「按 Tab 时地板已经在场」。
+         */
+        Build();
+    }
+
+    /// <summary>
+    /// 兜底：把任何**已存在**的旧关卡几何清掉。
+    ///
+    /// 【为什么 Awake 已经关掉了 createTestLevel，还要再做一次】
+    ///   `Awake` 只能拦住「还没生成」的情况。但住宅也可能在这些时机冒出来：
+    ///     · Tab 切模式时 RebuildParkourStage()（若 createTestLevel 被别处改回true）
+    ///     · 用户在检查器里手动改过开关
+    ///     · 上一次 Play 的残留（切回 FreeFly 时才Destroy，某些路径不Destroy）
+    ///   → 与其枚举所有时机，**不如每帧确认一次「场里只有我的测试场」**。
+    ///
+    /// 【为什么是 LateUpdate 而不是每帧 Clear】
+    ///   Clear() 会遍历全场做 Find，这是有成本的。
+    ///   而住宅生成只发生在关卡重建时（切模式 / 启动），
+    ///   所以**只在相位变化的那一帧查一次**就够了 ——
+    ///   LateUpdate 里检查是否刚切过模式，切了才清。
+    /// </summary>
+    private void LateUpdate()
+    {
+        if (!buildOnStart) return;
+
+        /*★ 用 SilkBuilder.parkourMode，**不用**控制器的 mode 字段——
+         *   `SilkControlMode mode` 是 SilkParkourController 的**私有**字段
+         *   （SilkBuilder.cs:5017，无访问修饰符 = private），
+         *   从本文件读它会报 **CS0122「不可从外部访问」**。
+         *   `parkourMode` 是 public（SilkBuilder.cs:2759），
+         *   且控制器切模式时会同步（SilkBuilder.cs:5036）：
+         *       builder.parkourMode = (mode == SilkControlMode.Parkour);
+         *   ★ MEMORY 第六节：跨类访问私有成员是本项目栽过 8 次的坑。*/
+        SilkBuilder builder = GetComponent<SilkBuilder>();
+        if (builder == null) return;
+
+        bool inParkour = builder.parkourMode;
+
+        // 只在「刚切进 Parkour」的那一帧动手
+        if (!inParkour)
+        {
+            lastParkour = false;
+            return;
+        }
+
+        if (lastParkour) return;      // 已经在Parkour 里且没再切换 → 不重复清
+        lastParkour = true;
+
+        ClearForeignStages();
+    }
+
+    /// <summary>上一次检查时是否已在 Parkour 世界（用于只在切换那一帧清场）。</summary>
+    private bool lastParkour;
+
+    /// <summary>清掉所有不是 SpiderTestStage 的旧关卡几何。</summary>
+    private void ClearForeignStages()
+    {
+        // 这些 Clear 都是幂等的（找不到就什么都不做），
+        // 住宅/摆荡关卡若没被生成就是空操作
+        SilkParkourStage.Clear();
+        SilkSwingTestStage.Clear();
+        SilkSwingUnitStage.Clear();
+        HouseBlockout.Clear();
+
+        // 兜底：扫一遍全场，把名字带关卡前缀的残留物删掉
+        // （重建失败的半成品、或重建时 Destroy 漏掉的）
+        GameObject[] all = FindObjectsOfType<GameObject>();
+        int removed = 0;
+
+        for (int i = 0; i < all.Length; i++)
+        {
+            GameObject go = all[i];
+            if (go == null) continue;
+
+            // ★ 只删**根物体**，子物体随父级一起消失。
+            //   判断依据：没有父物体（自己就是根）
+            if (go.transform.parent != null) continue;
+            if (go.name == "SpiderTestStage") continue;
+
+            string n = go.name;
+            bool looksLikeStage =
+                n.StartsWith("Plat_") || n.StartsWith("Barrier_") ||
+                n.Contains("House") || n.Contains("Stage_") ||
+                n.Contains("Swing") || n.Contains("Anchor");
+
+            if (looksLikeStage)
+            {
+                Debug.LogWarning("[SpiderTest] 发现残留关卡物体，已删除：" + n);
+                Destroy(go);
+                removed++;
+            }
+        }
+
+        if (removed > 0)
+            Debug.LogWarning("[SpiderTest] 共清理 " + removed
+                    + " 个旧关卡物体。测试场现在应该是干净的了。");
+    }
+
+    private void Start()
+    {
+        // ★ 刻意留空：几何已在 Awake 建好。
+        //   若放 Start 建，控制器的 Start 可能先跑完，AutoAttach 链就乱了。
+
+        /*★★ 必须在这里做「缺什么补什么」——
+         *   否则玩家看到的是**一片空白**。
+         *
+         * 【查清的事实】
+         *   SampleScene 里只有 `bossbattle` 一个物体，它挂 `SilkBuilder`。
+         *   而相机、控制器（SilkPlayer）、球**全都是 `SilkBuilder.Build()` 里
+         *   运行时创建的**（SilkBuilder.cs 3630–3660）：
+         *
+         *       var camGO = new GameObject("Main Camera");
+         *       var playerGO = new GameObject("SilkPlayer");
+         *           playerGO.AddComponent<SilkParkourController>();
+         *
+         *   ★ 但 Build() 开头有**幂等守卫**（SilkBuilder.cs 3614）：
+         *       var existing = Object.FindObjectOfType<SilkBuilder>();
+         *       if (existing != null) { ...; return; }   ← 直接跳过！
+         *
+         *   场景里已经有 `bossbattle`（它就是 SilkBuilder）→
+         *   → Build() 整个跳过 → **相机没建、控制器没建、球没建**
+         *   → 屏幕上什么都没有。
+         *
+         * 【这就是「啥也没看到」的真正原因】
+         *   不是组件没挂、不是腿没生成，是**根本没有相机在渲染**。
+         */
+        EnsurePlayable();
+    }
+
+    /// <summary>
+    /// 保证场上**至少有一个能渲染的相机 + 一个光源**。
+    ///
+    /// ★★ 这个方法是「用户啥也没看到」的**最后一层兜底**，
+    ///    必须在建几何**之前**就跑，且完全不依赖 SilkParkourController。
+    ///
+    /// 【为什么单独抽出来】
+    ///   Build() 由 Awake 调用（比所有 Start 都早），
+    ///   而 EnsurePlayable() 在 Start 里调—— 那时相机已经晚了一帧，
+    ///   首帧渲染出来是黑的。所以 Build() 里必须自己先调一次。
+    ///
+    /// 【为什么场景里没有相机】
+    ///   SampleScene.unity 里只有一个 `bossbattle`（挂 SilkBuilder），
+    ///   Camera / Light / MeshRenderer 的数量**都是 0**。
+    ///   相机原本是 SilkBuilder.Build() 在运行时 new 出来的，
+    ///   但那个方法开头有幂等守卫 `FindObjectOfType&lt;SilkBuilder&gt;() != null → return`，
+    ///   场景里已经有 bossbattle 了 → **相机永远不会被创建**。
+    ///
+    /// ★ 全部幂等：已存在的绝不重复创建。
+    /// </summary>
+    private void EnsureCameraAndLight()
+    {
+        // ---------- 相机 ----------
+        Camera cam = Camera.main;
+        if (cam == null) cam = FindObjectOfType<Camera>();
+
+        if (cam == null)
+        {
+            var camGO = new GameObject("SpiderTestCamera");
+            camGO.tag = "MainCamera";
+
+            cam = camGO.AddComponent<Camera>();
+            cam.clearFlags = CameraClearFlags.SolidColor;
+            cam.backgroundColor = new Color(0.10f, 0.11f, 0.14f);
+            cam.nearClipPlane = 0.05f;
+            cam.farClipPlane = 500f;
+
+            /*★ 相机摆在 Y 轴负侧、Z 轴上方往原点看。
+             *   本项目是 **Z-up**（MEMORY 第二节），
+             *   所以用 LookRotation 的双参数重载显式指定参考上轴 = +Z。
+             *   ★ 不要先给transform.up 赋值再LookAt ——
+             *     那是两次独立重算rotation，叠加后朝向不可控。*/
+            camGO.transform.position = new Vector3(0f, -26f, 16f);
+            camGO.transform.rotation = Quaternion.LookRotation(
+                (Vector3.zero - camGO.transform.position).normalized,
+                Vector3.forward);
+
+            camGO.AddComponent<SimpleOrbitCamera>();
+
+            Debug.Log("[SpiderTest] 场景里没有相机，已自动创建 SpiderTestCamera。");
+        }
+
+        // ---------- 光照（没光的话几何全黑，一样看不见）----------
+        Light existingLight = FindObjectOfType<Light>();
+        if (existingLight == null)
+        {
+            var lightGO = new GameObject("SpiderTestLight");
+            lightGO.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
+
+            var light = lightGO.AddComponent<Light>();
+            light.type = LightType.Directional;
+            light.intensity = 1.1f;
+
+            RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
+            RenderSettings.ambientLight = new Color(0.42f, 0.44f, 0.48f);
+
+            Debug.Log("[SpiderTest] 场景里没有光源，已自动创建 SpiderTestLight。");
+        }
+    }
+
+    /// <summary>
+    /// 补齐「能看见、能操作」所必需的东西：相机、光源、控制器。
+    ///
+    /// ★ 全部幂等——已有的绝不重复创建。
+    /// </summary>
+    private void EnsurePlayable()
+    {
+        // 相机 + 光源：Build() 里已经调过一次，这里再调一次保证幂等。
+        EnsureCameraAndLight();
+
+        // ---------- 控制器 ----------
+        SilkParkourController ctrl = GetComponent<SilkParkourController>();
+        if (ctrl == null) ctrl = FindObjectOfType<SilkParkourController>();
+
+        if (ctrl == null)
+        {
+            var playerGO = new GameObject("SilkPlayer");
+            playerGO.transform.position = new Vector3(0f, -8f, 3f);
+            ctrl = playerGO.AddComponent<SilkParkourController>();
+            Debug.Log("[SpiderTest] 场景里没有控制器，已自动创建 SilkPlayer。");
+        }
+
+        Debug.Log("[SpiderTest] ===== 测试场就绪 =====\n"
+                + "  按 Tab 切到 Parkour（球才会落到地板上）\n"
+                + "  再勾上这三个开关：\n"
+                + "    SilkSpiderSurfaceMove.Enable Input\n"
+                + "    SilkSpiderSurfaceMove.Show Debug\n"
+                + "    SilkSpiderBody.Enable Legs← 不勾看不到腿\n"
+                + "  调试开关本身会保留本次运行的状态；"
+                + "若腿没出现，勾上 Enable Legs 再切一次 Tab。");
+    }
+
+    /// <summary>手动调用也能建（可从 Unity 编辑器右键菜单触发）。</summary>
+    [ContextMenu("构建贴面测试场")]
+    public void Build()
+    {
+        // ★ 先保证「有东西可看」—— 相机/光源必须在建几何之前就位，
+        //   否则 Build() 刚跑完的那一帧画面还是黑的。
+        EnsureCameraAndLight();
+
+        // 幂等：重复调用不会堆出两层地板
+        Transform existing = transform.Find("SpiderTestStage");
+        if (existing != null) Destroy(existing.gameObject);
+
+        var root = new GameObject("SpiderTestStage");
+        root.transform.SetParent(transform, false);
+
+        // ★ 一切以球心为原点 —— 让球出生在 (0, 0, 高度)，
+        //   离墙一段距离正好用来测试「撞墙 → 贴上去」这个过程。
+        float floorY = -wallDepth * 0.5f - 3f;   // 墙在 Y=0，球在 Y=+8 的开阔地
+
+        // ---------- 地面 ----------
+        MakeBox(root.transform, "Floor",
+            new Vector3(0f, floorY * 0.5f, -1f),
+            new Vector3(wallWidth + 16f, Mathf.Abs(floorY) + 6f, 2f),
+            FloorColor);
+
+        // ---------- 主墙（验证爬墙）----------
+        MakeBox(root.transform, "MainWall",
+            new Vector3(0f, 0f, wallHeight * 0.5f),
+            new Vector3(wallWidth, wallDepth, wallHeight),
+            WallColor);
+
+        // ---------- 台阶（验证上台阶）----------
+        // 放在墙的左侧，沿 +X 往上，每级升高 stairRise
+        float stairX = wallWidth * 0.5f + stairRun * (stairCount + 1);
+        for (int i = 0; i < stairCount; i++)
+        {
+            float h = stairRise * (i + 1);
+            MakeBox(root.transform, "Stair_" + i,
+                new Vector3(stairX - stairRun * (i + 0.5f), 0f, h * 0.5f),
+                new Vector3(stairRun, wallDepth, h),
+                StairColor);
+        }
+
+        // ---------- 横梁（验证天花板倒挂）----------
+        // 架在墙前 6 格处，高度 beamHeight
+        MakeBox(root.transform, "CeilingBeam",
+            new Vector3(0f, -6f, beamHeight),
+            new Vector3(wallWidth + 6f, 3f, 1f),
+            BeamColor);
+
+        // ---------- 90 度内角（验证转角）----------
+        // 两面墙成直角，球从一面走到另一面 —— 原项目这里最容易抽搐
+        MakeBox(root.transform, "CornerWall",
+            new Vector3(wallWidth * 0.5f + 4f, -4f, 5f),
+            new Vector3(1.5f, 10f, 10f),
+            WallColor);
+
+        Debug.Log("[SpiderTest] 测试场已建：主墙 " + wallWidth + "×" + wallHeight
+                + " 格 / " + stairCount + " 级台阶 / 横梁 z=" + beamHeight
+                + " / 内角在 (" + (wallWidth * 0.5f + 4f) + ", -4)。\n"
+                + "★ 现在按一下 Tab 切到 Parkour —— 球会自动落到地板上。\n"
+                + "  开关：SilkSpiderSurfaceMove 的 Enable Input 与Show Debug，\n"
+                + "        SilkSpiderBody 的 Enable Legs。");
+    }
+
+    /// <summary>
+    /// 建一个带BoxCollider 的立方体。
+    ///
+    /// ★★★ 【踩过的坑 —— 之前这里写的是 <c>new GameObject(name)</c>】
+    ///   空GameObject 上**没有 MeshFilter / MeshRenderer**，
+    ///   所以 <c>GetComponent&lt;MeshRenderer&gt;()</c> 永远返回 null，
+    ///   下面的着色器赋色整段被跳过——
+    ///   **结果：碰撞体在、几何不可见。**
+    ///   （有碰撞体 ≠ 能看见。用户说「啥也没看到」时这是第二个独立根因，
+    ///   与相机/控制器那个循环依赖是两回事。）
+    ///
+    /// 【正确做法】
+    ///   <c>GameObject.CreatePrimitive(PrimitiveType.Cube)</c>
+    ///   自带 MeshFilter + MeshRenderer + BoxCollider。
+    ///   ★ 它的 Cube 网格是 1×1×1，正好配transform.localScale = size；
+    ///     BoxCollider 的 size 也是单位立方，一行都不用改。
+    ///   ★ 全程只用正缩放 —— 负缩放会让法线翻转，这里不需要。
+    ///
+    /// 【为什么不用自己 new Mesh】
+    ///   Built-in 管线里 <c>Resources.GetBuiltinResource&lt;Mesh&gt;("Cube.fbx")</c>
+    ///   在部分版本上路径已变，而 CreatePrimitive 是稳定公开 API。
+    /// </summary>
+    private static void MakeBox(Transform parent, string name,
+                                Vector3 localPos, Vector3 size, Color color)
+    {
+        // ★ CreatePrimitive 而不是 new GameObject —— 后者没有渲染组件
+        GameObject go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        go.name = name;
+        go.transform.SetParent(parent, false);
+        go.transform.localPosition = localPos;
+        go.transform.localScale = size;          // 缩放直接等于尺寸（Cube 网格是单位立方）
+
+        // CreatePrimitive 自带 BoxCollider(size = 1)，与 localScale 配合正好
+        // 是 size 的实际尺寸，无需再动。
+
+        // 显式补一句 null 检查：万一将来 Primitive 行为变了，不要静默变黑
+        MeshRenderer mr = go.GetComponent<MeshRenderer>();
+        if (mr == null)
+        {
+            Debug.LogWarning("[SpiderTest] " + name+ " 没有 MeshRenderer，将不可见。");
+            return;
+        }
+
+        /* ★★ Built-in 管线的标准着色器名是 "Standard"。
+         *   万一项目改过管线设置，退回 Diffuse 以免整块变洋红。*/
+        Shader sh = Shader.Find("Standard");
+        if (sh == null) sh = Shader.Find("Diffuse");
+
+        if (sh != null)
+        {
+            Material mat = mr.material;         // material 会自动实例化（= 触发警告的那行）
+            mat.shader = sh;
+            if (mat.HasProperty("_Color")) mat.color = color;
+            if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", color);
+        }
+        else
+        {
+            Debug.LogWarning("[SpiderTest] 找不到 Standard/Diffuse 着色器，"
+                           + name + " 可能是洋红色。");
+        }
+    }
+}
