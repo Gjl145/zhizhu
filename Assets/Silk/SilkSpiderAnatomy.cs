@@ -215,13 +215,26 @@ public class SilkSpiderAnatomy : MonoBehaviour
     /// <summary>
     /// 头胸部 = 扁椭球 + 略微隆起的中脊。
     /// ★ 为什么要「扁」：蜘蛛不是球，是被压扁的。高度只有宽度的 0.48 左右。
+    ///
+    ///★★★ 2026-10-09 修重大 bug：头胸部此前**完全不可见**
+    ///   原代码 `new GameObject("Cephalothorax")` 建的是**空物体**，
+    ///   既没有 MeshFilter 也没有 MeshRenderer，
+    ///   而 Paint() 第一行就是 `if (mr == null) return;` → 直接返回，什么都没做。
+    ///   → 结果：画面上根本没有身体，只剩玩家本体的蓝球 + 8 条腿。
+    ///   → **这就是用户说的「不还是球加腿吗」的直接原因。**
+    ///   ★ 教训：new GameObject() 之后不AddComponent<MeshFilter>()，
+    ///     后续所有 localScale / Paint 都是空操作。这条静默失败，没有任何报错。
     /// </summary>
     private void BuildCephalothorax()
     {
-        var go = new GameObject("Cephalothorax");
+        // ★ 必须用 Sphere 原型（自带 MeshFilter/MeshRenderer），不能用空 GameObject
+        var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        go.name = "Cephalothorax";
         go.transform.SetParent(VisualRoot, false);
+        KillCollider(go);
 
-        // 本项目 Z-up：Z = 法线方向（厚度），X = 左右（宽）， Y = 前后（长）
+        // 本项目Z-up：Z = 法线方向（厚度），X = 左右（宽）， Y = 前后（长）
+        // ★ Sphere 原型半径 0.5 → localScale 要乘 2 才是真实直径
         go.transform.localScale = new Vector3(
             cephaloWidth * 2f, cephaloLength * 2f, cephaloHeight * 2f);
 

@@ -285,6 +285,13 @@ public class SilkSpiderBody : MonoBehaviour
     private Vector3 velocity;
     private bool initialized;
     private Collider selfCollider;
+
+    /// <summary>
+    /// ★ 蜘蛛自己的碰撞代理（isTrigger 球，**无渲染器**）。
+    /// 用于让足端射线能命中脚下地面、但不命中自己。
+    /// 与旧的 Body 球并存 —— Body 已退成不可见代理。
+    /// </summary>
+    private SphereCollider spiderProxyCollider;
     private SilkSphereCast footRay;
     private float gaitClock;
     private Vector3 bodyBasePos;
@@ -378,7 +385,26 @@ public class SilkSpiderBody : MonoBehaviour
         selfCollider = FindSelfCollider();
         if (selfCollider == null)
             Debug.LogWarning("[SpiderBody] 找不到自身 Collider，足端射线会打到自己。");
-        if (footRay != null) footRay.SetIgnore(selfCollider);
+
+        if (footRay == null) yield break;
+
+        footRay.SetIgnore(selfCollider);
+
+        /*★★ 额外把「整个本体根」也加入忽略。
+         *
+         * 【为什么必须】独立化后本体上有**两个**会挡住射线的碰撞体：
+         *   ① Body 的 groundProbe（旧球遗留）
+         *   ② SpiderProxy（我新建的）
+         * 而 SilkSphereCast.SetIgnore() 只能接收**一个** Collider，
+         * 逐个SetIgnore 会互相覆盖，漏掉的那个照样挡住射线。
+         * → 用忽略根 Transform 的方式一次排除全部子碰撞体。
+         *
+         * 【为什么这样安全】项目里所有几何体都在 Default 层（见 MEMORY 第二节），
+         * 不能靠摘 Layer 排除。 SilkSphereCast.CastAll 里的判据是
+         *     all[i].collider.transform.root == ignoreRoot
+         * 而场景几何体不是本体的子级，root 不会等于本体根 → 不会被误排除。
+         */
+        footRay.SetIgnoreRoot(transform);
     }
 
     private Collider FindSelfCollider()
@@ -402,6 +428,142 @@ public class SilkSpiderBody : MonoBehaviour
             anatomy = gameObject.AddComponent<SilkSpiderAnatomy>();
 
         anatomy.Build(transform);
+
+        /*★★★ 独立化：蜘蛛有自己的可见体与碰撞体，不再依附球的造型。
+         *
+         * 【用户原话】「这个不还是球加腿吗？我现在要的是真的蜘蛛模型」
+         *
+         * 【两个独立根因，都必须修，缺一个就还是「球加腿」】
+         *
+         *   根因 1（已修，在 SilkSpiderAnatomy）：头胸部用 new GameObject() 创建，
+         *     既无 MeshFilter 也无 MeshRenderer → Paint() 首行就 return →
+         *     **头胸部完全不可见**。画面上只剩蓝球 + 8 条腿。
+         *
+         *   根因 2（本处）：玩家的 Body 是半径 1.25 的**蓝球**，
+         *     蜘蛛解剖体是它的子物体。即使头胸部建出来了，
+         *     也会被这个球**整个包住** → 视觉上还是「一个球」。
+         *
+         * 【正确架构 —— 视觉/物理彻底解耦】
+         *   · SpiderRig（本组件 transform 下的独立根）
+         *       ├─ 可视：头胸部 + 腹部 + 腹柄 + 螯肢 + 8 眼 + 8 条五节腿
+         *       └─ 碰撞：SpiderProxy（SphereCollider 触发器，**无渲染器**）
+         *   · Body / Nose：旧球形外观，渲染器关闭，仅保留原物理行为
+         *
+         *   ★ 为什么碰撞要自己建一个：
+         *     球是**旧架构遗留**，它的半径(1.25) 与地面吸附逻辑深度耦合
+         *     （ResolveGround / groundProbe / 相机距离 / 门洞净宽全按它算）。
+         *     贸然删掉会连带打断一堆已验证的物理与关卡参数。
+         *     → 正确做法：让球退成「不可见的碰撞代理」，
+         *       可见的部分全部交给蜘蛛。以后换 FBX 模型时，
+         *       只需替换可视部分，物理与关卡参数一个都不用动。
+         */
+        BuildSpiderProxyCollider();
+        HideBallVisuals();
+
+        Debug.Log("[SpiderBody] 蜘蛛独立化完成："
+            + "可见体 = 头胸部 + 腹部 + 腹柄 + 螯肢 + 8 眼 + 8 条五节腿；"
+            + "碰撞体 = SpiderProxy（球退为不可见代理）。"
+            + "不再有「球加腿」。");
+    }
+
+    /// <summary>
+    /// 给蜘蛛建一个独立的球形触发器碰撞体（**不带渲染器**）。
+    ///
+    /// 【为什么必须有】
+    ///   足端射线（SilkSphereCast）要能命中自己脚下的地面，
+    ///   但不能命中自己。旧的 Body 球提供了这件事，
+    ///   现在 Body 不可见了，但**碰撞体不能跟着消失**——
+    ///   否则足端射线会直接穿过自己的身体，或者身体失去地面吸附。
+    ///
+    /// 【为什么用 isTrigger】
+    ///   与原Body 的 groundProbe 一致：不产生碰撞响应、不与物理体打架，
+    ///   只作为地面探测与射线命中的目标。
+    /// </summary>
+    private void BuildSpiderProxyCollider()
+    {
+        var proxyGo = new GameObject("SpiderProxy");
+        proxyGo.transform.SetParent(transform, false);
+        proxyGo.transform.localPosition = Vector3.zero;
+
+        var sc = proxyGo.AddComponent<SphereCollider>();
+        sc.isTrigger = true;
+
+        // ★ 半径换算：SphereCollider 的 radius 是**本地单位下的半径**，
+        //   缩放会乘上去。所以要除掉 lossyScale，
+        //   让最终世界半径 = visualRadius（与旧 Body 的视觉/物理半径一致）。
+        //   不除 → 实际碰撞半径 = radius × lossyScale，会随父级缩放漂移。
+        float scale = transform.lossyScale.x;
+        if (scale < 0.0001f) scale = 1f;
+        sc.radius = BallRadius / scale;
+
+        spiderProxyCollider = sc;
+    }
+
+    /// <summary>
+    /// 关掉玩家本体球（Body）与朝向球（Nose）的渲染器，只保留 Collider。
+    ///
+    /// ★ 这是「球加腿」的最后一道闸门：
+    ///   只要球还可见，无论解剖体建得多好，画面中心永远是个球。
+    /// </summary>
+    private void HideBallVisuals()
+    {
+        int hidden = 0;
+
+        HideRenderersUnder(transform, "Body", ref hidden);
+        HideRenderersUnder(transform, "Nose", ref hidden);
+
+        // ---- 兜底：直接挂在本体上的渲染器（没挂在 Body / Nose 下的话）----
+        Renderer[] own = GetComponents<Renderer>();
+        for (int i = 0; i < own.Length; i++)
+        {
+            if (own[i] == null || !own[i].enabled) continue;
+            own[i].enabled = false;
+            hidden++;
+        }
+
+        if (hidden == 0)
+            Debug.LogWarning("[SpiderBody] 一个球体渲染器都没找到。"
+                + "若画面上仍有蓝球，说明球的命名不是 Body/Nose，"
+                + "请把这里的名字补上。");
+
+        Debug.Log("[SpiderBody] 已隐藏旧球体渲染器 " + hidden + " 个（碰撞体保留）。");
+    }
+
+    /// <summary>递归关闭指定名字子物体下的所有渲染器。</summary>
+    private static void HideRenderersUnder(Transform root, string name, ref int count)
+    {
+        Transform t = FindDeepChild(root, name);
+        if (t == null)
+        {
+            // 找不到不算错：Nose 未必存在，Body 名字可能被改过
+            return;
+        }
+        Renderer[] rs = t.GetComponentsInChildren<Renderer>(true);
+        for (int i = 0; i < rs.Length; i++)
+        {
+            if (rs[i] == null || !rs[i].enabled) continue;
+            rs[i].enabled = false;
+            count++;
+        }
+    }
+
+    /// <summary>
+    /// 递归找子物体（Transform.Find 只找直接子级）。
+    /// Body 有可能挂在 visual 节点下而不是本体根下。
+    /// </summary>
+    private static Transform FindDeepChild(Transform root, string name)
+    {
+        if (root == null) return null;
+        int n = root.childCount;
+        for (int i = 0; i < n; i++)
+        {
+            Transform c = root.GetChild(i);
+            if (c == null) continue;
+            if (c.name == name) return c;
+            Transform deep = FindDeepChild(c, name);
+            if (deep != null) return deep;
+        }
+        return null;
     }
 
     private void BuildFootRay()

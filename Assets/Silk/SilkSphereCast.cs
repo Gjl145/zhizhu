@@ -111,6 +111,19 @@ public class SilkSphereCast
     /// </summary>
     public void SetIgnore(Collider c) => ignoreCollider = c;
 
+    /// <summary>
+    /// ★ 设置要忽略的整个根物体（它及其所有子级碰撞体）。
+    ///
+    /// 【为什么需要 —— 独立化后本体上有多个遮挡碰撞体】
+    ///   SetIgnore 只能记**一个** Collider。蜘蛛本体上现在有：
+    ///     ① Body 的 groundProbe（旧球遗留）
+    ///     ② SpiderProxy（新建的独立碰撞代理）
+    ///   逐个 SetIgnore 会互相覆盖，漏掉的那个照样挡住足端射线
+    ///   → 表面法线取错→ 蜘蛛原地抖动。
+    ///   按根排除一次解决，且与 CastAll 里的既有判据一致。
+    /// </summary>
+    public void SetIgnoreRoot(Transform root) => ignoreRoot = root;
+
     public Vector3 GetOrigin() => origin.GetWorldPosition();
 
     public Vector3 GetDirection() => end.GetWorldPosition() - origin.GetWorldPosition();
@@ -154,7 +167,10 @@ public class SilkSphereCast
          *   反而打不到近处的面。
          *   → 只能靠过滤。
          */
-        if (ignoreCollider != null)
+        // ★ 门槛必须同时看两个字段：SetIgnoreRoot 也要触发这条精确过滤路径。
+        //   否则只设了 root 没设 collider 时会掉到下面的粗过滤分支，
+        //   两条分支排除逻辑不同 → 行为不一致（表现为偶发抖动）。
+        if (ignoreCollider != null || ignoreRoot != null)
         {
             RaycastHit[] all = Physics.SphereCastAll(
                 castOrigin, radius, castDir, dist, mask,
@@ -245,7 +261,7 @@ public class SilkSphereCast
         Vector3 castDir = dir / dist;
 
         // 与 Cast 同一套排除逻辑（见上面说明：不能摘 Layer，会连坐整个场景）
-        if (ignoreCollider != null)
+        if (ignoreCollider != null || ignoreRoot != null)
         {
             RaycastHit[] all = Physics.SphereCastAll(
                 worldStart, radius, castDir, dist, mask,
