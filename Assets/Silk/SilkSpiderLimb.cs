@@ -61,6 +61,15 @@ public class SilkSpiderLimb
     public Vector3 RootWorld { get; private set; }
     /// <summary>足端世界坐标（外部给定）。</summary>
     public Vector3 FootWorld { get; private set; }
+    /// <summary>★ 落点处表面法线（最近一次 Solve 传入）。零向量 = 未提供。</summary>
+    public Vector3 GroundNormal { get; private set; }
+
+    /// <summary>
+    /// ★ 足端与表面法线的夹角（度）。
+    /// 来源：spider_ik 的 footAngleToNormal = 20。
+    /// 0 = 关闭足端朝向跟随（脚会像「插进去」）。
+    /// </summary>
+    public float footTiltDeg = 20f;
 
     /// <summary>骨节数（默认 5，对齐 Locomotor 的leg_X_N_M）。</summary>
     public int BoneCount { get { return bones != null ? bones.Length : 0; } }
@@ -232,10 +241,28 @@ public class SilkSpiderLimb
     ///   FABRIK 只解算**世界位置**，最后一次性把位置写进 Transform.localPosition，
     ///   完全绕开旋转叠加 —— 这是我踩过两次的坑。
     /// </summary>
-    public void Solve(Vector3 rootWorld, Vector3 targetWorld, Vector3 up)
+    /// <summary>
+    /// 求解一条腿的骨骼链，使足端抵达 targetWorld。
+    ///
+    /// 【★ 2026-10-09 新增参数 groundNormal / footTiltDeg】
+    ///   来源：spider_ik 的 IKSolver 里「最后一节专门对齐命中点法线」：
+    ///     angle = footAngleToNormal + 90 − SignedAngle(ProjectOnPlane(normal, axis), toEnd, axis)
+    ///   作者用 footAngleToNormal = 20°，
+    ///   与 Locomotor 视频的 Orient Foot to Ground Pitch 0.8 吻合
+    ///   ——足端不是垂直插进地面，而是**倾斜着踩上去**。
+    ///   我原来完全没有足端朝向控制 → 脚是「插进去」的，不是「踩上去」的。
+    /// </summary>
+    /// <param name="rootWorld">腿根世界坐标</param>
+    /// <param name="targetWorld">足端目标世界坐标</param>
+    /// <param name="up">身体朝向（球体表面的外法线）</param>
+    /// <param name="groundNormal">落点处表面法线。零向量 → 退回用 up</param>
+    /// <param name="footTiltDeg">足端与表面法线的夹角（度）。20 = 略微倾斜</param>
+    public void Solve(Vector3 rootWorld, Vector3 targetWorld, Vector3 up,
+                Vector3 groundNormal, float footTiltDeg)
     {
         RootWorld = rootWorld;
         FootWorld = targetWorld;
+        GroundNormal = groundNormal;
 
         if (bones == null || bones.Length == 0 || legRoot == null) return;
 
@@ -304,8 +331,18 @@ public class SilkSpiderLimb
         if (toRoot.magnitude > totalLen)
             target = rootWorld + (target - rootWorld).normalized * totalLen;
 
-        const int ITER = 6;
+        const int ITER = 8;
         const float TOL = 0.0005f;
+
+        /* ★★ 最小变化量提前退出（来源：spider_ik 的 minimumChangePerIteration）
+         *   作者原文用途：误差不再下降就放弃，避免在无解状态空转。
+         *   我原来只有 TOL（绝对误差），缺这条：
+         *   目标在奇异位置时误差会「缓慢下降但永远达不到 TOL」，
+         *   白白跑满 6 次迭代，且解出的姿态是抖的。
+         */
+        const float MIN_PROGRESS = 0.000001f;
+
+        float prevErr = float.MaxValue;
 
         for (int iter = 0; iter < ITER; iter++)
         {
@@ -337,7 +374,13 @@ public class SilkSpiderLimb
                 pts[i + 1] = pts[i] + dir * bones[i].Length;
             }
 
-            if (Vector3.Distance(pts[n], target) < TOL) break;
+            float err = Vector3.Distance(pts[n], target);
+            if (err < TOL) break;
+
+            // ★ 误差不再改善 → 提前放弃（spider_ik 做法）
+            if (prevErr != float.MaxValue
+                && Mathf.Abs(prevErr - err) < MIN_PROGRESS) break;
+            prevErr = err;
         }
 
         // ★ 把解出的世界位置转成「父级局部位置」。
@@ -381,6 +424,57 @@ public class SilkSpiderLimb
                  * 只有 aim 会让绕自身轴的自由度完全由上一帧决定，
                  * 首帧容易出现难以预测的朝向。 */
                 node.localRotation = StableRotation(dirLocal, aim);
+            }
+        }
+
+        /* ★★ 足端朝向：让最后一节（跗节）与表面法线成footTiltDeg 夹角。
+         *
+         * 【为什么需要】
+         *   FABRIK 只解位置，不管朝向 → 最后一节的朝向完全由上一帧决定，
+         *   脚看起来是「插进去」的而不是「踩上去」的。
+         *   参考实现（spider_ik）专门让最后一节对齐命中点的法线，
+         *   留 20° 倾斜（与 Locomotor 的 Orient Foot to Ground Pitch 0.8 吻合）。
+         *
+         * 【做法】
+         *   期望朝向 = 把末节的 +Z（指向足端延伸方向）转到「
+         *   法线在末节所在平面内的投影」的方向，再偏 footTiltDeg。
+         *   用 FromToRotation 而非 LookRotation —— 同样是为了避开万向节死锁
+         *   （脚贴着墙/天花板时，末节方向与法线几乎平行，是高频情况）。
+         */
+        if (n >= 1 && footTiltDeg > 0.01f)
+        {
+            Vector3 gn = groundNormal;
+            if (gn.sqrMagnitude < 0.000001f) gn = up;
+            gn.Normalize();
+
+            Transform lastNode = bones[n - 1].Node;
+            Transform lastParent = lastNode.parent;
+            if (lastParent != null)
+            {
+                Quaternion invLastParent = Quaternion.Inverse(lastParent.rotation);
+
+                // 法线在「末节父级」的局部空间里
+                Vector3 gnLocal = (invLastParent * gn).normalized;
+
+                // 末节 +Z 在自己父级空间里的当前方向
+                Vector3 curZParent = lastParent.InverseTransformDirection(lastNode.forward).normalized;
+
+                // 目标：法线垂直于「足端延伸方向」的平面内分量
+                //      → 让脚背朝法线倾斜，而不是正对法线插下去
+                Vector3 intoSurface = Vector3.Cross(gnLocal, curZParent);
+                if (intoSurface.sqrMagnitude > 0.000001f)
+                {
+                    // 绕 intoSurface 旋转，使 curZParent 朝法线「躺倒」
+                    float cur = Vector3.Angle(curZParent, gnLocal);
+                    float want = Mathf.Clamp(90f - footTiltDeg, 0f, 90f);
+                    float delta = want - cur;
+                    if (Mathf.Abs(delta) > 0.01f)
+                    {
+                        Vector3 axis = intoSurface.normalized;
+                        Quaternion tilt = Quaternion.AngleAxis(delta, axis);
+                        lastNode.localRotation = tilt * lastNode.localRotation;
+                    }
+                }
             }
         }
     }

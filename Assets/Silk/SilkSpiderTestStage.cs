@@ -483,7 +483,6 @@ public class SilkSpiderTestStage : MonoBehaviour
         bool ballInScene = false;
         Vector3 ballPos = Vector3.zero;
         float camDist = 0f;
-        int legCount = 0;
 
         SilkParkourController ctrl = FindObjectOfType<SilkParkourController>();
         if (ctrl != null)
@@ -529,7 +528,10 @@ public class SilkSpiderTestStage : MonoBehaviour
                 }
             }
             gaitInfo = "交替四足步态 duty=" + body.dutyFactor.ToString("F2")
-                      + " → 着地≈ " + (8 * body.dutyFactor).ToString("F1") + " 条";
+                      + " → 着地≈ " + (8 * body.dutyFactor).ToString("F1") + " 条\n"
+                      + "步时: " + (body.scaleCycleBySpeed ? "随速度缩放" : "固定")
+                      + "（过冲 " + body.overshootMultiplier.ToString("F2")
+                      + "× 站位）";
         }
 
         mode = ballInScene ? "Parkour（球已建）" : "FreeFly（未按 Tab）";
@@ -550,7 +552,7 @@ public class SilkSpiderTestStage : MonoBehaviour
             (ballInScene ? "WASD走位 空格跳 鼠标转视角"
                          : "★ 现在按 Tab 切到 Parkour 才会建球");
 
-        GUI.Label(new Rect(10, 10, 480, 210), text, HudStyle);
+        GUI.Label(new Rect(10, 10, 480, 240), text, HudStyle);
     }
 
     /// <summary>HUD 文字样式（只初始化一次）。</summary>

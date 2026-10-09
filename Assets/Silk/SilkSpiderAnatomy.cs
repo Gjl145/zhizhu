@@ -419,7 +419,13 @@ public class SilkSpiderAnatomy : MonoBehaviour
     /// <param name="rootWorld">8 个腿根世界坐标</param>
     /// <param name="footWorld">8 个足端世界坐标</param>
     /// <param name="up">表面法线（腿的「上」方向）</param>
-    public void UpdateLimbs(Vector3[] rootWorld, Vector3[] footWorld, Vector3 up)
+    /// <param name="groundNormals">
+    /// ★ 2026-10-09 新增：每条腿落点处的表面法线。
+    ///   用于足端朝向跟随（spider_ik 的footAngleToNormal）。
+    ///   null = 全部退回用 up（等价于关闭朝向跟随）。
+    /// </param>
+    public void UpdateLimbs(Vector3[] rootWorld, Vector3[] footWorld, Vector3 up,
+    Vector3[] groundNormals = null)
     {
         if (limbs == null) return;
 
@@ -427,10 +433,14 @@ public class SilkSpiderAnatomy : MonoBehaviour
         {
             if (limbs[i] == null) continue;
 
+            Vector3 gn = (groundNormals != null && i < groundNormals.Length)
+                ? groundNormals[i]
+                : up;
+
             limbs[i].Solve(
                 i < rootWorld.Length ? rootWorld[i] : limbs[i].RootWorld,
                 i < footWorld.Length ? footWorld[i] : limbs[i].FootWorld,
-                up);
+                up, gn, limbs[i].footTiltDeg);
 
             if (i < FootPositions.Length) FootPositions[i] = limbs[i].FootWorld;
         }

@@ -122,7 +122,12 @@ public class SilkSpiderBody : MonoBehaviour
     [Tooltip("射线的碰撞层。默认 Everything —— 与 SilkSpiderSurfaceMove 一致")]
     public LayerMask surfaceMask = ~0;
 
-    [Tooltip("脚离当前锁定点多远就强制换落点（格）。0 = 用腿长的 70%")]
+    [Tooltip("★ 脚离**站位锚点**多远就强制换落点（格）。\n"
+        + "0 = 用腿长的 0.7 倍。\n"
+        + "★ 2026-10-09 语义修正：原来测的是「离旧落点」，\n"
+        + "  那是「移动两步就需要重来」的病根（旧落点永远在身体身后，\n"
+        + "  越走越远 → 每帧都触发换点 → 无限连续迈步）。\n"
+        + "  现在测的是「离站位」→ 腿永远朝站位方向回收。")]
     public float forceStepDistance = -1f;
 
     [Tooltip("★ 强制换点时给该腿的随机负偏移（秒）。\n"
@@ -137,6 +142,71 @@ public class SilkSpiderBody : MonoBehaviour
     public float maxPredictLength = -1f;
     [Tooltip("速度平滑系数。★ 视频里作者用 0.1：「逐渐逼近真实值，不会一直累积误差」")]
     [Range(0.01f, 1f)] public float velocitySmoothing = 0.1f;
+
+    // ================================================================
+    //  站位锚点与换点判定
+    //  来源：Docs/逆向资料/spider_ik参考实现分析.md（PhilS94 真实 Unity 工程）
+    // ================================================================
+
+    [Header("站位锚点（★ 「移动两步就需要重来」的根因修复）")]
+    [Tooltip("★ 每条腿在**身体局部坐标**里的「待机站位」外扩比例（相对腿长）。\n"
+        + "0.62 = 腿根往外 0.62 倍腿长的水平距离。\n"
+        + "★ 为什么必须有这个：\n"
+        + "  没有锚点 → 腿只会在「离旧落点太远」时才换点，\n"
+        + "  而旧落点永远在身体身后 → 越走越远 → 每帧都触发换点\n"
+        + "  → 无限连续迈步，就是你说的「移动两步就需要重来」。\n"
+        + "  有锚点 → 腿永远「朝站位方向」迈，而不是「被甩开就追」。")]
+    [Range(0.2f, 1.5f)] public float defaultFootSpread = 0.62f;
+
+    [Tooltip("★ 向站位方向**过冲**的倍数（1 = 刚好走到站位）。\n"
+        + "来源：spider_ik 的 defaultOvershootMultiplier = 1.5。\n"
+        + "★ 为什么 >1：身体在摆动相期间一直在前进，\n"
+        + "  若只走到站位中心，落点会落在身体**后方** → 腿永远追不上。\n"
+        + "  过冲 1.5 让落点超前于站位，摆动结束时正好在身体下方。")]
+    [Range(1f, 2f)] public float overshootMultiplier = 1.5f;
+
+    [Tooltip("★ 腿收得太近时强制换点（占腿长的比例）。\n"
+        + "来源：spider_ik 的 minDistance = 0.2 × chainLength。\n"
+        + "★ 为什么需要：爬窄缝/贴墙时足端会怼到腿根，\n"
+        +"  此时 FABRIK 会把腿拉直或抖动 → 步态看起来崩掉。")]
+    [Range(0.05f, 0.5f)] public float minFootDistance = 0.2f;
+
+    [Tooltip("★ 步时随速度缩放 —— **这是「步幅」能恒定的唯一办法**。\n"
+        + "来源：spider_ik 的 calculateStepTime()：stepTime = k /速度。\n"
+        + "★ 我原来的固定 cycleTime 是错的：\n"
+        +"  慢走 → 每步跨太远（够不到，劈叉）\n"
+        + "  快跑 → 每步跨太近（在地上拖，滑步）\n"
+        + "  无论怎么调 cycleTime 都不对，因为它必须是速度的函数。\n"
+        + "  开启后：周期 = clamp(cycleTime × (参考速度/实际速度), min, max)。\n"
+        + "  含义：慢走时周期拉长（少迈大步子），快跑时周期缩短（多迈小步子）。")]
+    public bool scaleCycleBySpeed = true;
+
+    [Tooltip("步时缩放的参考速度（格/秒）。默认取 runSpeed ——\n"
+        + "★ 即「在runSpeed 速度下周期 = cycleTime」")]
+    public float cycleRefSpeed = -1f;
+
+    [Tooltip("步时缩放后的周期下限（秒）。★ 防止速度趋0时周期爆炸 → 原地疯狂踏步")]
+    public float minCycleTime = 0.28f;
+
+    [Tooltip("★ 站立不动多少秒后停止迈步。\n"
+        + "来源：spider_ik 的 stopSteppingAfterSecondsStill，\n"
+        + "  作者原注释：\"This fixes the indefinite stepping going on.\"\n"
+        + "★ 我原来只有「静止不抬腿」，但相位仍在推进 → 原地踏步。")]
+    [Range(0f, 2f)] public float stopSteppingAfterStill = 0.35f;
+
+    [Header("分级射线（防「腿卡死」）")]
+    [Tooltip("★ 换点时依次尝试的射线方向数。\n"
+        + "来源：spider_ik 的 updateCasts() —— 建 12 条射线（6 个方向 × 2 组），\n"
+        + "  字典顺序即优先级，作者注释\"order is of very high importance\"。\n"
+        + "★ 我原来只有 1 条射线，打不到就把相位压回支撑相\n"
+        + "  → 这条腿**卡死不动**。多方向兜底后不会卡死。")]
+    [Range(1, 6)] public int castDirectionCount = 6;
+
+    [Tooltip("★ 换落点时允许的最大坡度（度）。0 = 不限制。\n"
+        + "来源：spider_ik 对 Frontal 射线用 ±65° 过滤 ——\n"
+        + "  太陡的坡不算落脚点，否则腿会插进悬崖。\n"
+        + "★ 用 78°：比参考的 65° 宽松些，兼顾贴墙/屋顶场景。")]
+    [Range(30f, 90f)] public float maxWalkableSlopeDeg = 78f;
 
     [Header("身体")]
     [Tooltip("★ 身体随步伐起伏的幅度（格）。\n"
@@ -175,11 +245,24 @@ public class SilkSpiderBody : MonoBehaviour
         public Vector3 NextTarget;       // 下一个落点
         public float Phase;              // 0~1 的步态相位
         public bool Initialized;
+
+        // ===== ★ 2026-10-09新增：站位锚点（spider_ik 参考实现）=====
+
+        /// <summary>
+        /// 这条腿的「待机站位」，存在**身体局部坐标**里。
+        /// ★ 有了它，腿才会「朝站位方向迈步」；
+        ///   没有它，腿只会被身体越拖越远 → 无限连续迈步
+        ///   （用户反馈的「移动两步就需要重来」）。
+        /// </summary>
+        public Vector3 DefaultLocal;
     }
 
     private LegState[] legState = new LegState[8];
     private Vector3[] footWorld = new Vector3[8];
     private Vector3[] rootWorld = new Vector3[8];
+
+    /// <summary>★ 每条腿落点处的表面法线（供足端朝向跟随用）。</summary>
+    private Vector3[] footNormals = new Vector3[8];
 
     private Vector3 previousWorldPos;
     private Vector3 velocity;
@@ -188,6 +271,12 @@ public class SilkSpiderBody : MonoBehaviour
     private SilkSphereCast footRay;
     private float gaitClock;
     private Vector3 bodyBasePos;
+
+    /// <summary>★ 站立计时（秒）—— 超过 stopSteppingAfterStill 就停止迈步。</summary>
+    private float timeStandingStill;
+
+    /// <summary>★ 腿长（格）—— 由解剖结构反查，用于所有以腿长为单位的阈值。</summary>
+    private float legLengthCached = -1f;
 
     /// <summary>解剖结构（HUD / 调试查询用）。</summary>
     public SilkSpiderAnatomy Anatomy => anatomy;
@@ -321,10 +410,20 @@ public class SilkSpiderBody : MonoBehaviour
     {
         Vector3 up = SafeUp();
 
+        legLengthCached = ResolveLegLength();
+        timeStandingStill = 0f;
+
         for (int i = 0; i < 8; i++)
         {
             Vector3 root = RootWorld(i);
-            Vector3 guess = root - up * (BallRadius * 0.5f);
+
+            // ★ 站位锚点（身体局部坐标）。**必须在算落点之前**——
+            //   初始落点就应该落在站位上，而不是「腿根下方随便一点」。
+            legState[i].DefaultLocal = ComputeDefaultLocal(i, up);
+
+            Vector3 defaultWorld = transform.TransformPoint(legState[i].DefaultLocal);
+
+            Vector3 guess = defaultWorld - up * 0.02f;
 
             Vector3 hit;
             if (TraceGround(guess, up, out hit))
@@ -335,9 +434,68 @@ public class SilkSpiderBody : MonoBehaviour
             legState[i].NextTarget = legState[i].LockedTarget;
             legState[i].Initialized = true;
             footWorld[i] = legState[i].LockedTarget;
+            footNormals[i] = up;
 
             rootWorld[i] = root;
         }
+    }
+
+    /// <summary>
+    /// ★ 反查腿长（格）。用于所有以「腿长」为单位的阈值
+    ///   （最小强制换点距离、站位外扩）。
+    /// 来源：spider_ik 的 chainLength = ikChain.calculateChainLength()。
+    ///
+    /// ★ 2026-10-09 修正：初版这里写成「测腿根到站位的距离」，
+    ///   而站位又依赖腿长 → **循环依赖**。
+    ///   腿长是解剖结构的固有属性，直接读它，不要绕。
+    /// </summary>
+    private float ResolveLegLength()
+    {
+        if (anatomy != null && anatomy.legLength > 0f)
+            return anatomy.legLength;
+        // 兜底：解剖默认腿长 = 球半径 × 3.6（见 SilkSpiderAnatomy.ResolveDerived）
+        return BallRadius * 3.6f;
+    }
+
+    /// <summary>
+    /// ★★ 计算第 i 条腿的站位锚点（身体局部坐标）。
+    ///
+    /// 【为什么必须有这个 ——「移动两步就需要重来」的病根】
+    ///   我原来没有锚点，只有「离旧落点太远就换点」：
+    ///     旧落点被身体越拖越远 → 每帧都满足换点条件
+    ///     → 无限连续迈步 → 用户看到的「移动两步就需要重来」。
+    ///   有锚点后：腿永远「朝站位方向」迈，不管当前落在哪。
+    ///
+    /// 【算法】（来源：spider_ik 的 calculateDefault）
+    ///   站位 = 腿根 + 水平外扩 × 展开方向 + 沿法线下压到表面高度
+    ///   外扩 = 腿长 × defaultFootSpread
+    ///   前���分布 = 与 legRootRearBias 一致（腿根在哪，站位就在哪下方）
+    /// </summary>
+    private Vector3 ComputeDefaultLocal(int i, Vector3 up)
+    {
+        Vector3 rootWorld = RootWorld(i);
+
+        // 腿根在身体局部坐标里的位置
+        Vector3 rootLocal = transform.InverseTransformPoint(rootWorld);
+
+        // 水平外扩方向：从身体中心指向腿根（去掉法线分量）
+        Vector3 outward = Vector3.ProjectOnPlane(rootLocal, up);
+        if (outward.sqrMagnitude < 0.000001f)
+            outward = Vector3.ProjectOnPlane(Vector3.right, up);
+        if (outward.sqrMagnitude < 0.000001f) outward = Vector3.right;
+        outward.Normalize();
+
+        float len = legLengthCached > 0f ? legLengthCached : BallRadius * 3.6f;
+
+        // 站位 = 腿根沿「外扩」方向再往外一段
+        Vector3 def = rootLocal + outward * (len * defaultFootSpread);
+
+        // 沿法线方向：从腿根高度往下压，让站位大致在身体下方。
+        // 爬墙/天花时「往下」= 沿 -up，身体 localPosition 不变，
+        // 这样贴墙时锚点会自动跟着法线转。
+        def -= up * (len * 0.9f);
+
+        return def;
     }
 
     // ================================================================
@@ -372,8 +530,39 @@ public class SilkSpiderBody : MonoBehaviour
     {
         Vector3 up = SafeUp();
 
-        gaitClock += dt;
-        if (gaitClock >= cycleTime) gaitClock -= cycleTime;
+        // ★★ 站立计时（spider_ik 的 stopSteppingAfterSecondsStill）
+        //   作者原注释："This fixes the indefinite stepping going on."
+        //   我原来只有「静止不抬腿」，但相位仍在推进 → 原地踏步。
+        float speedNow = velocity.magnitude;
+        if (speedNow < 0.35f) timeStandingStill += dt;
+        else timeStandingStill = 0f;
+        bool freezeSteps = timeStandingStill > stopSteppingAfterStill;
+
+        // ★★ 步时随速度反比缩放（spider_ik 的 calculateStepTime）
+        //   stepTime = k / 速度  → 周期 = cycleTime × (参考速度 / 实际速度)
+        //   为什么必须这样：
+        //     固定周期 → 慢走时每步跨太远（够不到，劈叉）
+        //               快跑时每步跨太近（在地上拖，滑步）
+        //     无论怎么调 cycleTime 都不对，因为它必须是速度的函数。
+        float cyc = cycleTime;
+        if (scaleCycleBySpeed)
+        {
+            float refSpd = cycleRefSpeed > 0f
+                ? cycleRefSpeed
+                : Mathf.Max(1f, mover != null ? mover.runSpeed : 5f);
+            // 速度越低 → 周期越长（少迈大步子）；速度为 0 → 用上限，避免爆炸。
+            cyc = speedNow < 0.05f
+                ? cycleTime * 2.2f
+                : cycleTime * (refSpd / Mathf.Max(0.05f, speedNow));
+            cyc = Mathf.Clamp(cyc, minCycleTime, cycleTime * 2.5f);
+        }
+
+        // ★ 冻结时不推进步态相位 → 腿站在站位上不动（而不是原地踏步）
+        if (!freezeSteps)
+        {
+            gaitClock += dt;
+            if (gaitClock >= cyc) gaitClock -= cyc;
+        }
 
         // ---- 抬腿高度按速度缩放（静止不抬腿）----
         float lift = liftHeight;
@@ -449,23 +638,59 @@ public class SilkSpiderBody : MonoBehaviour
             }
 
             // ---- 换落点判定 ----
-            float distFromLocked = Vector3.Distance(legState[i].LockedTarget, foot);
-            bool outOfRange = distFromLocked > (forceStepDistance > 0f
-                ? forceStepDistance
-                : BallRadius * 1.8f);
+            //★★spider_ik 的 stepCheck()有三个触发条件，我原来只有一个：
+            //   ① 目标悬空（没落地）→ 迈
+            //   ② 离站位太远（被甩开）→ 迈
+            //   ③ ★ 离腿根太近（收拢）→ 迈   ←我完全漏了这条
+            //   漏掉 ③ 的后果：爬窄缝/ 贴墙时足端怼到腿根，
+            //   FABRIK 把腿拉直或抖动 → 步态看起来崩掉。
+            float len = legLengthCached > 0f ? legLengthCached : BallRadius * 3.6f;
+            Vector3 defaultWorld = transform.TransformPoint(legState[i].DefaultLocal);
 
-            if (outOfRange)
+            float distFromDefault = Vector3.Distance(defaultWorld, foot);
+            float farLimit = forceStepDistance > 0f ? forceStepDistance : len * 0.7f;
+            bool outOfRange = distFromDefault > farLimit;
+
+            //★ spider_ik 原文条件③：
+            //   Vector3.Distance(rootJoint.getRotationPoint(), target.position) < minDistance
+            //   —— 测的是「**腿根 → 落点**」的距离，不是落点到站位的距离。
+            //   我第一版写成后者，等于「落点偏离合站位」，不是「腿收拢」，
+            //   语义错了。爬窄缝时腿收拢，落点离腿根近 → 这条才该触发。
+            float distFromRoot = Vector3.Distance(rootWorld[i], legState[i].LockedTarget);
+            bool tooClose = distFromRoot < len * minFootDistance;
+
+            if (!freezeSteps && (outOfRange || tooClose))
             {
-                //★ 顺序不可颠倒（视频踩过的最大的坑）：
-                //  正确：脚当前点 + 速度向量 → 从投影点 trace → 命中点
-                //  错误：脚当前点 → trace → 命中点 + 速度向量
-                //  后者会让腿插进地面，因为「加完速度」的位置从没验证过有地面。
-                Vector3 projected = foot + predictVel;
+                /* ★★★ 三段式换点（严格照spider_ik 的 Step() 顺序）
+                 *
+                 * 【原来为什么「移动两步就需要重来」】
+                 *   我是projected = foot + predictVel  —— 只加速度预测，
+                 *   没有「这条腿应该待在哪」的概念。
+                 *   旧落点被身体越拖越远 → 每帧都 outOfRange
+                 *   → 无限连续迈步。
+                 *
+                 * 【正确顺序，每一步都不能颠倒】
+                 *   ① 过冲：朝站位方向迈 overshootMultiplier 倍
+                 *      必须 >1：身体在摆动期间一直在前进，
+                 *      只走到站位中心 → 落点在身体后方 → 永远追不上。
+                 *   ② 速度预测：再加 predictVel（补偿摆动期间的身体位移）
+                 *   ③ 分级射线落地：从投影点打地面，多方向兜底 + 坡度过滤
+                 *     ★ 顺序绝不能反：加完速度的位置从没验证过有地面，
+                 *       先 trace 再加速度 → 腿会插进地里（视频踩过最大的坑）。
+                 */
+                Vector3 start = Vector3.ProjectOnPlane(foot, up);
+                Vector3 overshoot = start + (defaultWorld - start) * overshootMultiplier;
+                Vector3 projected = overshoot + predictVel;
+
                 Vector3 hit;
-                if (TraceGround(projected, up, out hit))
+                bool grounded;
+                Vector3 hitNormal;
+                if (TraceGroundMulti(projected, defaultWorld, up,
+                                     out hit, out hitNormal, out grounded))
                 {
                     legState[i].LockedTarget = hit;
-                    legState[i].NextTarget = projected;
+                    legState[i].NextTarget = hit;
+                    footNormals[i] = hitNormal;
 
                     //★ 随机负偏移：否则所有腿重新同步（视频 58:30）
                     if (desyncJitter > 0f)
@@ -473,21 +698,28 @@ public class SilkSpiderBody : MonoBehaviour
                 }
                 else
                 {
-                    // 打不到地面（悬空边缘）→ 把相位压回支撑相，下一帧再试
+                    // 附近完全没有可踩面 → 优先退回首选项「站位本身」，
+                    // 而不是把相位压回支撑相让腿卡死（那正是原来「腿卡死」的成因）。
+                    legState[i].LockedTarget = defaultWorld;
+                    legState[i].NextTarget = defaultWorld;
                     legState[i].Phase = dutyFactor * 0.5f;
                 }
 
-                foot = Vector3.Lerp(legState[i].LockedTarget, legState[i].NextTarget, 0f);
+                foot = legState[i].LockedTarget;
             }
 
             footWorld[i] = foot;
             feetAvg += foot;
+
+            // ★ 法线兜底：还没踩到过地面（footNormals 为零）时退回 up。
+            //   零法线会让足端朝向求解拿到无意义的输入。
+            if (footNormals[i].sqrMagnitude < 0.000001f) footNormals[i] = up;
         }
 
         // ---- 把足点交给解剖结构做 FABRIK 求解 ----
         if (anatomy != null)
         {
-            anatomy.UpdateLimbs(rootWorld, footWorld, up);
+            anatomy.UpdateLimbs(rootWorld, footWorld, up, footNormals);
         }
 
         // ---- 身体起伏与跟随 ----
@@ -503,8 +735,9 @@ public class SilkSpiderBody : MonoBehaviour
         {
             if (rootWorld[i] == Vector3.zero) rootWorld[i] = RootWorld(i);
             if (footWorld[i] == Vector3.zero) footWorld[i] = legState[i].LockedTarget;
+            if (footNormals[i].sqrMagnitude < 0.000001f) footNormals[i] = up;
         }
-        anatomy.UpdateLimbs(rootWorld, footWorld, up);
+        anatomy.UpdateLimbs(rootWorld, footWorld, up, footNormals);
     }
 
     /// <summary>
@@ -643,6 +876,140 @@ public class SilkSpiderBody : MonoBehaviour
         }
 
         hitPoint = rh.point;
+        return true;
+    }
+
+    /// <summary>
+    /// ★★ 分级多方向射线落地（spider_ik 的 findTargetOnSurface + updateCasts）
+    ///
+    /// 【为什么要多方向】
+    ///   我原来只有一条「从上往下」的射线。打不到时只能
+    ///   把相位压回支撑相让腿等下一帧 → 这条腿**卡死不动**，
+    ///   表现为「有两条腿不迈步」。
+    ///   spider_ik 建 12 条（6 方向 × 预测点/站位两组），
+    ///   逐条尝试直到命中 → 不会卡死。
+    ///
+    /// 【方向优先级】严格照作者的设计思路（他注释写明顺序极其重要）：
+    ///   1. 从「预测点」朝站位方向打 —— 首选，落点最符合步态意图
+    ///   2. 从「预测点」垂直向下打 —— 主路径
+    ///   3. 从「站位」垂直向下打 —— 身体已经走过去了的兜底
+    ///   4~n. 从站位向各个水平方向扇形打 —— 边缘/悬空时找最近可踩面
+    ///
+    /// 【坡度过滤】来源：spider_ik 对 Frontal 射线用 ±65°。
+    ///   角度太大（悬崖/墙）不算落脚点，否则腿会插进去。
+    /// </summary>
+    /// <param name="predicted">过冲 + 速度预测后的落点候选</param>
+    /// <param name="fallback">站位锚点（第二组射线的原点）</param>
+    /// <param name="up">表面法线</param>
+    /// <param name="hitPoint">命中点</param>
+    /// <param name="hitNormal">命中法线（可用于足端朝向）</param>
+    /// <param name="grounded">是否真的踩到地面</param>
+    private bool TraceGroundMulti(Vector3 predicted, Vector3 fallback, Vector3 up,
+                                 out Vector3 hitPoint, out Vector3 hitNormal,
+                                 out bool grounded)
+    {
+        hitPoint = predicted;
+        hitNormal = up;
+        grounded = false;
+
+        /* ★ 安全降级：射线没建好就不能探测。假腿只是可视化。*/
+        if (footRay == null) return false;
+
+        footRay.SetRadius(footRayRadius);
+
+        float maxSlope = maxWalkableSlopeDeg;
+
+        // ---- 尝试 1：从预测点朝站位方向（水平方向） ----
+        Vector3 towardDefault = Vector3.ProjectOnPlane(fallback - predicted, up);
+        if (towardDefault.sqrMagnitude > 0.000001f)
+        {
+            if (TryCastAndValidate(predicted, towardDefault.normalized * (footRayUp + footRayDown),
+                                   up, maxSlope, out hitPoint, out hitNormal))
+            {
+                grounded = true;
+                return true;
+            }
+        }
+
+        // ---- 尝试 2：从预测点垂直向下（主路径） ----
+        if (TryCastAndValidate(predicted, -up * (footRayUp + footRayDown),
+                               up, maxSlope, out hitPoint, out hitNormal))
+        {
+            grounded = true;
+            return true;
+        }
+
+        // ---- 尝试 3：从站位垂直向下（身体已走过去的兜底） ----
+        if (TryCastAndValidate(fallback, -up * (footRayUp + footRayDown),
+                               up, maxSlope, out hitPoint, out hitNormal))
+        {
+            grounded = true;
+            return true;
+        }
+
+        // ---- 尝试 4~n：从站位向水平方向扇形打 ----
+        //   castDirectionCount 个方向，均分 360°。
+        int n = Mathf.Clamp(castDirectionCount, 1, 6);
+        if (n > 1)
+        {
+            // 以「指向预测点」的方向为 0°，左右各铺开
+            Vector3 baseDir = towardDefault.sqrMagnitude > 0.000001f
+                ? towardDefault.normalized
+                : Vector3.ProjectOnPlane(Vector3.right, up).normalized;
+
+            float reach = footRayUp + footRayDown;
+            float startDeg = 180f / n;
+
+            for (int k = 1; k <= n / 2 + (n % 2); k++)
+            {
+                float ang = startDeg * k;
+                for (int s = -1; s <= 1; s += 2)
+                {
+                    Vector3 probe = (s < 0)
+                        ? Quaternion.AngleAxis(ang, up) * baseDir
+                        : Quaternion.AngleAxis(-ang, up) * baseDir;
+                    if (probe.sqrMagnitude < 0.000001f) continue;
+
+                    if (TryCastAndValidate(fallback, probe.normalized * reach,
+                                           up, maxSlope, out hitPoint, out hitNormal))
+                    {
+                        grounded = true;
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 单条射线 + 坡度校验（spider_ik 的 slope filter）。
+    /// ★ 坡度必须在这里过滤，不能等到摆动相里再判——
+    ///   太陡的坡一旦被当成落脚点，腿会直接插进去。
+    /// </summary>
+    private bool TryCastAndValidate(Vector3 from, Vector3 offset, Vector3 up,
+                                    float maxSlopeDeg,
+                                    out Vector3 hitPoint, out Vector3 hitNormal)
+    {
+        hitPoint = from;
+        hitNormal = up;
+
+        Vector3 pelvisAbove = transform.position + up * footRayUp;
+        Vector3 footAbove = from + up * footRayUp;
+        Vector3 start = Vector3.Lerp(footAbove, pelvisAbove, footRayStartBlend);
+        Vector3 end = start + offset;
+
+        RaycastHit rh;
+        if (!footRay.CastBetween(start, end, surfaceMask, out rh))
+            return false;
+
+        // ★ 坡度过滤：法线与 up 的夹角太大 → 不算可踩面
+        float slope = Vector3.Angle(rh.normal, up);
+        if (slope > maxSlopeDeg) return false;
+
+        hitPoint = rh.point;
+        hitNormal = rh.normal;
         return true;
     }
 
