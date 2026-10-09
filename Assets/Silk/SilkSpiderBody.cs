@@ -182,6 +182,27 @@ public class SilkSpiderBody : MonoBehaviour
         + "  ★ 教训：先证性质再写代码，别凭直觉。")]
     [Range(0.3f, 0.95f)] public float maxDeviationRatio = 0.7f;
 
+    [Tooltip("★★ 相邻腿摆动互斥（Codeer 的 oppositeLeg 机制）。\n"
+        + "一条腿处于摆动相时，与它相邻的腿**不允许**开始摆动。\n"
+        + "来源（两个独立来源都提到这条）：\n"
+        + "  · Codeer 的 Unity 10 步教程：\n"
+        + "      if (dist >= moveDistance && !oppsiteLeg.isItMoving())\n"
+        + "  · Arachnid-dev（爬墙/天花板/转角）：\n"
+        + "      \"Nearby legs do not step at the same time\"\n"
+        + "★ 为什么交替四足步态还不够：\n"
+        + "  交替四足只保证**时序**上 L1/L3 同相、R1/R3 同相，\n"
+        + "  但**没有禁止 L1 与 L2 的摆动相重叠**。\n"
+        + "  两条相邻腿同时腾空 → 支撑腿只剩 4 条 → 身体塌陷、抖动。\n"
+        + "★ 代价：被阻塞的腿会延后一拍，\n"
+        + "  所以 maxSimultaneousSwing 必须 >= 4，否则会出现「等不到腿落地」。\n"
+        + "  8 × dutyFactor 0.65 ≈ 5.2 条着地，留给摆动的余量够用。")]
+    public bool neighborStepMutex = true;
+
+    [Tooltip("同时最多几条腿处于摆动相（互斥之外的硬上限）。\n"
+        + "★ 纯保险：即使互斥表配错，也不会有超过这个数��腿同时腾空。\n"
+        + "  真蜘蛛稳定行走时约 2~4 条摆动。")]
+    [Range(1, 4)] public int maxSimultaneousSwing = 3;
+
     [Tooltip("★ 腿收得太近时强制换点（占腿长的比例）。\n"
         + "来源：spider_ik 的 minDistance = 0.2 × chainLength。\n"
         + "★ 为什么需要：爬窄缝/贴墙时足端会怼到腿根，\n"
@@ -274,9 +295,71 @@ public class SilkSpiderBody : MonoBehaviour
         public Vector3 DefaultLocal;
     }
 
+    /// <summary>
+    /// ★★ 邻居腿索引表 —— 用于「相邻腿摆动互斥」。
+    ///
+    /// 【为什么需要 —— 两个独立来源都提到这条】
+    ///   · Codeer（Unity 官方 Learn 列为首选参考的教程）的判据：
+    ///       if (distanceToMoveCube >= moveDistance && !oppsiteLeg.isItMoving())
+    ///     一条腿摆动时，**对侧/相邻腿不允许开始摆动**。
+    ///   · Arachnid-dev（Unity 3D，爬墙/爬天花板/转角）：
+    ///     "Nearby legs do not step at the same time"
+    ///
+    /// 【★ 我们原来为什么不够】
+    ///   交替四足步态只保证**时序**上 L1/L3 同相、R1/R3 同相，
+    ///   但**没有禁止 L1 与 L2 的摆动相重叠**。
+    ///   相邻腿同时腾空 → 支撑腿只剩 4 条以下 → 身体塌陷、抖动。
+    ///
+    /// 【索引约定】L1..L4 = 0..3，R1..R4 = 4..7（同 BuildLimbs）
+    ///   邻居 = 同侧相邻 + 对侧同序号 + 对侧斜向。
+    /// </summary>
+    private static readonly int[][] NeighborLegs = BuildNeighborTable();
+
+    private static int[][] BuildNeighborTable()
+    {
+        var t = new int[8][];
+        for (int i = 0; i < 8; i++)
+        {
+            bool left = i < 4;
+            int k = i % 4;                 // 同侧第几条（0=最前）
+            int oppSide = left ? 4 : 0;    // 对侧起点
+
+            var list = new System.Collections.Generic.List<int>(4);
+
+            // 同侧相邻（前后）
+            if (k > 0) list.Add(i - 1);
+            if (k < 3) list.Add(i + 1);
+
+            // 对侧同序号
+            list.Add(oppSide + k);
+            // 对侧斜向（蜘蛛的对角关系）
+            if (k > 0) list.Add(oppSide + k - 1);
+            if (k < 3) list.Add(oppSide + k + 1);
+
+            t[i] = list.ToArray();
+        }
+        return t;
+    }
+
     private LegState[] legState = new LegState[8];
     private Vector3[] footWorld = new Vector3[8];
     private Vector3[] rootWorld = new Vector3[8];
+
+    // ===== ★ 相邻腿互斥的运行时缓冲（每帧重填，不必跨帧保存）=====
+    private readonly bool[] swingIntent = new bool[8];// 相位说「该摆」
+    private readonly bool[] swingGranted = new bool[8];// 互斥裁决后「准许摆」
+    private readonly int[] order = new int[8];       // 按相位降序的下标
+    private int swingCount;                          // 本帧实际获准数
+
+    /// <summary>
+    /// 起步错开偏移的**取值**（供第 0 趟互斥裁决用）。
+    ///★ 注意：真正存值的字段是 StaggerOffsets() 里那个 staggerCache，
+    ///   这里只是换名字引用它，避免重复声明同名成员（CS0102）。
+    /// </summary>
+    private float[] StaggerOffsetsCache()
+    {
+        return StaggerOffsets();
+    }
 
     /// <summary>★ 每条腿落点处的表面法线（供足端朝向跟随用）。</summary>
     private Vector3[] footNormals = new Vector3[8];
@@ -766,6 +849,94 @@ public class SilkSpiderBody : MonoBehaviour
 
         Vector3 feetAvg = Vector3.zero;
 
+        /*★★ 相邻腿摆动互斥 —— 第 0 趟：先裁决谁能摆动。
+         *
+         * 【为什么需要两趟】
+         *   互斥是**互相依赖**的：腿 A 能否摆动取决于腿 B 是否在摆，
+         *   而 B 的状态也要看C。单趟顺序遍历会出现
+         *   「前面的腿占了名额，后面的腿明明也不相邻却被误挡」。
+         *   → 先按相位算出所有腿的「意愿」，再统一裁决。
+         */
+
+        // ---- 第 0 趟：按相位算「原始意图」，不裁决 ----
+        for (int i = 0; i < 8; i++)
+        {
+            float phase = ComputePhase(i, gaitClock, StaggerOffsetsCache());
+            float sw = dutyFactor + swingPortion;
+
+            bool want = !freezeSteps
+                        && phase >= dutyFactor
+                        && phase < sw
+                        && speedNow > 0.05f;
+
+            swingIntent[i] = want;
+            swingGranted[i] = want;
+        }
+
+        /* ---- 互斥裁决 ----
+         * 规则（按优先级从高到低）：
+         *   ① 硬上限：同时摆动数 ≤ maxSimultaneousSwing
+         *   ② 邻居互斥：任一邻居已获准摆动 → 本腿延后
+         *
+         * ★ 处理顺序用「按相位从大到小」= **摆动进度最靠前的优先获准**。
+         *   理由：快摆完的腿让它摆完，剩下的一起延后，
+         *   比「按索引顺序」更不容易出现「某条腿永远排不上」。
+         */
+        if (neighborStepMutex)
+        {
+            // 按相位降序排序（8 条，插入排序足够，不值得上堆）
+            for (int a = 0; a < 8; a++) order[a] = a;
+            for (int a = 1; a < 8; a++)
+            {
+                int key = order[a];
+                float kp = legState[key].Phase;
+                int b = a - 1;
+                while (b >= 0 && legState[order[b]].Phase < kp)
+                {
+                    order[b + 1] = order[b];
+                    b--;
+                }
+                order[b + 1] = key;
+            }
+
+            swingCount = 0;
+            for (int oi = 0; oi < 8; oi++)
+            {
+                int i = order[oi];
+                if (!swingIntent[i]) { swingGranted[i] = false; continue; }
+
+                if (swingCount >= maxSimultaneousSwing)
+                {
+                    swingGranted[i] = false;
+                    continue;
+                }
+
+                bool blocked = false;
+                int[] nb = NeighborLegs[i];
+                for (int n = 0; n < nb.Length; n++)
+                {
+                    int j = nb[n];
+                    if (j < 0 || j >= 8 || j == i) continue;
+                    if (swingGranted[j]) { blocked = true; break; }
+                }
+
+                swingGranted[i] = !blocked;
+                if (!blocked) swingCount++;
+            }
+        }
+        else
+        {
+            // 关闭互斥时，硬上限仍然生效（否则会退化成 8 条腿全腾空）
+            swingCount = 0;
+            for (int i = 0; i < 8; i++)
+            {
+                if (!swingIntent[i]) { swingGranted[i] = false; continue; }
+                if (swingCount >= maxSimultaneousSwing) { swingGranted[i] = false; continue; }
+                swingGranted[i] = true;
+                swingCount++;
+            }
+        }
+
         for (int i = 0; i < 8; i++)
         {
             rootWorld[i] = RootWorld(i);
@@ -775,7 +946,7 @@ public class SilkSpiderBody : MonoBehaviour
             legState[i].Phase = phase;
 
             // ---- 相位 → 支撑/摆动 + 插值进度 ----
-            //★ 交替四足步态的时序：
+            // ★ 交替四足步态的时序：
             //   phase ∈[0, dutyFactor)                → 支撑相（脚不动）
             //   phase ∈ [dutyFactor, dutyFactor+swing) → 摆动相（脚划弧线）
             //   phase ∈ [dutyFactor+swing, 1)          → 支撑（已经落地）
@@ -793,7 +964,11 @@ public class SilkSpiderBody : MonoBehaviour
                 float swingEnd = dutyFactor + swingPortion;
                 if (phase < swingEnd)
                 {
-                    inSwing = true;
+                    // ★★★ 这里就是互斥的落地点：
+                    //   相位说「该摆」只是**意愿**，还要通过第 0 趟的互斥裁决。
+                    //   被否决的腿强制留在支撑相 → 脚不抬起、
+                    //   不插值、不划弧线，视觉上就是「等着下一步」。
+                    inSwing = swingGranted[i];
                     stepAlpha = (phase - swingStart) / swingPortion;
                 }
                 else
@@ -838,7 +1013,23 @@ public class SilkSpiderBody : MonoBehaviour
             float distFromRoot = Vector3.Distance(rootWorld[i], legState[i].LockedTarget);
             bool tooClose = distFromRoot < len * minFootDistance;
 
-            if (!freezeSteps && (outOfRange || tooClose))
+            /*★★ 互斥的第二个落地点：被否决的腿**不许换落点**。
+             *
+             * 【为什么】
+             *   换落点会写LockedTarget / NextTarget，
+             *   下一帧 `Vector3.Lerp(LockedTarget, NextTarget, stepAlpha)`
+             *   就会把脚往新落点挪 —— 即使 inSwing == false。
+             *   结果是「脚在地上平移」= **滑步**，而不是「抬腿走过去」。
+             *
+             *   两条腿同时滑 → 视觉上就是「在地上拖」，正是要避免的现象。
+             *
+             * 【所以完整的互斥是三处】
+             *   ① 不摆动（inSwing = false）
+             *   ② 不换落点（本处）
+             *   ③ 不插值（stepAlpha 保持 1）
+             *   少任何一处都会漏出「滑步」。
+             */
+            if (!freezeSteps && swingGranted[i] && (outOfRange || tooClose))
             {
                 /* ★★★ 三段式换点（严格照 spider_ik 的 Step() 顺序）
                  *

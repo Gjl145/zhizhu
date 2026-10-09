@@ -48,3 +48,8 @@ desktop.ini
 
 # 临时研究目录
 _research/
+
+# Blender 生成产物（可由 Tools/blender/make_spider.py 重新生成，不入库）
+# ★ 源脚本入库、产物不入库：FBX 3.3MB + 3 张 PNG 各 1MB，
+#   每次重新生成都会产生二进制 diff，污染历史。
+Tools/blender/out/

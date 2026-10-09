@@ -141,33 +141,46 @@ def check_attr_brackets(name, raw):
 def check_use_before_decl(name, lines):
     """查「局部变量使用早于声明」（CS0103）。
 
-    ★ 只在**同一个大括号作用域**内比较 —— 这是本项目失败 6 次的地方。
-      跨作用域的同名变量（如循环体内的 i）会误报。
-    ★ 因此这里采取极保守策略：只在同一个方法体内、
-      且声明与使用相隔>=1 行时才检查，且要求声明是「明确的类型名 变量名 =」。
+    ★★ 必须用**词法作用域树**，不能用「括号深度」当作用域。
+      【踩过的坑 —— 本轮实测误报】
+        旧实现 sid = 累加 (每行 { 减 })，于是两个**平级方法**
+        （BuildNeighborTable 与 HideRenderersUnder）拿到同一个 sid，
+        第 320 行的 `var t` 与第 618 行的 `Transform t` 被当成同一个变量
+        → 报「变量 t 在 618 行才声明」，纯误报。
+        真编译 0 错误已经证明是误报。
+      → 现在给每个 `{` 分配**全局唯一 id**，用栈维护「当前所在块」。
+        这样平级方法的 id 天然不同。
+    ★ 声明行本身要排除；只报「声明确实在后面」的情况。
     """
-    # 按大括号深度切分作用域
-    scope_id = 0
+    # ---- 词法作用域：每个 { 拿一个唯一 id，栈顶 = 当前所在块 ----
+    stack = []
+    next_id = [1]
     sid_of_line = []
     for ln in lines:
-        sid_of_line.append(scope_id)
-        scope_id += ln.count('{') - ln.count('}')
+        # ★ 本行的 sid 取**进入本行之前**的栈顶 —— 这样「某行同时开括号」
+        #   属于外层作用域，语义上更保守（少报错）。
+        sid_of_line.append(stack[-1] if stack else 0)
+        for ch in ln:
+            if ch == '{':
+                stack.append(next_id[0])
+                next_id[0] += 1
+            elif ch == '}' and stack:
+                stack.pop()
 
     decl_re = re.compile(
         r'^\s*(?:readonly\s+|const\s+)?'
-        r'(?:bool|int|float|double|string|Vector2|Vector3|Vector4|'
+        r'(?:var|bool|int|float|double|string|Vector2|Vector3|Vector4|'
         r'Quaternion|Matrix4x3|Matrix4x4|Color|Ray|RaycastHit|Object|'
         r'SilkSphereCast|SilkSpiderAnatomy|SilkSpiderSurfaceMove|'
         r'SilkParkourController|Collider|Transform|Camera|LayerMask|'
         r'System\.Collections\.IEnumerator|IEnumerator)'
         r'\s+([A-Za-z_]\w*)\s*(?:=[^;]*)?;')
 
-    declared = {}   # (scope, name) -> 行号
+    declared = {}   # (scope_id, name) -> 行号
     for idx, ln in enumerate(lines, 1):
-        sid = sid_of_line[idx - 1]
         m = decl_re.match(ln)
         if m:
-            declared.setdefault((sid, m.group(1)), idx)
+            declared.setdefault((sid_of_line[idx - 1], m.group(1)), idx)
 
     # 收集裸使用（排除声明行本身）
     use_re = re.compile(r'(?<![.\w])([A-Za-z_]\w*)\s*(?=[,)\];=+\-*/]|\s*==|\s*!=|\s*<|\s*>)')

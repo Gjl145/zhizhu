@@ -29,9 +29,13 @@ STEPS = [
     ('check_mesh.py',        True,  'mesh 索引数值模拟（抓 IndexOutOfRange）'),
     ('check_spider_visibility.py', True, '蜘蛛可见性（专治「球加腿」）'),
     ('check_gait_convergence.py', True, '步态落点振荡验证（抓「移动两步就重来」）'),
+    ('check_spider_model.py',True, 'Blender 模型几何（抓 8 腿重叠 / 腿翘天 / 面数超标）'),
     ('selfcheck.py',         False, '39 项结构与参数联动自检'),
     ('check_regressions.py', False, '历史错误回归'),
 ]
+
+# Blender 侧检查耗时较长（约 20s），单独给超时
+TIMEOUTS = {'check_spider_model.py': 900}
 
 PY = sys.executable
 
@@ -55,7 +59,7 @@ def main():
             p = subprocess.run([PY, path], cwd=PROJ,
                                capture_output=True, text=True,
                                encoding='utf-8', errors='replace',
-                               timeout=900)
+                               timeout=TIMEOUTS.get(script, 900))
             out = (p.stdout or '')
             errout = (p.stderr or '')
             dt = time.time() - t0
