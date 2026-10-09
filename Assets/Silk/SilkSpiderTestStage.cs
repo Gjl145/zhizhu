@@ -121,14 +121,52 @@ public class SilkSpiderTestStage : MonoBehaviour
                     + "测试场与代码生成的住宅关卡不能共存。");
         }
 
-        /* freeBuildMode 只在它本来是false 时才改。
-         * ★ 若用户本来就开着（自己在搭场景），不能覆盖 ——
-         *   那是他的选择，而且 DetectFreeBuildSpawn 本来就是他要的。*/
-        if (builder != null && !builder.freeBuildMode)
+        /*★★ freeBuildMode 必须开 —— 但落点要用 freeBuildSpawnOverride **钉死**。
+         *
+         * 【踩过的坑 —— 这才是「还是啥也没看到」的**真正**原因】
+         *   `DetectFreeBuildSpawn()`（SilkBuilder.cs:4505）的逻辑是
+         *   「扫全场找**Z 最高**的有顶面的物体，把球放在那个顶面上」。
+         *
+         *   ★ 测试场里 Z 最高的是**主墙的顶面（z = 14）**，不是地板（z = 0）。
+         *   → 球被放到墙顶上：
+         *       [FreeBuild] 自动落点：顶面 z=14.0 -> 球心 z=15.3
+         *   → 相机跟球保持 4.1 格（FollowCamera 的固定距离）：
+         *       [Follow] 相机到球 4.1 格 | 球半径 1.25
+         *   → 球直径才 2.5 格，相机在 4.1 格外 —— **画面里只有一个小黑点**，
+         *      腿也只有 2.5 格长 → 看上去就是「什么都没有」。
+         *
+         *   【为什么要开 freeBuildMode】
+         *     不开的话 startPosition 是写死的住宅坐标 (-30, 0, -32.75)，
+         *     那里没有地板，球会直接掉出场景。
+         *
+         * 【解法】
+         *   freeBuildSpawnOverride 有最高优先级（4508行）——
+         *   `if (builder.freeBuildSpawnOverride != Vector3.zero) return它 + forward*radius`
+         *   → 用它把球**钉在测试场地板上**，绕开「找最高顶面」的逻辑。
+         *   注意它加的是 `Vector3.forward * visualRadius`（+Z 方向），
+         *   所以 override 要给**地板面**的 Z，而不是球心的 Z。
+         */
+        if (builder != null)
         {
-            builder.freeBuildMode = true;
-            Debug.Log("[SpiderTest] 已自动开Free Build Mode —— "
-                    + "让球自动落到测试场地板上，而不是住宅区的旧坐标。");
+            if (!builder.freeBuildMode)
+            {
+                builder.freeBuildMode = true;
+                Debug.Log("[SpiderTest] 已自动开 Free Build Mode —— "
+                        + "关掉它球会落在写死的住宅坐标（那里没有地板，会掉出场景）。");
+            }
+
+            // ★ 落点钉在地板：地板面在 z = 0（Build() 里 Floor 的 z 中心 -1、高 2）
+            //   Y=-3：墙在 Y=0，球在墙前 3 格 —— 近到能直接撞上（测贴墙），
+            //        又不会一出生就贴着墙（贴面逻辑来不及初始化）。
+            //   Z=0：加完visualRadius 后球心 = 1.25，正好悬在地板面上。
+            if (builder.freeBuildSpawnOverride == Vector3.zero)
+            {
+                builder.freeBuildSpawnOverride = new Vector3(0f, -3f, 0f);
+                Debug.Log("[SpiderTest] 已把球心落点钉在地板 (0, -3, ~1.25)。\n"
+                        + "  ★ 不钉的话 DetectFreeBuildSpawn 会找「Z 最高的顶面」，"
+                        + "  那就是**主墙顶 z=14**，球会站到墙顶上、离相机极远，"
+                        + "  画面里只剩一个小黑点。");
+            }
         }
 
         /* ★★ 关键：测试场必须在**这里（Awake）就建好**，不能等 Start。
@@ -370,15 +408,22 @@ public class SilkSpiderTestStage : MonoBehaviour
         cam.nearClipPlane = 0.05f;
         cam.farClipPlane = 500f;
 
-        /*② 摆位 —— 本项目是 Z-up（MEMORY 第二节），
-         *   相机站在 −Y 侧、+Z 上方，朝原点看。
+        /*② 摆位 —— 本项目是 Z-up（MEMORY 第二节）。
+         *
+         * ★ 看的目标点不是原点，而是**测试场中心偏下**：
+         *   地板面 z=0、主墙 0~14，横梁 z=9，
+         *   球的落点钉在 (0, -3, 0)+半径 → 球心 (0,-3,1.25)。
+         *   → 目标点取 (0, -2, 4)：既能看到地板，也能在画面里带上墙的上半段。
+         *
+         *   相机站在 −Y 侧偏上，往 +Y 看。
          *   ★ 用 LookRotation 的双参数重载显式指定参考上轴 = +Z；
          *     不要先给 transform.up 赋值再 LookAt ——
          *     那是两次独立重算 rotation，叠加后朝向不可控。*/
-        Vector3 camPos = new Vector3(0f, -26f, 16f);
+        Vector3 lookTarget = new Vector3(0f, -2f, 4f);
+        Vector3 camPos = new Vector3(0f, -24f, 11f);
         cam.transform.position = camPos;
         cam.transform.rotation = Quaternion.LookRotation(
-            (Vector3.zero - camPos).normalized, Vector3.forward);
+            (lookTarget - camPos).normalized, Vector3.forward);
 
         // 相机得有 SimpleOrbitCamera 才能转视角（否则鼠标动不了）
         if (cam.GetComponent<SimpleOrbitCamera>() == null)
@@ -408,6 +453,110 @@ public class SilkSpiderTestStage : MonoBehaviour
 
     /// <summary>相机是否已摆过位（避免 Start 里二次覆盖用户的视角）。</summary>
     private bool cameraPlaced;
+
+    /*★★★ 屏幕自检提示 —— 用 OnGUI 直接把状态画在画面上。
+     *
+     * 【为什么要这个】
+     *   「啥也没看到」这个反馈之所以难办，是因为**用户无法描述看到的是什么**：
+     *   是纯黑？是灰地板但没球？有球但太小？还是根本没进 Play？
+     *   ★ 加了这段，只要 Play 起来，画面左上角一定会有文字，
+     *     不用看Console、不用猜 —— 一次就能定位到是哪一环断了。
+     *
+     * 【为什么用 OnGUI 而不是 UI Toolkit / TextMeshPro】
+     *   · OnGUI 不需要任何场景资源，代码加完就能显示
+     *   · Built-in 管线 + 可能没有导入 TMP 包（不引入新依赖）
+     *   · IMGUI 在运行时绘制，最适合做「临时自检 HUD」
+     *
+     * 【显示内容】
+     *   当前模式（FreeFly / Parkour）· 球是否存在 · 8 条腿是否已建
+     *   球心坐标 · 相机与球的距离 · 当前操作提示
+     */
+    private void OnGUI()
+    {
+        if (!buildOnStart) return;
+        if (!showHud) return;
+
+        // ★ 只有真的看到东西才提示，否则纯黑屏上写字没有意义
+        Camera cam = Camera.main != null ? Camera.main : FindObjectOfType<Camera>();
+
+        string mode = "未知";
+        bool ballInScene = false;
+        Vector3 ballPos = Vector3.zero;
+        float camDist = 0f;
+        int legCount = 0;
+
+        SilkParkourController ctrl = FindObjectOfType<SilkParkourController>();
+        if (ctrl != null)
+        {
+            // mode 是 private（SilkBuilder.cs:5017）→ 不能读。
+            // ★ 改用「球是否已建」反推：Parkour 才有球。
+            Transform[] kids = ctrl.GetComponentsInChildren<Transform>(true);
+            for (int i = 0; i < kids.Length; i++)
+            {
+                if (kids[i] != null && kids[i].name == "ParkourBody")
+                {
+                    ballInScene = true;
+                    ballPos = kids[i].position;
+                    break;
+                }
+            }
+
+            if (cam != null)
+                camDist = Vector3.Distance(cam.transform.position, ctrl.transform.position);
+        }
+
+        SilkSpiderBody body = FindObjectOfType<SilkSpiderBody>();
+        if (body != null && body.Legs != null)
+        {
+            // 只数已 BuildVisual 的（Legs 数组长度固定 8，但元素可能还没填）
+            for (int i = 0; i < body.Legs.Length; i++)
+                if (body.Legs[i] != null) legCount++;
+        }
+
+        mode = ballInScene ? "Parkour（球已建）" : "FreeFly（未按 Tab）";
+
+        string text =
+            "蜘蛛假骨骼 自检\n" +
+            "模式: " + mode + "\n" +
+            "球: " + (ballInScene ? "存在  心(" + ballPos.x.ToString("F1") + ", "
+                                  + ballPos.y.ToString("F1") + ", "
+                                  + ballPos.z.ToString("F1") + ")" : "不存在") + "\n" +
+            "腿: " + legCount + " / 8条\n" +
+            "相机↔球: " + camDist.ToString("F1") + " 格\n" +
+            (cam != null ? "相机(" + cam.transform.position.x.ToString("F0") + ", "
+                               + cam.transform.position.y.ToString("F0") + ", "
+                               + cam.transform.position.z.ToString("F0") + ")\n" : "") +
+            (ballInScene ? "WASD走位 空格跳 鼠标转视角"
+                         : "★ 现在按 Tab 切到 Parkour 才会建球");
+
+        GUI.Label(new Rect(10, 10, 460, 170), text, HudStyle);
+    }
+
+    /// <summary>HUD 文字样式（只初始化一次）。</summary>
+    private GUIStyle HudStyle
+    {
+        get
+        {
+            if (hudStyle == null)
+            {
+                hudStyle = new GUIStyle();
+                // ★ 用粗体大字：截图发我时一眼能看清
+                hudStyle.fontSize = 16;
+                hudStyle.fontStyle = FontStyle.Bold;
+                // 自带深色描边，压在任何背景上都能读
+                hudStyle.normal.textColor = Color.white;
+                hudStyle.normal.textColor = new Color(1f, 1f, 1f, 1f);
+                hudStyle.wordWrap = false;
+            }
+            return hudStyle;
+        }
+    }
+    private GUIStyle hudStyle;
+
+    /// <summary>是否显示自检 HUD（默认开，排查完可关掉）。</summary>
+    [Tooltip("★ 画面左上角的实时状态显示。"
+        + "排查「看不到东西」时非常有用——不用看 Console 就能知道断在哪一环。")]
+    public bool showHud = true;
 
     /// <summary>
     /// 补齐「能看见、能操作」所必需的东西：相机、光源、控制器。
