@@ -1085,7 +1085,11 @@ public class SilkSpiderBody : MonoBehaviour
         const float x0 = 12f;
         const float w = 240f;
         const float rowH = 12f;
-        const float top = Screen.height - 20f;
+
+        // ★ 不能写成 const：Screen.height 是**运行时**属性，不是编译期常量。
+        //   `const float top = Screen.height - 20f` → CS0133
+        //     「The expression being assigned to 'top' must be constant」。
+        float top = Screen.height - 20f;
 
         for (int i = 0; i < 8; i++)
         {

@@ -150,7 +150,7 @@ public class SilkSpiderAnatomy : MonoBehaviour
 
         // ---- 参数推导：全部由球半径导出 ----
         if (scaleRadius <= 0f) scaleRadius = r;
-        if (cephalLength <= 0f) cephaloLength = r * 1.15f;
+        if (cephaloLength <= 0f) cephaloLength = r * 1.15f;
         if (cephaloWidth <= 0f) cephaloWidth = r * 1.30f;
         if (cephaloHeight <= 0f) cephaloHeight = r * 0.62f;
         if (abdomenRadius <= 0f) abdomenRadius = r * 1.15f;
@@ -458,7 +458,7 @@ public class SilkSpiderAnatomy : MonoBehaviour
     public int GetLimbSegmentCount(int limbIndex)
     {
         if (limbs == null || limbIndex < 0 || limbIndex >= limbs.Length) return 0;
-        return limbs[limbIndex].SegmentCount;
+        return limbs[limbIndex].BoneCount;
     }
 
     // ---------------------------------------------------------------
