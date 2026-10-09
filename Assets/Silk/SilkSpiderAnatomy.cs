@@ -98,6 +98,23 @@ public class SilkSpiderAnatomy : MonoBehaviour
         + "  有螯肢才像蜘蛛，只剩8 条腿像螃蟹")]
     public bool buildChelicerae = true;
 
+    // ================================================================
+    //  FBX 模型（★ 真正的蜘蛛本体）
+    // ================================================================
+
+    [Header("FBX 模型（真正的蜘蛛）")]
+    [Tooltip("★ Blender 导出的 FBX 实例。\n"
+        + "  填了就用它当可见体，程序化建模自动关闭；\n"
+        + "  留空则退回旧的 C# 拼装（球加腿）。")]
+    public GameObject fbxInstance;
+
+    [Tooltip("FBX 朝向修正（绕 X 轴，度）。90 = FBX 的 Y-up 转成本项目 Z-up。")]
+    public float fbxOrientationFixDeg = 90f;
+
+    [Tooltip("FBX 接管失败时是否报错并中止蜘蛛构建。\n"
+        + "  ★ 建议保持 true —— 静默退回「球加腿」正是用户要摆脱的东西")]
+    public bool failIfFbxMissing = true;
+
     [Tooltip("螯肢长度。球半径的 0.85 倍")]
     public float cheliceraLength = -1f;
 
@@ -133,6 +150,15 @@ public class SilkSpiderAnatomy : MonoBehaviour
     private static Shader cachedShader;
 
     private MeshRenderer[] allRenderers;
+
+    /// <summary>FBX 接管器（未启用时为 null）。</summary>
+    private SilkSpiderFbxRig fbxRig;
+
+    /// <summary>★ True = 可见体来自 FBX，程序化建模已关闭。</summary>
+    public bool UsingFbx { get { return fbxRig != null && fbxRig.Attached; } }
+
+    /// <summary>FBX 接管器（供外部查询 / 调试）。</summary>
+    public SilkSpiderFbxRig FbxRig { get { return fbxRig; } }
 
     /// <summary>供外部（HUD/调试）查询腿节数量。</summary>
     public int LimbCount => limbs != null ? limbs.Length : 0;
@@ -172,10 +198,30 @@ public class SilkSpiderAnatomy : MonoBehaviour
         rootGo.transform.SetParent(parent, false);
         VisualRoot = rootGo.transform;
 
-        BuildCephalothorax();
-        BuildAbdomen();
-        if (buildChelicerae) BuildChelicerae();
-        BuildEyes();
+        /*★★ 优先走 FBX：真正的蜘蛛模型（42 骨骼 / 97 网格 / 有蒙皮）。
+         *
+         * 【★ 为什么必须优先，而不是「两条路并存」】
+         *   程序化建模 = Cylinder/球拼的**球加腿**，正是用户明确否定的东西：
+         *     「这个不还是球加腿吗？我现在要的是真的蜘蛛模型」
+         *   两套并存 → FBX 的蜘蛛被程序化的球体压在下面，画面依然是「球加腿」。
+         *   → 二选一，FBX 优先。
+         *
+         * 【失败怎么办】
+         *   fbxInstance 没填或骨骼不齐时：
+         *     · failIfFbxMissing = true（默认）→ 记错误，退回程序化，不静默
+         *     · false → 退回程序化，行为同旧版
+         *   ★ 无论哪种都**必须打日志**——静默退回就是「莫名其妙变回球加腿」，
+         *     用户只能从画面猜原因。
+         */
+        bool fbxOk = TryBuildFromFbx();
+        if (!fbxOk)
+        {
+            BuildCephalothorax();
+            BuildAbdomen();
+            if (buildChelicerae) BuildChelicerae();
+            BuildEyes();
+        }
+
         BuildLimbs();
 
         LegRoots = new Vector3[8];
@@ -187,6 +233,52 @@ public class SilkSpiderAnatomy : MonoBehaviour
         }
 
         CollectRenderers();
+    }
+
+    /// <summary>
+    /// 尝试用 FBX 作为可见体。成功返回 true。
+    /// </summary>
+    private bool TryBuildFromFbx()
+    {
+        if (fbxInstance == null)
+        {
+            if (failIfFbxMissing)
+            {
+                Debug.LogError("[SpiderAnatomy] 没有指定 fbxInstance"
+                    + "（Tools/blender/make_spider.py 生成的 spider_lowpoly）。"
+                    + "→ 已退回程序化建模，也就是「球加腿」。"
+                    + "把 FBX 拖到检查器（Inspector）的 Fbx Instance 字段即可。", this);
+            }
+            return false;
+        }
+
+        fbxRig = GetComponent<SilkSpiderFbxRig>();
+        if (fbxRig == null) fbxRig = gameObject.AddComponent<SilkSpiderFbxRig>();
+
+        fbxRig.fbxInstance = fbxInstance;
+        fbxRig.orientationFixDeg = fbxOrientationFixDeg;
+
+        // ★ FBX 实例必须是**子物体**，不能是场景里的独立根。
+        //   否则它不会跟着蜘蛛移动 → 蜘蛛跑起来、腿留在原地。
+        if (fbxInstance.transform.parent != VisualRoot)
+            fbxInstance.transform.SetParent(VisualRoot, false);
+
+        if (!fbxRig.Attach()) return false;
+
+        // FBX 模式下 Cephalothorax / Abdomen 指向 FBX 里的对应骨骼，
+        // 这样外部若取这两个属性不会拿到 null。
+        var fbxRootT = fbxRig.FbxRoot;
+        if (fbxRootT != null)
+        {
+            Transform ceph = fbxRootT.Find("head");
+            if (ceph != null) Cephalothorax = ceph;
+            Transform abd = fbxRootT.Find("abdomen");
+            if (abd != null) Abdomen = abd;
+        }
+
+        Debug.Log("[SpiderAnatomy] 可见体已切换为 FBX 模型"
+            + "（程序化建模已跳过）。" + fbxRig.DescribeLegs());
+        return true;
     }
 
     private float ResolveRadius()
@@ -393,6 +485,28 @@ public class SilkSpiderAnatomy : MonoBehaviour
             // k = 该侧的第几条腿（0 = 最前，3 = 最后）
             float k = i % 4;
 
+            var limb = new SilkSpiderLimb();
+
+            /*★★ FBX 模式：接管蒙皮骨骼，不建 mesh。
+             *
+             * 【★ 为什么这条分支必须在 Build 之前】
+             *   SilkSpiderLimb.Build 会创建自己的 Transform 链 + 锥形 mesh。
+             *   若在接管之后再调用，会多出一套无蒙皮的腿，
+             *   屏幕上变成「一根有肉的腿 + 一根光骨头」。
+             *   → 接管和 Build **二选一**，绝不能先后都做。
+             */
+            if (UsingFbx)
+            {
+                Transform[] chain = fbxRig.GetLegChain(i);
+                limb.AdoptExternalChain(chain);
+                if (limb.UsesExternalBones)
+                {
+                    limbs[i] = limb;
+                    continue;      // ← 接管成功，不再走程序化分支
+                }
+                // 接管失败 → 落到下面程序化分支（会打错误日志）
+            }
+
             // ★ 沿前后方向：整体往后偏（rearBias），再在很小的范围内铺开。
             //   真实蜘蛛的 4 对步足根部间距不大，跨度靠「膝关节外张」而不是根部铺开。
             float rearOffset = legRootRearBias;
@@ -405,7 +519,6 @@ public class SilkSpiderAnatomy : MonoBehaviour
                 along,
                 -cephaloHeight * 0.15f);      // 略偏下（贴地那侧）
 
-            var limb = new SilkSpiderLimb();
             limb.Build(
                 VisualRoot,
                 "leg_" + (left ? "L" : "R") + "_" + (k + 1),

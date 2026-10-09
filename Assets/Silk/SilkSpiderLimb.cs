@@ -74,6 +74,12 @@ public class SilkSpiderLimb
     /// <summary>骨节数（默认 5，对齐 Locomotor 的leg_X_N_M）。</summary>
     public int BoneCount { get { return bones != null ? bones.Length : 0; } }
 
+    /// <summary>
+    /// ★ True = 本腿驱动的是**外部骨骼**（FBX 蒙皮骨骼），不是自己建的锥形 mesh。
+    /// SilkSpiderAnatomy 靠它决定要不要显示程序化 mesh。
+    /// </summary>
+    public bool UsesExternalBones { get; private set; }
+
     private static Shader cachedShader;
     private static Mesh cachedJointMesh;        // 单位球 mesh（关节处盖缝）
     private static System.Collections.Generic.Dictionary<int, Mesh> taperedCache;
@@ -81,6 +87,88 @@ public class SilkSpiderLimb
     // ================================================================
     //  构建
     // ================================================================
+
+    /// <summary>
+    /// ★★ 接管外部骨骼链（Blender 导出的 FBX 蒙皮骨骼）—— 不建任何 mesh。
+    ///
+    /// 【为什么加这个入口】
+    ///   FBX 里已经有完整的 42 根骨骼 + 蒙皮权重。
+    ///   如果再让Unity 用 Cylinder/锥形 mesh 重建一遍腿，就变成两套腿：
+    ///   程序化的那套（无蒙皮、纯 GameObject）和 FBX 那套（有蒙皮）。
+    ///   → 正确做法：**视觉用 FBX，IK 用现有的 FABRIK**，
+    ///     FABRIK 解出的世界位置直接写进 FBX 骨骼的 Transform。
+    ///   这样IK 算法一行都不用改，只是骨骼的来源不同。
+    ///
+    /// 【★ 为什么不能靠 transform 而不碰 mesh】
+    ///   FABRIK 只需要两样东西：每节的 Transform（写位置）+ 每节长度。
+    ///   两者都能从 FBX 骨骼直接读出来（rest姿态下父子骨的距离就是长度）。
+    ///   → 本方法只填 bones[]，Solve() 的算法部分完全复用。
+    ///
+    /// 【坐标系】传入的节点必须已经处于**世界 Z-up** 的最终朝向。
+    ///   FBX 是 Y-up，导入后必须先转正 —— 由调用方负责，见
+    ///   SilkSpiderFbxRig 的 fixupOrientation。
+    /// </summary>
+    /// <param name="chainNodes">
+    /// 每节骨骼的 Transform，索引 0 = 腿根骨（leg_X_N_1），末位 = 末节骨。
+    /// 顺序即父→子，长度必须等于骨节数。
+    /// </param>
+    public void AdoptExternalChain(Transform[] chainNodes)
+    {
+        if (chainNodes == null || chainNodes.Length < 2)
+        {
+            Debug.LogError("[SilkSpiderLimb] AdoptExternalChain 需要至少 2 根骨骼，"
+                + "收到 " + (chainNodes == null ? "null" : chainNodes.Length.ToString())
+                + " → 本腿退回程序化 mesh。");
+            return;
+        }
+
+        // ★ 任何一根缺失都不接管 —— 半条腿有骨骼、半条没有，
+        //   会渲染成「一条腿有肉一条腿是骨头」，比全程序化更难看。
+        for (int i = 0; i < chainNodes.Length; i++)
+        {
+            if (chainNodes[i] == null)
+            {
+                Debug.LogError("[SilkSpiderLimb] AdoptExternalChain 第 " + i
+                    + " 根骨骼为 null → 放弃接管本腿。");
+                return;
+            }
+        }
+
+        bones = new Bone[chainNodes.Length];
+        for (int i = 0; i < chainNodes.Length; i++)
+        {
+            var b = new Bone();
+            b.Node = chainNodes[i];
+            // 长度从 rest 姿态的父子距离量。
+            // ★ 必须在父级当前姿态下量，而不是局部坐标：
+            //   Unity 导入后骨骼的 localPosition 已经是父子世界偏移的逆变换结果，
+            //   直接取 .localPosition 的模长在有旋转时会偏。
+            Transform child = (i + 1 < chainNodes.Length) ? chainNodes[i + 1] : null;
+            b.Length = child != null
+                ? Vector3.Distance(chainNodes[i].position, child.position)
+                : LastBoneLengthFallback(chainNodes[i]);
+            b.Mesh = null;
+            b.Joint = null;
+            bones[i] = b;
+        }
+
+        legRoot = chainNodes[0];
+        UsesExternalBones = true;
+    }
+
+    /// <summary>
+    /// 末节骨没有子骨可量长度时的兜底。
+    /// ★ 不能返回 0 —— FABRIK 里长度为 0 会走 dir = up 兜底，
+    ///   整条腿笔直戳出去，正是「8 根棍子」那个老 bug。
+    /// </summary>
+    private static float LastBoneLengthFallback(Transform tip)
+    {
+        Transform p = tip.parent;
+        if (p == null) return 0.001f;
+        float d = Vector3.Distance(tip.position, p.position);
+        if (d < 0.0001f) d = Vector3.Distance(tip.position, tip.parent.position);
+        return d > 0.0001f ? d : 0.001f;
+    }
 
     /// <summary>
     /// 建出父子骨骼链。
@@ -95,6 +183,17 @@ public class SilkSpiderLimb
                       float thickness, float tipThinness, float spreadDegrees,
                       Color color)
     {
+        // ★ 两条路径互斥：接管了 FBX 骨骼就不能再建程序化 mesh，
+        //   否则同一处会长出「有蒙皮的 FBX 腿 + 无蒙皮的锥形腿」两份腿。
+        //   不报错、静默双重绘制，是最难查的那种问题。
+        if (UsesExternalBones)
+        {
+            Debug.LogError("[SilkSpiderLimb] " + name
+                + " 已经接管了外部骨骼（FBX），不能再 Build 程序化 mesh。"
+                + "→ SilkSpiderAnatomy 里的模式判断漏了一条。");
+            return;
+        }
+
         rootThickness = thickness;
         tipRatio = Mathf.Clamp(tipThinness, 0.05f, 1f);
         spreadDeg = spreadDegrees;

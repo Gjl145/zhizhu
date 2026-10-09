@@ -53,3 +53,6 @@ _research/
 # ★ 源脚本入库、产物不入库：FBX 3.3MB + 3 张 PNG 各 1MB，
 #   每次重新生成都会产生二进制 diff，污染历史。
 Tools/blender/out/
+
+# Blender/Unity 自动生成的 FBX 导入中间件
+Assets/Silk/SpiderModel/*.meta

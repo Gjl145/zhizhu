@@ -128,11 +128,50 @@ def main():
 
     os.makedirs(OUT_DIR, exist_ok=True)
     tmp_rsp = os.path.join(OUT_DIR, 'probe.rsp')
+
+    # ★★★ 必须补上 rsp 里没有、但磁盘上存在的 .cs
+    #
+    # 【踩过的坑 —— 这次真踩了】
+    #   新建 SilkSpiderFbxRig.cs 后，真编译报：
+    #     error CS0246: The type or namespace name 'SilkSpiderFbxRig' could not be found
+    #   但那个文件明明在 Assets/Silk/ 下，语法也没错。
+    #   真因：Unity 的 Assembly-CSharp.rsp 是**上一次编译时**缓存的源文件清单。
+    #   新加的文件在 Unity 还没导入（没生成 .meta）之前**不在清单里**。
+    #   → 参数对、源码对，只有「文件清单」是旧的。
+    #   这类错误最容易被误判成「代码写错了」，其实代码没错。
+    #   ★ 也印证了 MEMORY 里那条：【静态检查的判据错了不会报错，只会安静地漏】
+    #
+    # → 以 rsp 为准（Unity 的真实参数），只把缺失的源文件补进去。
+    on_disk = set()
+    for dirpath, dirnames, filenames in os.walk(os.path.join(PROJ, 'Assets')):
+        dirnames[:] = [x for x in dirnames if not x.startswith('.')]
+        for fn in filenames:
+            if fn.endswith('.cs'):
+                rel = os.path.relpath(os.path.join(dirpath, fn), PROJ)
+                on_disk.add(rel.replace('\\', '/'))
+
+    listed = set()
+    for ln in new_rsp:
+        s = ln.strip().strip('"')
+        if s.lower().endswith('.cs') and not s.startswith('-'):
+            listed.add(s.replace('\\', '/'))
+
+    missing = sorted(on_disk - listed)
+
     with open(tmp_rsp, 'w', encoding='utf-8') as f:
         f.write('\n'.join(new_rsp))
         f.write('\n-out:"%s"\n' % os.path.join(OUT_DIR, 'probe.dll').replace('\\', '/'))
         f.write('-nologo\n')
         f.write('-nowarn:0169,0414,0649,1591,0219,0162,0168,0108\n')
+        for m in missing:
+            f.write('\n"%s"\n' % m)
+
+    if missing:
+        print('★ 补入 %d 个 rsp 未列出的源文件（Unity 尚未导入的新文件）：' % len(missing))
+        for m in missing:
+            print('    + %s' % m)
+        print('  （不是错误：Unity 还没给它们生成 .meta。补进去才能验证新代码）')
+        print('')
 
     print('=' * 70)
     print('真编译检查（Roslyn，与 Unity 同参数）')
