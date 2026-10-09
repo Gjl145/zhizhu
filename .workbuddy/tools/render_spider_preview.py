@@ -30,17 +30,25 @@ OUT = os.path.join(PROJ, 'Tools', 'blender', 'out')
 def load_spider_module():
     """把 make_spider.py 当模块加载，但**不执行它的 main()**。
 
-    ★ make_spider.py 末尾是模块顶层的裸main() 调用，
-      所以不能简单 import（会立刻跑一遍导出）。
-      → 先把结尾那行换成空操作再 exec。
+    ★ make_spider.py 末尾是`if __name__ == "__main__": main()`，
+      所以只要把 __name__ 设成别的值就不会触发导出。
+      → 直接 exec，不做任何文本改写。
+
+    ★★★ 不要再用 code.replace('\\nmain()\\n', ...) 这类文本替换：
+      我在Tools/blender/sweep_yaw.py 里犯过同一个错 ——
+      替换目标串（'\\nmain()\\n'）在源码格式一变就**静默失效**，
+      而函数照常返回看起来正常的结果（那次扫描实际跑的是同一组参数，
+      却打印出不同的参数值，差点据此改错模型参数）。
+      → 判据要么用「语义」（__name__），要么用正则并**检查是否真的替换成功**。
     """
     code = open(SRC, encoding='utf-8').read()
-    if '\nmain()\n' not in code:
-        raise RuntimeError('make_spider.py 末尾没找到裸 main() 调用，'
-                           '加载方式需要同步更新')
-    code = code.replace('\nmain()\n', '\n')
     ns = {'__name__': 'spider_make', '__file__': SRC}
     exec(compile(code, SRC, 'exec'), ns)
+
+    # 确认 main 没被执行（它会去写 FBX）
+    if 'FBX_PATH' not in ns:
+        raise RuntimeError('make_spider.py 没有按预期加载（找不到 FBX_PATH），'
+                           '加载方式需要同步更新')
     return ns
 
 

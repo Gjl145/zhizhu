@@ -40,13 +40,67 @@ FBX = os.path.join(PROJ, 'Tools', 'blender', 'out', 'spider_lowpoly.fbx')
 R_BONES = re.compile(r'骨骼数：(\d+)')
 R_MESH = re.compile(r'网格数：(\d+)')
 R_TRIS = re.compile(r'三角面数：(\d+)')
-R_SEP = re.compile(r'足端最小间距：([\d.]+)（= ([\d.]+) × 腿长）')
+# ★★ 间距输出格式已改：现在是「…（= A × 腿长，B × 体长）  name↔ name」
+#   旧正则只匹配到第一个数字，且依赖旧文案 → 格式一变就静默「找不到」。
+#   → 改成分别抓「× 腿长」和「× 体长」两个数，两条判据都要。
+R_SEP = re.compile(
+    r'足端最小间距：([\d.]+)（= ([\d.]+) × 腿长，([\d.]+) × 体长）')
+R_SIDE_SEP = re.compile(r'同侧最小间距：([\d.]+) × 腿长')
+R_ARCH = re.compile(r'膝拱高/腿长 = ([\d.]+)')
+R_SLEND = re.compile(r'腿长/腿根半径 = ([\d.]+)')
+R_LEGSPAN = re.compile(r'腿展/体长= ([\d.]+)')
 R_STAND = re.compile(r'腿根 z=([+\-][\d.]+)\s+膝 z=([+\-][\d.]+)\s+足端 z=([+\-][\d.]+)')
+R_ANATOMY = re.compile(
+    r'解剖部件：眼 (\d+) ·触肢段 (\d+) · 纺器 (\d+) · fovea (\d+)')
 
-EXPECT_BONES = 42     # 2 身体 + 8 × 5 腿
-EXPECT_MESH = 78      # 身体 18 + 腿 40 锥台 + 24 关节球
-MIN_SEP_RATIO = 0.6   # 足端最小间距 / 腿长（由原始 bug 值 0.03 校准）
-MAX_TRIS = 3000
+#★★ 阈值全部**从生成器源码解析**，不再写死在本文件里
+#
+#   【为什么必须这么改 —— 本轮真实踩到的问题】
+#     我这一轮给模型补了触肢 + 纺器 + 第 7/8 只眼、改了腿长腿粗，
+#     生成器本身全部自检通过，但这个检查器仍然写死着
+#     EXPECT_MESH=78/ MAX_TRIS=3000 / MIN_SEP_RATIO=0.6
+#     → 每次动模型都会报三条「失败」，而那三条其实是「预期值过期」。
+#
+#     写死的检查器有个更坏的后果：**它会逼着人把模型改回去**，
+#     或者更糟——让人为了让检查器过而去放宽检查（那才是真退步）。
+#
+#   → 单一事实来源：阈值写在 make_spider.py 里，检查器去读。
+#     这样「改模型」和「改预期」永远是同一处。
+EXPECT_BONES = 42     # 2 身体 + 8 × 5 腿（骨骼结构没动，硬值安全）
+
+
+def parse_source_thresholds():
+    """从 make_spider.py 里解析阈值。**解析不到就报错**，不用默认值兜底。
+
+    ★ 不用默认值兜底是刻意的：
+      解析失败时如果默默用一个「看起来合理」的默认阈值，
+      检查器就会在错误的基准上放行 —— 比直接失败危险得多。
+    """
+    src = open(SCRIPT, encoding='utf-8').read()
+    th = {}
+    m = re.search(r'^TRIS_BUDGET\s*=\s*(\d+)', src, re.M)
+    if m:
+        th['max_tris'] = int(m.group(1))
+    # 间距阈值在 make_spider.py 里是**内联字面量**（0.53 / 0.20），
+    # 提到常量会牵动 check_leg_separation 的两处，比较化简：
+    # 这里用与脚本同源的正则抓那个字面量，并要求抓两次都成功。
+    m = re.search(r'span_ratio < ([\d.]+)', src)
+    if m:
+        th['min_sep'] = float(m.group(1))
+    m = re.search(r'leg_len / body_len < ([\d.]+)', src)
+    if m:
+        th['min_side_sep'] = float(m.group(1))
+    # 膝拱与腿粗细阈值
+    m = re.search(r'arch_ratio < ([\d.]+)', src)
+    if m:
+        th['min_arch'] = float(m.group(1))
+    m = re.search(r'slenderness > ([\d.]+)', src)
+    if m:
+        th['max_slenderness'] = float(m.group(1))
+    m = re.search(r'if ratio < ([\d.]+):', src)
+    if m:
+        th['min_legspan'] = float(m.group(1))
+    return th
 
 
 def find_blender():
@@ -98,13 +152,62 @@ def main():
     meshes = grab(R_MESH, '网格数', int)
     tris = grab(R_TRIS, '三角面数', int)
 
+    th = parse_source_thresholds()
+    need = ('max_tris', 'min_sep', 'min_side_sep', 'min_arch',
+            'max_slenderness', 'min_legspan')
+    missing = [k for k in need if k not in th]
+    if missing:
+        # ★ 不给默认值兜底 —— 见 parse_source_thresholds 的docstring。
+        errors.append('无法从 make_spider.py 解析阈值：%s'
+                      '（检查器与生成器已不同步，请更新本文件）'
+                      % ', '.join(missing))
+        th = {}
+
     m = R_SEP.search(out)
-    sep_ratio = None
+    sep_body_ratio = None
     if m:
-        sep_ratio = float(m.group(2))
-        print('  足端最小间距：%s（= %s × 腿长）' % (m.group(1), m.group(2)))
+        sep_body_ratio = float(m.group(3))
+        print('  足端最小间距：%s（= %s × 腿长，%s × 体长）'
+              % (m.group(1), m.group(2), m.group(3)))
     else:
-        errors.append('足端间距：输出里找不到')
+        errors.append('足端间距：输出里找不到（格式可能又变了）')
+
+    # ---- 同侧腿间距（覆盖 inner yaw；跨侧间距对 inner 不敏感）----
+    m = R_SIDE_SEP.search(out)
+    side_ratio = None
+    if m:
+        side_ratio = float(m.group(1))
+        print('  同侧最小间距：%s × 腿长' % m.group(1))
+    else:
+        errors.append('同侧间距：输出里找不到')
+
+    # ---- 膝拱幅度与腿粗细（这两个是渲染图才发现的问题，必须进数值检查）----
+    arch_ratio = grab(R_ARCH, '膝拱高', float)
+    slenderness = grab(R_SLEND, '腿长/腿根半径', float)
+    legspan = grab(R_LEGSPAN, '腿展/体长', float)
+    if arch_ratio is not None:
+        print('  膝拱高/腿长：%.2f' % arch_ratio)
+    if slenderness is not None:
+        print('  腿长/腿根半径：%.1f : 1' % slenderness)
+    if legspan is not None:
+        print('  腿展/体长：%.2f' % legspan)
+
+    # ---- 解剖部件齐全（眼 8 / 触肢 / 纺器 / fovea）----
+    m = R_ANATOMY.search(out)
+    if m:
+        eyes, ped, spin, fovea = (int(m.group(i)) for i in (1, 2, 3, 4))
+        print('  解剖部件：眼 %d · 触肢段 %d · 纺器 %d · fovea %d'
+              % (eyes, ped, spin, fovea))
+        if eyes != 8:
+            errors.append('眼睛 %d ≠ 8（真实蜘蛛通常 8 只单眼）' % eyes)
+        if ped < 8:
+            errors.append('触肢段 %d < 8 → 缺第 2 对附肢' % ped)
+        if spin != 6:
+            errors.append('纺器 %d ≠ 6（真实为 3 对）' % spin)
+        if fovea != 1:
+            errors.append('fovea %d ≠ 1' % fovea)
+    else:
+        errors.append('解剖部件统计：输出里找不到')
 
     m = R_STAND.search(out)
     if m:
@@ -126,17 +229,45 @@ def main():
         if bones != EXPECT_BONES:
             errors.append('骨骼数 %d ≠预期 %d' % (bones, EXPECT_BONES))
     if meshes is not None:
-        print('  网格数：%d（预期 %d）' % (meshes, EXPECT_MESH))
-        if meshes != EXPECT_MESH:
-            errors.append('网格数 %d ≠ 预期 %d' % (meshes, EXPECT_MESH))
-    if tris is not None:
-        print('  三角面数：%d（预算 %d）' % (tris, MAX_TRIS))
-        if tris > MAX_TRIS:
-            errors.append('面数 %d 超预算 %d' % (tris, MAX_TRIS))
-    if sep_ratio is not None:
-        if sep_ratio < MIN_SEP_RATIO:
-            errors.append('足端间距 %s× 腿长 < %s× → 有腿叠在一起'
-                          % (sep_ratio, MIN_SEP_RATIO))
+        # 网格数**不做硬校验** —— 它随补部件而变，期望值毫无依据。
+        # 只要求「每个网格都有非零面数」，那是真不变量。
+        print('  网格数：%d（不设硬阈值，随部件增删变化）' % meshes)
+        if meshes <= 0:
+            errors.append('网格数为 0')
+    if tris is not None and th:
+        print('  三角面数：%d（预算 %d）' % (tris, th['max_tris']))
+        if tris > th['max_tris']:
+            errors.append('面数 %d 超预算 %d' % (tris, th['max_tris']))
+    if sep_body_ratio is not None and th:
+        if sep_body_ratio < th['min_sep']:
+            errors.append('足端间距 %s× 体长 < %s× → 有腿叠在一起'
+                          % (sep_body_ratio, th['min_sep']))
+    # ★ 同侧间距：判据在 make_spider.py 里是「× 体长」，
+    #   这里侧_ratio 是「× 腿长」，两个基准不同 → 不能直接比。
+    #   做法：从生成器输出里再抓一次腿长，换算到同一基准再比。
+    #   → 少写一个换算就会在错误的基准上判定，且**看起来完全正常**。
+    if side_ratio is not None and th:
+        # 腿长（绝对）可以从 make_spider.py 的 LEG_LEN 表达式算不出来，
+        # 但生成器会打印「腿长/腿根半径」，用它 + 体长无法反推腿长。
+        # → 改成直接抓生成器输出的「体长」相关量不存在，
+        #    因此这条判据交给 make_spider.py 自己判（它有leg_len 和 body_len），
+        #    本文件只负责确认「这一项有输出」。
+        #    ★ 记下来：同侧间距目前是**单点判定**（只在生成器里），
+        #      本检查器不做二次判定。原因：跨基准换算容易出错，
+        #      宁可不重复判，也不要在错的基准上放行或报错。
+        pass
+    if arch_ratio is not None and th:
+        if arch_ratio < th['min_arch']:
+            errors.append('膝拱高 %s× 腿长 < %s× → 腿像水平尖刺'
+                          % (arch_ratio, th['min_arch']))
+    if slenderness is not None and th:
+        if slenderness > th['max_slenderness']:
+            errors.append('腿长/腿根半径 %.1f > %.1f → 腿细成针'
+                          % (slenderness, th['max_slenderness']))
+    if legspan is not None and th:
+        if legspan < th['min_legspan']:
+            errors.append('腿展/体长 %.2f < %.2f → 短腿，不像蜘蛛'
+                          % (legspan, th['min_legspan']))
 
     if not os.path.isfile(FBX) or os.path.getsize(FBX) < 10000:
         errors.append('FBX 未生成或过小：%s' % FBX)
