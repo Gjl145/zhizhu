@@ -162,8 +162,25 @@ public class SilkSpiderBody : MonoBehaviour
         + "来源：spider_ik 的 defaultOvershootMultiplier = 1.5。\n"
         + "★ 为什么 >1：身体在摆动相期间一直在前进，\n"
         + "  若只走到站位中心，落点会落在身体**后方** → 腿永远追不上。\n"
-        + "  过冲 1.5 让落点超前于站位，摆动结束时正好在身体下方。")]
+        + "  过冲 1.5 让落点超前于站位，摆动结束时正好在身体下方。\n"
+        + "★ 但过冲量会被 overshootMaxRatio 封顶 —— 见该参数说明。")]
     [Range(1f, 2f)] public float overshootMultiplier = 1.5f;
+
+    [Tooltip("★ 迈步后「落点到站位」的偏差上限（占触发距离 farLimit 的比例）。\n"
+        + "★ 这是本项目「移动两步就重来」的**第二个独立机制**，来自 metapika\n"
+        + "  的 unity-procedural-animation 作者原话：\n"
+        + "    \"Overhead Amount — DO NOT set it higher than or equal to\n"
+        + "     the Step Distance. If you do, the leg will move forward\n"
+        + "     and backwards endlessly.\"\n"
+        + "  作者建议：StepDistance − 0.15（快腿）/ − 0.5（慢腿）。\n"
+        + "★ 在我们公式里的正确含义：过冲+速度预测合起来，\n"
+        + "  会把落点推到站位另一侧 → 下一帧偏差反向 → 前后反复。\n"
+        + "  夹住最终偏差 < farLimit，这条振荡在数学上不可能发生。\n"
+        + "★ 我第一版错在「只夹过冲量」—— 那样做反而更慢：\n"
+        + "  偏差本来是几何衰减 dev→0.5×dev（9 步收敛），\n"
+        + "  夹成固定步长后变成线性递减（要 200+ 步）。\n"
+        + "  ★ 教训：先证性质再写代码，别凭直觉。")]
+    [Range(0.3f, 0.95f)] public float maxDeviationRatio = 0.7f;
 
     [Tooltip("★ 腿收得太近时强制换点（占腿长的比例）。\n"
         + "来源：spider_ik 的 minDistance = 0.2 × chainLength。\n"
@@ -661,26 +678,45 @@ public class SilkSpiderBody : MonoBehaviour
 
             if (!freezeSteps && (outOfRange || tooClose))
             {
-                /* ★★★ 三段式换点（严格照spider_ik 的 Step() 顺序）
+                /* ★★★ 三段式换点（严格照 spider_ik 的 Step() 顺序）
                  *
-                 * 【原来为什么「移动两步就需要重来」】
-                 *   我是projected = foot + predictVel  —— 只加速度预测，
-                 *   没有「这条腿应该待在哪」的概念。
-                 *   旧落点被身体越拖越远 → 每帧都 outOfRange
-                 *   → 无限连续迈步。
+                 * 【原来为什么「移动两步就需要重来」】—— 有**两个**独立机制：
+                 *   机制 A（早已修）：projected = foot + predictVel，只加速度预测，
+                 *     没有「这条腿应该待在哪」的概念。旧落点被身体越拖越远
+                 *     → 每帧都 outOfRange → 无限连续迈步。
+                 *     解法：引入身体局部站位锚点 DefaultLocal。
                  *
-                 * 【正确顺序，每一步都不能颠倒】
-                 *   ① 过冲：朝站位方向迈 overshootMultiplier 倍
-                 *      必须 >1：身体在摆动期间一直在前进，
-                 *      只走到站位中心 → 落点在身体后方 → 永远追不上。
-                 *   ② 速度预测：再加 predictVel（补偿摆动期间的身体位移）
-                 *   ③ 分级射线落地：从投影点打地面，多方向兜底 + 坡度过滤
-                 *     ★ 顺序绝不能反：加完速度的位置从没验证过有地面，
-                 *       先 trace 再加速度 → 腿会插进地里（视频踩过最大的坑）。
+                 *   机制 B（本次修）：最终落点偏差没有被夹住。
+                 *     过冲（overshootMultiplier−1）与速度预测（predictVel，上限 3×半径）
+                 *     会叠加，把落点推到站位**另一侧** → 下一帧偏差反向
+                 *     → 前后反复。metapika 作者原话：
+                 *       "if the Overhead Amount >= the Step Distance,
+                 *        the leg will move forward and backwards endlessly."
+                 *     解法：对**最终**落点偏差夹紧到 maxDeviationRatio × farLimit。
+                 *     ★ 注意必须夹「最终偏差」而不是「过冲量」：
+                 *       偏差本身是几何衰减 dev → 0.5×dev，只夹过冲量
+                 *       会把几何衰减退化成线性递减，收敛反而慢 20倍。
                  */
+
+                // ① 过冲：朝站位方向迈 overshootMultiplier 倍
+                //   必须 >1：身体在摆动相期间一直在前进，
+                //   只走到站位中心 → 落点在身体后方 → 永远追不上。
                 Vector3 start = Vector3.ProjectOnPlane(foot, up);
-                Vector3 overshoot = start + (defaultWorld - start) * overshootMultiplier;
+                Vector3 toDefault = defaultWorld - start;
+                float far = toDefault.magnitude;
+                Vector3 overshoot = (far > 0.0001f)
+                    ? start + (toDefault / far) * ((overshootMultiplier - 1f) * far)
+                    : defaultWorld;
+
+                // ② 速度预测：补偿摆动期间的身体位移
                 Vector3 projected = overshoot + predictVel;
+
+                // ③ ★ 夹紧最终偏差 —— 防前后反复振荡（见上方机制 B）
+                Vector3 devVec = defaultWorld - projected;
+                float devLen = devVec.magnitude;
+                float devCap = farLimit * maxDeviationRatio;
+                if (devLen > devCap)
+                    projected = defaultWorld - (devVec / devLen) * devCap;
 
                 Vector3 hit;
                 bool grounded;
@@ -692,7 +728,7 @@ public class SilkSpiderBody : MonoBehaviour
                     legState[i].NextTarget = hit;
                     footNormals[i] = hitNormal;
 
-                    //★ 随机负偏移：否则所有腿重新同步（视频 58:30）
+                    // ★ 随机负偏移：否则所有腿重新同步（视频 58:30）
                     if (desyncJitter > 0f)
                         legState[i].Phase = -desyncJitter * Random.Range(0.3f, 1f);
                 }

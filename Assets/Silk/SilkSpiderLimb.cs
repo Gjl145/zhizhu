@@ -106,10 +106,15 @@ public class SilkSpiderLimb
         legRoot = rootGo.transform;
 
         // ---- 归一化比例，算出每节实际长度 ----
-        int n = segRatios != null && segRatios.Length >= 3 ? segRatios.Length : 5;
+        // ★ null 保护必须在这里，而不只是决定 n：
+        //   下面循环直接读 segRatios[i]，若为 null 则崩在 NullReferenceException。
+        float[] ratios = (segRatios != null && segRatios.Length >= 3)
+            ? segRatios
+            : new float[] { 0.30f, 0.16f, 0.32f, 0.14f, 0.08f };
+        int n = ratios.Length;
         float[] lens = new float[n];
         float sum = 0f;
-        for (int i = 0; i < n; i++) { lens[i] = Mathf.Max(0.001f, segRatios[i]); sum += lens[i]; }
+        for (int i = 0; i < n; i++) { lens[i] = Mathf.Max(0.001f, ratios[i]); sum += lens[i]; }
         for (int i = 0; i < n; i++) lens[i] = lens[i] / sum * totalLength;
 
         bones = new Bone[n];
