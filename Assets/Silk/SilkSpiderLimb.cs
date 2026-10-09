@@ -554,7 +554,14 @@ public class SilkSpiderLimb
         if (sides < 3) sides = 3;
 
         var verts = new Vector3[sides * 2 + 2];
-        var tris = new int[sides * 6 + sides * 3];
+
+        //★★★ 索引数必须精确算对，否则下面 tris[t++] 越界（IndexOutOfRangeException）。
+        //  逐块数（别用「乘6」这种粗算，那是本bug 的根因）：
+        //    侧面：每边 2 个三角形 × 3 索引 = 6   → sides × 6
+        //    底面：每边 1 个三角形 × 3 索引 = 3   → sides × 3
+        //    顶面：每边 1 个三角形 × 3 索引 = 3   → sides × 3
+        //    合计 sides × 12
+        var tris = new int[sides * 12];
 
         // 底圈（-Z）和顶圈（+Z）
         for (int i = 0; i < sides; i++)
@@ -592,6 +599,13 @@ public class SilkSpiderLimb
             int n1 = (i + 1) % sides;
             tris[t++] = cTop; tris[t++] = sides + i; tris[t++] = sides + n1;
         }
+
+        // ★ 保险：写完之后核对实际写入量与分配量一致。
+        //   以后若改sides 或改三角形布局，这里会立刻发现，
+        //   而不是等到运行时IndexOutOfRangeException（难定位，且只在 Play 时炸）。
+        if (t != tris.Length)
+            Debug.LogErrorFormat("[SilkSpiderLimb] 索引数不匹配：写入 {0}，分配 {1}"
+                              + "（sides={2}）。mesh 会丢三角形。", t, tris.Length, sides);
 
         var mesh = new Mesh();
         mesh.name = "TaperedSegment";

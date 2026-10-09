@@ -26,6 +26,7 @@ PROJ = os.path.dirname(os.path.dirname(HERE))
 STEPS = [
     ('real_compile.py',      True,  '真编译（Roslyn，与 Unity 同参数）'),
     ('precheck.py',          True,  '括号 / 属性特性 / CS0103 / 死变量'),
+    ('check_mesh.py',        True,  'mesh 索引数值模拟（抓 IndexOutOfRange）'),
     ('selfcheck.py',         False, '39 项结构与参数联动自检'),
     ('check_regressions.py', False, '历史错误回归'),
 ]
