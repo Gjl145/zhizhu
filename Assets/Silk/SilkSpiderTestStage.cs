@@ -89,10 +89,32 @@ public class SilkSpiderTestStage : MonoBehaviour
          */
         if (!buildOnStart) return;
 
+        /*★★★ 不要因为「没有 SilkBuilder」就 return。
+         *
+         * 【踩过的坑 —— 这是「啥也没看到」的第6 个根因】
+         *   原来这里写的是：
+         *       SilkBuilder builder = GetComponent<SilkBuilder>();
+         *       if (builder == null) return;      // ★ 直接放弃
+         *
+         *   而宿主 `SpiderTestHost` 是 `EnsureTestStage()` 自己 new 的空物体，
+         *   **上面根本没有 SilkBuilder** → 每一次都命中这个 return
+         *   → 下面那个 Build() 永远不执行
+         *   → 测试场、相机、光源全都没建。
+         *
+         * ★ builder 在下面只用于「关掉 createTestLevel / 打开 freeBuildMode」
+         *   这两件**锦上添花**的事，没有它也必须照常建测试场。
+         */
         SilkBuilder builder = GetComponent<SilkBuilder>();
-        if (builder == null) return;
+        if (builder == null)
+        {
+            // 场景里可能别处有（挂在别的物体上）—— 找一下，找不到也不影响建场
+            builder = FindObjectOfType<SilkBuilder>();
+            if (builder == null)
+                Debug.Log("[SpiderTest] 场景里没有 SilkBuilder，"
+                        + "将只用默认设置建测试场（不受影响）。");
+        }
 
-        if (builder.createTestLevel)
+        if (builder != null && builder.createTestLevel)
         {
             builder.createTestLevel = false;
             Debug.Log("[SpiderTest] 已自动关掉 Create Test Level —— "
@@ -102,7 +124,7 @@ public class SilkSpiderTestStage : MonoBehaviour
         /* freeBuildMode 只在它本来是false 时才改。
          * ★ 若用户本来就开着（自己在搭场景），不能覆盖 ——
          *   那是他的选择，而且 DetectFreeBuildSpawn 本来就是他要的。*/
-        if (!builder.freeBuildMode)
+        if (builder != null && !builder.freeBuildMode)
         {
             builder.freeBuildMode = true;
             Debug.Log("[SpiderTest] 已自动开Free Build Mode —— "
@@ -159,11 +181,16 @@ public class SilkSpiderTestStage : MonoBehaviour
          *   `parkourMode` 是 public（SilkBuilder.cs:2759），
          *   且控制器切模式时会同步（SilkBuilder.cs:5036）：
          *       builder.parkourMode = (mode == SilkControlMode.Parkour);
-         *   ★ MEMORY 第六节：跨类访问私有成员是本项目栽过 8 次的坑。*/
+         *   ★ MEMORY 第六节：跨类访问私有成员是本项目栽过 8 次的坑。
+         *
+         * ★★ 没有 SilkBuilder 时**不能直接 return**（那就等于永不执行）：
+         *   宿主 SpiderTestHost 上就没有 SilkBuilder。
+         *   → 没有它时按「不在 Parkour」处理，但仍然做一次清场兜底。
+         */
         SilkBuilder builder = GetComponent<SilkBuilder>();
-        if (builder == null) return;
+        if (builder == null) builder = FindObjectOfType<SilkBuilder>();
 
-        bool inParkour = builder.parkourMode;
+        bool inParkour = builder != null && builder.parkourMode;
 
         // 只在「刚切进 Parkour」的那一帧动手
         if (!inParkour)
@@ -205,6 +232,25 @@ public class SilkSpiderTestStage : MonoBehaviour
             //   判断依据：没有父物体（自己就是根）
             if (go.transform.parent != null) continue;
             if (go.name == "SpiderTestStage") continue;
+
+            /*★★ 白名单：自己的东西、以及相机/光源绝不能删。
+             *   ★ 这是血的教训 —— 之前只写了「跳过 SpiderTestStage」，
+             *     但宿主 SpiderTestHost、相机 SpiderTestCamera、
+             *     光源 SpiderTestLight 也都是根物体。
+             *     规则虽然恰好没匹配上它们的命名，**但那是运气，不是设计**。
+             *   → 显式列出，别指望命名规则永远不出错。*/
+            if (go.name == "SpiderTestHost" ||
+                go.name == "SpiderTestCamera" ||
+                go.name == "SpiderTestLight" ||
+                go.name == "SpiderAutoAttach" ||
+                go.name == "SilkPlayer")
+                continue;
+
+            // ★ 用户自己的场景物体也不能删 —— 规则是给「代码生成的关卡」用的，
+            //   不是给用户手搭的东西用的。
+            if (go.name == "Cube" || go.name == "Sphere" ||
+                go.name == "Main Camera" || go.name == "Directional Light")
+                continue;
 
             string n = go.name;
             bool looksLikeStage =
@@ -278,7 +324,30 @@ public class SilkSpiderTestStage : MonoBehaviour
     /// </summary>
     private void EnsureCameraAndLight()
     {
-        // ---------- 相机 ----------
+        /*★★ 关键：不仅「缺失才建」，**存在也要摆位**。
+         *
+         * 【踩过的坑 —— 「啥也没看到」的第 5 个根因】
+         *   `ceshi.unity` 里**是有相机的**（Main Camera，在 (0, 1, -10)），
+         *   所以旧写法 `if (cam == null) { ...建相机... }` 整段被跳过。
+         *   ★ 但那个相机是**Unity 默认 Y-up 摆放**的：
+         *       位置 (0,1,-10)，朝 −Z 方向看（相机自己的 +Z 是「背后」）
+         *       → 它看向的是 Z = −10 之外的空处
+         *   而本项目是 **Z-up**，测试场建在 Z = 0 ~ 14 的高度上。
+         *   → **相机存在，但完全没在看测试场** → 屏幕上什么都没有。
+         *
+         *   同样的问题还有场景里那两个物体：
+         *       Cube   在 (2, 101, 86.5)        —— 离原点 139 格
+         *       Sphere 在 (41152, 166.5, 114044) —— 离原点 **12 万格**
+         *   Sphere 甚至在远裁剪面（1000）之外，**永远不会被渲染**。
+         *
+         * 【★ 只摆一次，不要反复覆盖用户的视角】
+         *   `Build()`（Awake）与 `EnsurePlayable()`（Start）都会调本方法。
+         *   若每次都强制摆位，用户第一次 Play 摆好的机位会在下一帧被冲掉。
+         *   → 用 cameraPlaced 标记，只在第一次摆。
+         */
+        if (cameraPlaced) return;
+
+        // ---------- ① 相机 ----------
         Camera cam = Camera.main;
         if (cam == null) cam = FindObjectOfType<Camera>();
 
@@ -286,29 +355,38 @@ public class SilkSpiderTestStage : MonoBehaviour
         {
             var camGO = new GameObject("SpiderTestCamera");
             camGO.tag = "MainCamera";
-
             cam = camGO.AddComponent<Camera>();
-            cam.clearFlags = CameraClearFlags.SolidColor;
-            cam.backgroundColor = new Color(0.10f, 0.11f, 0.14f);
-            cam.nearClipPlane = 0.05f;
-            cam.farClipPlane = 500f;
-
-            /*★ 相机摆在 Y 轴负侧、Z 轴上方往原点看。
-             *   本项目是 **Z-up**（MEMORY 第二节），
-             *   所以用 LookRotation 的双参数重载显式指定参考上轴 = +Z。
-             *   ★ 不要先给transform.up 赋值再LookAt ——
-             *     那是两次独立重算rotation，叠加后朝向不可控。*/
-            camGO.transform.position = new Vector3(0f, -26f, 16f);
-            camGO.transform.rotation = Quaternion.LookRotation(
-                (Vector3.zero - camGO.transform.position).normalized,
-                Vector3.forward);
-
             camGO.AddComponent<SimpleOrbitCamera>();
-
             Debug.Log("[SpiderTest] 场景里没有相机，已自动创建 SpiderTestCamera。");
         }
+        else
+        {
+            Debug.Log("[SpiderTest] 场景里已有相机 " + cam.name
+                    + "，已把它摆到测试场正前方（原来它没在看测试场）。");
+        }
 
-        // ---------- 光照（没光的话几何全黑，一样看不见）----------
+        cam.clearFlags = CameraClearFlags.SolidColor;
+        cam.backgroundColor = new Color(0.10f, 0.11f, 0.14f);
+        cam.nearClipPlane = 0.05f;
+        cam.farClipPlane = 500f;
+
+        /*② 摆位 —— 本项目是 Z-up（MEMORY 第二节），
+         *   相机站在 −Y 侧、+Z 上方，朝原点看。
+         *   ★ 用 LookRotation 的双参数重载显式指定参考上轴 = +Z；
+         *     不要先给 transform.up 赋值再 LookAt ——
+         *     那是两次独立重算 rotation，叠加后朝向不可控。*/
+        Vector3 camPos = new Vector3(0f, -26f, 16f);
+        cam.transform.position = camPos;
+        cam.transform.rotation = Quaternion.LookRotation(
+            (Vector3.zero - camPos).normalized, Vector3.forward);
+
+        // 相机得有 SimpleOrbitCamera 才能转视角（否则鼠标动不了）
+        if (cam.GetComponent<SimpleOrbitCamera>() == null)
+            cam.gameObject.AddComponent<SimpleOrbitCamera>();
+
+        cameraPlaced = true;
+
+        // ---------- ③ 光照（没光的话几何全黑，一样看不见）----------
         Light existingLight = FindObjectOfType<Light>();
         if (existingLight == null)
         {
@@ -319,12 +397,17 @@ public class SilkSpiderTestStage : MonoBehaviour
             light.type = LightType.Directional;
             light.intensity = 1.1f;
 
-            RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
-            RenderSettings.ambientLight = new Color(0.42f, 0.44f, 0.48f);
-
             Debug.Log("[SpiderTest] 场景里没有光源，已自动创建 SpiderTestLight。");
         }
+
+        // ★ 环境光无条件设：场景里若 Lightmap 已烘焙 / 环境光为黑，
+        //   朝不到光的背面会全黑，看不出轮廓。
+        RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
+        RenderSettings.ambientLight = new Color(0.42f, 0.44f, 0.48f);
     }
+
+    /// <summary>相机是否已摆过位（避免 Start 里二次覆盖用户的视角）。</summary>
+    private bool cameraPlaced;
 
     /// <summary>
     /// 补齐「能看见、能操作」所必需的东西：相机、光源、控制器。
@@ -349,13 +432,11 @@ public class SilkSpiderTestStage : MonoBehaviour
         }
 
         Debug.Log("[SpiderTest] ===== 测试场就绪 =====\n"
-                + "  按 Tab 切到 Parkour（球才会落到地板上）\n"
-                + "  再勾上这三个开关：\n"
-                + "    SilkSpiderSurfaceMove.Enable Input\n"
-                + "    SilkSpiderSurfaceMove.Show Debug\n"
-                + "    SilkSpiderBody.Enable Legs← 不勾看不到腿\n"
-                + "  调试开关本身会保留本次运行的状态；"
-                + "若腿没出现，勾上 Enable Legs 再切一次 Tab。");
+                + "  ★ 现在按一下 Tab 切到 Parkour —— 球会自动落到地板上、长出 8 条腿。\n"
+                + "  ★ 不按 Tab 看不到球：mode 初值是 FreeFly，控制器只在 Parkour 建球\n"
+                + "    （SilkBuilder.cs:4475）。这是原有设计，不是 bug。\n"
+                + "  开关默认已全部开启（Enable Input / Show Debug / Enable Legs），\n"
+                + "  不需要去检查器里手动勾 —— 组件是运行时自动挂的，检查器里看不到。");
     }
 
     /// <summary>手动调用也能建（可从 Unity 编辑器右键菜单触发）。</summary>

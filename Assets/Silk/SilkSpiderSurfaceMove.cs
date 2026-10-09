@@ -43,43 +43,104 @@ public class SilkSpiderSurfaceMove : MonoBehaviour
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     static void AutoAttach()
     {
-        /*★★ 必须先补齐「能看见」的前提，再考虑挂运动组件。
+        /*★★★ 这里踩了**两次**坑，两个都独立：
          *
-         * 【踩过的坑 —— 这就是「啥也没看到」的完整根因】
+         * 【坑1 · 循环依赖】
          *   原来的写法是「遍历所有 SilkParkourController，给它挂组件」。
          *   ★ 但本项目里控制器是**运行时**由 SilkSpiderTestStage 创建的，
-         *     而 SilkSpiderTestStage 又是本方法挂上去的 —— **循环依赖**：
+         *     而 SilkSpiderTestStage 又是本方法挂上去的：
+         *       场景里没有控制器 → 遍历循环体一次都不执行
+         *       → SilkSpiderTestStage 永远挂不上 → 相机/控制器/球全都没建
          *
-         *       场景里没有控制器
-         *         → 遍历循环体一次都不执行
-         *         → SilkSpiderTestStage 永远挂不上
-         *         → EnsurePlayable 永不执行
-         *         → 相机/控制器/球全都没建
-         *         → 【屏幕全黑，什么都看不到】
+         * 【坑 2 ★★ 「宿主可能根本不存在」—— 更致命】
+         *   修完坑 1 后我改成「遍历 SilkBuilder[]，在它身上挂测试场」。
+         *   ★★ 但 `ceshi.unity`（用户实际在跑的场景）**里根本没有 SilkBuilder**：
+         *      它只有 Cube / Sphere / Main Camera / Directional Light，
+         *      连一个 MonoBehaviour 都没有。
+         *   → FindObjectsOfType<SilkBuilder>() 返回空数组
+         *   → 循环体又一次不执行 → 测试场还是建不出来
          *
-         *   → 所以顺序必须是：
-         *       ① 先找到 SilkBuilder（它一定在场景里，是入口）
-         *       ② 在它身上挂 SilkSpiderTestStage（由它去建相机/控制器/球）
-         *       ③ 再回头遍历 SilkParkourController（此时已经有了）
-         *       ④ 最后处理 Tab 切换后的补挂（controller 由模式切换创建）
+         * 【正确做法 · 不能依赖任何特定组件存在】
+         *   拿 SilkBuilder 当宿主是**假设**，不是保证。
+         *   → 优先级：① 已有的 SilkBuilder → ② 场景里任意 GameObject
+         *             → ③ 自己 new 一个专用宿主
+         *   第③ 步是唯一能覆盖「空场景」的做法，也是最终兜底。
          */
         EnsureTestStage();
         EnsureForAllControllers();
         EnsureForAllBuilders();
     }
 
-    /// <summary>★ 保证 SilkBuilder 上挂了 SilkSpiderTestStage。</summary>
+    /// <summary>
+    /// ★ 保证场上有一个挂了 <see cref="SilkSpiderTestStage"/> 的物体。
+    ///
+    /// 【三种宿主，按优先级】
+    ///   ① SilkBuilder —— 用户自己的入口，能复用它的 builder 引用
+    ///   ② 场景里任意 GameObject —— 场景没 SilkBuilder 但有别的东西
+    ///   ③ **自己 new 一个** —— ★ 场景是空的（`ceshi.unity` 就是这种）
+    ///
+    /// 【为什么必须有第 ③ 步】
+    ///   `ceshi.unity` 里连一个 MonoBehaviour 都没有，
+    ///   只有 Cube / Sphere / Main Camera / Directional Light。
+    ///   前两种策略全落空 → 测试场永远建不出来 → 屏幕上一个像素都没有。
+    /// </summary>
     private static void EnsureTestStage()
     {
-        SilkBuilder[] builders = FindObjectsOfType<SilkBuilder>();
-        for (int i = 0; i < builders.Length; i++)
-        {
-            if (builders[i] == null) continue;
-            if (builders[i].GetComponent<SilkSpiderTestStage>() != null) continue;
+        // ① 已有的 SilkSpiderTestStage 直接复用
+        SilkSpiderTestStage exist = FindObjectOfType<SilkSpiderTestStage>();
+        if (exist != null) return;
 
-            builders[i].gameObject.AddComponent<SilkSpiderTestStage>();
+        // ② 优先挂在 SilkBuilder 上（能复用它的 builder 引用）
+        SilkBuilder[] builders = FindObjectsOfType<SilkBuilder>();
+        if (builders.Length > 0 && builders[0] != null)
+        {
+            builders[0].gameObject.AddComponent<SilkSpiderTestStage>();
             Debug.Log("[SpiderMove] 已挂上 SilkSpiderTestStage（测试场 + 相机 + 控制器）。");
+            return;
         }
+
+        // ③ ★ 场景里没有 SilkBuilder —— 自己建一个专用宿主
+        var host = new GameObject("SpiderTestHost");
+        Object.DontDestroyOnLoad(host);
+
+        /*★ DontSave（不是 HideAndDontSave）——
+         *   这样它**不会被存进场景文件**。
+         *   宿主是运行时产物，若被保存，用户下次打开场景会看到一个
+         *   带 SilkBuilder 的神秘物体，还可能触发 Awake 的实例唯一性守卫。
+         *   理由同SpiderAutoAttach：DontSave 只影响保存，不影响运行时生命周期。*/
+        host.hideFlags = HideFlags.DontSave;
+
+        /*★★★ 宿主上必须补一个 SilkBuilder，否则一按 Tab 就崩。
+         *
+         * 【踩过的坑 —— 「啥也没看到」的第 7 个根因，也是最容易崩的】
+         *   控制器的 `builder` 字段是这么来的（SilkBuilder.cs:4465）：
+         *       builder = FindObjectOfType<SilkBuilder>();
+         *
+         *   场景里没有 SilkBuilder → `builder` 全程是 **null**。
+         *   而下面这些地方**完全不做 null 检查**：
+         *       4508/4509  if (builder.freeBuildSpawnOverride != ...)
+         *       4522       new Vector3(500, 500, builder.freeBuildSearchMaxZ * .5f)
+         *       4538       if (top <= builder.freeBuildSearchMaxZ)
+         *       4561       => builder.freeBuildMode ? ... : ...      ← EffectiveStartPosition
+         *       4566       => builder.freeBuildMode ? ... : ...      ← EffectiveFallRespawnZ
+         *   ★ 其中 4561/4566 是 **EffectiveStartPosition / EffectiveFallRespawnZ**，
+         *     而切Tab 时控制器正是通过它们决定球往哪放。
+         *   → 一按 Tab 立刻 NullReferenceException，什么都看不到。
+         *
+         *   ★ 为什么补一个 SilkBuilder 是安全的：
+         *     · Awake 只有「实例唯一性守卫」（发现重复就自杀后来者）——
+         *       这里场上本来就没有别的，守卫不会触发；
+         *     · Start 只设两个 LayerMask，无副作用；
+         *     · 它是 MonoBehaviour，不 new 不代表要手动构造。
+         */
+        host.AddComponent<SilkBuilder>();
+        host.AddComponent<SilkSpiderTestStage>();
+
+        Debug.LogWarning("[SpiderMove] 场景里没有 SilkBuilder，"
+                       + "已自建宿主 SpiderTestHost（内含 SilkBuilder + SilkSpiderTestStage）。\n"
+                       + "★ 这说明当前场景是空的（只有默认 Cube/Sphere/Camera/Light）。\n"
+                       + "  测试场、相机、控制器、球、8 条腿都已自动创建。\n"
+                       + "  别忘了按 Tab 切到 Parkour —— 球只在 Parkour 模式才建。");
     }
 
     /// <summary>给所有控制器挂上贴面移动与假骨骼。</summary>
@@ -119,7 +180,23 @@ public class SilkSpiderSurfaceMove : MonoBehaviour
 
         var watcher = new GameObject("SpiderAutoAttach");
         Object.DontDestroyOnLoad(watcher);
-        watcher.hideFlags = HideFlags.HideAndDontSave;
+        /*★★★ hideFlags 必须是 DontSave，**不能是 HideAndDontSave**。
+         *
+         * 【区别（Unity 语义）】
+         *   HideFlags.HideAndDontSave = HideInHierarchy | HideInInspector
+         *       | DontSaveInEditor | DontSaveInBuild | DontUnloadUnusedAsset
+         *   ★ 带 DontSaveInEditor / DontSaveInBuild 的物体**不参与构建**，
+         *     Unity 不把它当普通对象管理；与 DontDestroyOnLoad 混用时行为不可靠
+         *     —— 常见症状是切场景后 watcher 静默消失，补挂逻辑不再执行。
+         *
+         *   HideFlags.DontSave = DontSaveInEditor | DontSaveInBuild
+         *     只影响「保存」，**不影响运行时生命周期** —— 配合 DontDestroyOnLoad 才正确。
+         *
+         * 【为什么这个细节重要】
+         *   watcher 是「按 Tab 之后还能补挂腿」的唯一保障。
+         *   它一失效，玩家就再也看不到腿，而且**没有任何报错**。
+         */
+        watcher.hideFlags = HideFlags.DontSave;
 
         /* ★ 不要写 comp.Awake()。
          *   AddComponent 在运行时**已经**会自动调一次 Awake，
