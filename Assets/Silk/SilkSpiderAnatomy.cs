@@ -150,6 +150,13 @@ public class SilkSpiderAnatomy : MonoBehaviour
         }
 
         CollectRenderers();
+
+        // ★★ 自动打一次可见体自检 —— 不用用户做任何操作就能看到卡在哪一环。
+        //   起因：用户连续两次说「和之前没区别」，而我两次都猜错了原因
+        //   （先猜「Unity 没编译」，再猜「HideBallVisuals 关掉了 FBX」）。
+        //   → 猜的成本是「让用户再跑一次 + 再描述一次现象」，太高。
+        //   → 不猜了，直接把依据打出来。
+        DumpVisibleStateForDebug();
     }
 
     /// <summary>
@@ -271,6 +278,109 @@ public class SilkSpiderAnatomy : MonoBehaviour
             + "（Skinned=" + (skinned != null) + " MeshFilter=" + (meshFilter != null) + "）");
 
         return instance;
+    }
+
+    /// <summary>
+    /// ★★ 一次性把「画面上该有什么」全部打出来 —— 验收自检。
+    ///
+    /// 【★ 为什么要这个】
+    ///   2026-10-11 用户连续两次反馈「和之前没区别」，而我只能靠猜：
+    ///     第一次猜「Unity 没编译」→ 猜错了（DLL 确实比源码新）
+    ///     第二次猜「HideBallVisuals 把 FBX 关了」→ 也猜错了（它只按名字关 Body/Nose）
+    ///   **猜的成本太高，而且每次猜错都要用户再跑一次。**
+    ///   → 不猜了：把所有判断依据一次打印出来，看日志就知道卡在哪一环。
+    ///
+    /// 【打印内容】
+    ///   ① 层级：FBX 实例有几个渲染器、几个骨骼、有没有挂在场景里
+    ///   ② 可见性：每个渲染器的 enabled 状态 + 实际是否在视锥内
+    ///   ③ 尺寸：FBX 的包围盒 —— 模型太小或缩到 0 也会「看起来没区别」
+    ///   ④ 位置：FBX 实例的世界坐标是否跟身体重合
+    /// </summary>
+    public void DumpVisibleStateForDebug()
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("=== [蜘蛛可见体自检] ===");
+
+        if (VisualRoot == null)
+        {
+            sb.AppendLine("★ VisualRoot 为 null → Build() 从未成功执行");
+            Debug.Log(sb.ToString());
+            return;
+        }
+
+        sb.AppendLine("VisualRoot = " + VisualRoot.name
+            + "  世界坐标 " + VisualRoot.position.ToString("F3")
+            + "  activeInHierarchy=" + VisualRoot.gameObject.activeInHierarchy
+            + "  localScale=" + VisualRoot.localScale.ToString("F3"));
+
+        Transform model = VisualRoot.Find("SpiderModel_FBX");
+        if (model == null)
+        {
+            sb.AppendLine("★★ VisualRoot 下没有 SpiderModel_FBX —— FBX 接管失败");
+            sb.AppendLine("    VisualRoot 的子物体：");
+            for (int i = 0; i < VisualRoot.childCount; i++)
+                sb.AppendLine("      - " + VisualRoot.GetChild(i).name);
+            Debug.Log(sb.ToString());
+            return;
+        }
+
+        sb.AppendLine("FBX 实例 = " + model.name
+            + "  世界坐标 " + model.position.ToString("F3")
+            + "  localScale=" + model.localScale.ToString("F3")
+            + "  active=" + model.gameObject.activeInHierarchy
+            + "  layer=" + model.gameObject.layer);
+
+        Renderer[] rs = model.GetComponentsInChildren<Renderer>(true);
+        int enabledCount = 0;
+        var bbox = new Bounds(model.position, Vector3.zero);
+        bool first = true;
+        for (int i = 0; i < rs.Length; i++)
+        {
+            if (rs[i] == null) continue;
+            if (rs[i].enabled) enabledCount++;
+            if (!first) bbox.Encapsulate(rs[i].bounds.center);
+            else { bbox = rs[i].bounds; first = false; }
+        }
+
+        sb.AppendLine("渲染器总数 = " + rs.Length + "，enabled = " + enabledCount);
+        sb.AppendLine("★ 包围盒尺寸 = " + bbox.size.ToString("F4")
+            + "  中心 " + bbox.center.ToString("F3"));
+        if (bbox.size.sqrMagnitude < 1e-6f)
+            sb.AppendLine("  ★★ 包围盒退化（全零）→ 模型没有有效顶点，或 scale = 0");
+
+        // 材质与着色器 —— 粉色/白色通常意味着 shader 丢失
+        var smr = model.GetComponentInChildren<SkinnedMeshRenderer>(true);
+        if (smr != null)
+        {
+            sb.AppendLine("SkinnedMeshRenderer: " + (smr.enabled ? "enabled" : "★ disabled")
+                + "  bones=" + (smr.bones != null ? smr.bones.Length : 0)
+                + "  visible=" + smr.isVisible);
+            var mats = smr.sharedMaterials;
+            if (mats != null)
+            {
+                sb.AppendLine("  材质 " + mats.Length + " 个：");
+                for (int i = 0; i < Mathf.Min(3, mats.Length); i++)
+                {
+                    if (mats[i] == null) { sb.AppendLine("    [" + i + "] null"); continue; }
+                    sb.AppendLine("    [" + i + "] " + mats[i].name
+                        + "  shader=" + (mats[i].shader != null
+                            ? mats[i].shader.name : "★ null")
+                        + (mats[i].shader != null && !mats[i].shader.isSupported
+                            ? "  ★ shader 不被当前渲染管线支持" : ""));
+                }
+            }
+            sb.AppendLine("  bounds(本地) = " + smr.localBounds.ToString("F4"));
+        }
+
+        // 骨骼链是否真的有 5 节
+        for (int i = 0; i < SilkSpiderLegs.Count; i++)
+        {
+            Transform[] chain = FbxRig != null ? FbxRig.GetLegChain(i) : null;
+            sb.AppendLine("  腿" + i + " 链节数 = "
+                + (chain != null ? chain.Length.ToString() : "null（接管失败）"));
+        }
+
+        Debug.Log(sb.ToString());
     }
 
     // ---------------------------------------------------------------

@@ -508,6 +508,12 @@ public class SilkSpiderTestStage : MonoBehaviour
         int boneCount = 0;
         int bodyPartCount = 0;
         string gaitInfo = "未建";
+        // ★★ 可见性诊断行：直接数「画面上真正会画的渲染器」。
+        //   起因：用户两次说「和之前没区别」，而 HUD 当时显示的是
+        //   「身体段 3/3」「步足 8 条」这类**间接指标**——
+        //   那些数字变了也看不出画面变没变。
+        //   → 改成直接数 enabled 的 Renderer，一眼就能判断。
+        string visLine = "可见体: ★未建（还没按 Tab 切到 Parkour？）\n";
         if (body != null && body.Anatomy != null)
         {
             /*★★ 2026-10-09：HUD 改读 SilkSpiderAnatomy。
@@ -527,7 +533,32 @@ public class SilkSpiderTestStage : MonoBehaviour
                     if (segs > 0) boneCount += segs;
                 }
             }
-            gaitInfo = "交替四足步态 duty=" + body.dutyFactor.ToString("F2")
+
+            // ---- ★ 直接统计画面上真正会画的渲染器 ----
+            int totalR = 0, enabledR = 0, visibleR = 0;
+            var allR = anat.VisualRoot != null
+                ? anat.VisualRoot.GetComponentsInChildren<Renderer>(true)
+                : new Renderer[0];
+            for (int i = 0; i < allR.Length; i++)
+            {
+                if (allR[i] == null) continue;
+                totalR++;
+                if (!allR[i].enabled) continue;
+                enabledR++;
+                if (allR[i].isVisible) visibleR++;
+            }
+
+            visLine = "可见体: " + visibleR + " 个渲染器真的在画面上"
+                    + "（共 " + totalR + " 个，enabled " + enabledR + "）";
+            if (totalR == 0)
+                visLine += " ★ 根本没有渲染器 → FBX 没接管";
+            else if (enabledR == 0)
+                visLine += " ★★ 全部被禁用 → 被 HideBallVisuals 关掉了？";
+            else if (visibleR == 0)
+                visLine += " ★★ 存在但不在视锥内 → 相机没对着它";
+            visLine += "\n";
+
+            gaitInfo = "四足对角步态 duty=" + body.dutyFactor.ToString("F2")
                       + " → 着地≈ " + (SilkSpiderLegs.Count * body.dutyFactor).ToString("F1") + " 条\n"
                       + "步时: " + (body.scaleCycleBySpeed ? "随速度缩放" : "固定")
                       + "（过冲 " + body.overshootMultiplier.ToString("F2")
@@ -537,20 +568,13 @@ public class SilkSpiderTestStage : MonoBehaviour
         mode = ballInScene ? "Parkour（球已建）" : "FreeFly（未按 Tab）";
 
         string text =
-            "蜘蛛自检（真解剖 + FABRIK IK）\n" +
+            "蜘蛛自检（FBX 可见体 + FABRIK IK）\n" +
             "模式: " + mode + "\n" +
-            "球: " + (ballInScene ? "存在  心(" + ballPos.x.ToString("F1") + ", "
-                                  + ballPos.y.ToString("F1") + ", "
-                                  + ballPos.z.ToString("F1") + ")" : "不存在") + "\n" +
-            "身体段: " + bodyPartCount + " / 3（头胸+腹部+腹柄）\n" +
+            visLine +
             "腿骨节: " + boneCount + " （" + SilkSpiderLegs.Count + " 条 × "
                 + SilkSpiderFbxRig.SegmentsPerLeg + " 节 = "
                 + (SilkSpiderLegs.Count * SilkSpiderFbxRig.SegmentsPerLeg) + "）\n" +
             gaitInfo + "\n" +
-            "相机↔球: " + camDist.ToString("F1") + " 格\n" +
-            (cam != null ? "相机(" + cam.transform.position.x.ToString("F0") + ", "
-                               + cam.transform.position.y.ToString("F0") + ", "
-                               + cam.transform.position.z.ToString("F0") + ")\n" : "") +
             (ballInScene ? "WASD走位 空格跳 鼠标转视角"
                          : "★ 现在按 Tab 切到 Parkour 才会建球");
 
