@@ -245,6 +245,17 @@ public class SilkSpiderFbxRig : MonoBehaviour
     ///   在骨骼上直接转，等于把旋转算两遍（父级一次+ 自己一次）。
     ///   → 只转根，让它沿层级自然传下去。
     /// </summary>
+    [Tooltip(
+        "★★ 模型整体缩放（2026-10-11 新增）。1 = 原始导入尺寸。\n"
+        + "0.5 的依据（来自 22:24 运行的自检日志，不是猜的）：\n"
+        + "  · 原始包围盒 5.95 × 5.05 × 2.74（腿展约 6 格）\n"
+        + "  · 碰撞球直径只有 2.5 格 → 腿展是球径 2.4 倍，贴墙/进门时腿会穿帮\n"
+        + "  · × 0.5 后：身体长约 2.5 格（与碰撞球一致），腿展 3 格，\n"
+        + "    4.5 格宽的门洞能正常通过\n"
+        + "  ★ 步态腿长会自动跟着缩（SilkSpiderAnatomy 用骨骼链实测反推），\n"
+        + "    改这个数不需要再调任何步态参数。")]
+    [Range(0.1f, 3f)] public float modelScale = 0.5f;
+
     private void ApplyOrientation()
     {
         // ★ 用 localRotation 而不是 rotation：
@@ -252,7 +263,13 @@ public class SilkSpiderFbxRig : MonoBehaviour
         //   localRotation 表达的是「相对父级的修正」，语义更明确。
         FbxRoot.localRotation = Quaternion.Euler(orientationFixDeg, 0f, 0f);
         FbxRoot.localPosition = Vector3.zero;
-        FbxRoot.localScale = Vector3.one;   // ★ 缩放必须归一，否则蒙皮权重会偏
+
+        // ★ 整体缩放：**均匀缩放**对蒙皮是安全的（顶点跟着骨骼矩阵等比变换）。
+        //   之前写死 Vector3.one 的注释「缩放必须归一，否则蒙皮权重会偏」
+        //   指的是**非均匀**缩放会把骨骼各轴拉伸不一致 —— 那才是错的。
+        //   均匀缩放 + 腿长自动反推 = 换模型/调大小都不用碰步态参数。
+        float s = Mathf.Max(0.01f, modelScale);
+        FbxRoot.localScale = new Vector3(s, s, s);
     }
 
     /// <summary>递归收集所有 Transform，按名字建索引。</summary>
