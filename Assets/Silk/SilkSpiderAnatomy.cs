@@ -40,95 +40,29 @@ public class SilkSpiderAnatomy : MonoBehaviour
     //  体形参数（全部由球半径 visualRadius 推导，不写字面量）
     // ================================================================
 
-    [Header("整体")]
-    [Tooltip("球半径（体形基准）。默认取 SilkParkourController.visualRadius")]
+    // ================================================================
+    //  FBX 模型（★ 唯一的可见体来源）
+    // ================================================================
+
+    /// <summary>
+    /// ★ 球半径（体形基准）。默认取 SilkParkourController.visualRadius。
+    ///   现在只用于在 HUD 上显示体型比例，不再驱动任何程序化建模
+    ///   （程序化建模已于 2026-10-11 全部删除）。
+    /// </summary>
+    [Header("FBX 模型（唯一的可见体来源）")]
     public float scaleRadius = -1f;
 
-    [Tooltip("头胸部长度（沿前后方向，Z-up 项目里是 Y 轴）。球半径的 1.15 倍")]
-    public float cephaloLength = -1f;
-
-    [Tooltip("头胸部宽度（左右方向）。球半径的 1.30 倍\n"
-        + "★ 比长度宽 —— 真实蜘蛛头胸部正面看接近圆形/方形")]
-    public float cephaloWidth = -1f;
-
-    [Tooltip("头胸部高度（法线方向）。球半径的 0.62 倍\n"
-        + "★ 比宽度矮 —— 蜘蛛是「扁」的，这是最关键的轮廓特征")]
-    public float cephaloHeight = -1f;
-
-    [Tooltip("腹部半径（卵圆形的长半轴）。球半径的 1.15 倍\n"
-        + "★ 真实蜘蛛的腹部往往比头胸部**大**，这是「蜘蛛」而非「甲虫」的关键")]
-    public float abdomenRadius = -1f;
-
-    [Tooltip("头胸部中心到腹部中心的距离。球半径的 1.95 倍\n"
-        + "★ 拉开两者才有「两个身体段」的观感；靠太近会退回「一个球」")]
-    public float bodyGap = -1f;
-
-    [Header("步足")]
-    [Tooltip("每条腿的**总长**（腿根到足端）。球半径的 3.6 倍\n"
-        + "★ 真实蜘蛛的腿长远大于身体，这是最显眼的物种特征。\n"
-        + "  之前用 2.4 倍 → 腿短到像装饰品，必须加大")]
-    public float legLength = -1f;
-
-    [Tooltip("腿的**分节比例**。从腿根到足端，各段占腿长的比例。\n"
-        + "★ 依据解剖学：腿节(femur) > 膝节+胫节(tibia) > 跗节(tarsus)。\n"
-        + "  之前的实现是单段直线 → 从任何角度看都没有「关节」")]
-    public float[] legSegments = new float[] { 0.30f, 0.16f, 0.32f, 0.14f, 0.08f };
-
-    [Tooltip("每条腿的**粗细**（腿根处半径）。球半径的 0.155倍")]
-    public float legRootThickness = -1f;
-
-    [Tooltip("足端相对腿根的粗细比例（腿尖只剩 35%）")]
-    public float legTipRatio = 0.35f;
-
-    [Tooltip("腿根相对头胸部的外扩（左右方向）。球半径的 0.62 倍\n"
-        + "★ 腿根要**在头胸部之外**，否则腿看起来从肚子底下长出来")]
-    public float legRootSpread = -1f;
-
-    [Tooltip("腿根沿前后方向的位置分布（-1 最前 → +1 最后）。\n"
-        + "★ 真实蜘蛛的 4 对腿**都长在头胸部后半**——\n"
-        + "  因为口器、螯肢、眼睛占据着前端。\n"
-        + "  之前的实现是 -1~+1 均布在全长上 → 前腿长到头顶前面，不对")]
-    public float legRootRearBias = 0.45f;
-
-    [Tooltip("腿的静态张开角（度）。0 = 完全竖直，90 = 完全水平")]
-    public float legSpreadDeg = 62f;
-
-    [Header("螯肢与眼")]
-    [Tooltip("是否长螯肢（嘴前的一对小钳）。★ 强烈建议开 ——\n"
-        + "  有螯肢才像蜘蛛，只剩8 条腿像螃蟹")]
-    public bool buildChelicerae = true;
-
-    // ================================================================
-    //  FBX 模型（★ 真正的蜘蛛本体）
-    // ================================================================
-
-    [Header("FBX 模型（真正的蜘蛛）")]
-    [Tooltip("★ Blender 导出的 FBX 实例。\n"
-        + "  填了就用它当可见体，程序化建模自动关闭；\n"
-        + "  留空则退回旧的 C# 拼装（球加腿）。")]
+    [Tooltip("FBX 实例。留空则从 Resources/spider_lowpoly 自动加载。\n"
+        + "★ 这不是必需的 —— 运行时 AddComponent 的组件在编辑器里没有 Inspector，\n"
+        + "  所以真正的用法是「留空，走 Resources 自动加载」。")]
     public GameObject fbxInstance;
 
     [Tooltip("FBX 朝向修正（绕 X 轴，度）。90 = FBX 的 Y-up 转成本项目 Z-up。")]
     public float fbxOrientationFixDeg = 90f;
 
-    [Tooltip("FBX 接管失败时是否报错并中止蜘蛛构建。\n"
-        + "  ★ 建议保持 true —— 静默退回「球加腿」正是用户要摆脱的东西")]
+    [Tooltip("FBX 加载失败时是否报错。★ 建议保持 true ——\n"
+        + "  静默失败会让人以为「蜘蛛没渲染出来」而查错方向")]
     public bool failIfFbxMissing = true;
-
-    [Tooltip("螯肢长度。球半径的 0.85 倍")]
-    public float cheliceraLength = -1f;
-
-    [Tooltip("眼睛数量（真实蜘蛛通常 8 只）")]
-    public int eyeCount = 8;
-
-    [Tooltip("单眼半径。球半径的 0.075 倍")]
-    public float eyeRadius = -1f;
-
-    [Header("配色")]
-    public Color bodyColor = new Color(0.20f, 0.15f, 0.13f, 1f);
-    public Color abdomenColor = new Color(0.26f, 0.19f, 0.15f, 1f);
-    public Color legColor = new Color(0.16f, 0.13f, 0.12f, 1f);
-    public Color eyeColor = new Color(0.95f, 0.85f, 0.55f, 1f);
 
     // ================================================================
     //  运行时
@@ -172,54 +106,37 @@ public class SilkSpiderAnatomy : MonoBehaviour
     {
         if (VisualRoot != null) return;
 
-        float r = ResolveRadius();
-
-        // ---- 参数推导：全部由球半径导出 ----
-        if (scaleRadius <= 0f) scaleRadius = r;
-        if (cephaloLength <= 0f) cephaloLength = r * 1.15f;
-        if (cephaloWidth <= 0f) cephaloWidth = r * 1.30f;
-        if (cephaloHeight <= 0f) cephaloHeight = r * 0.62f;
-        if (abdomenRadius <= 0f) abdomenRadius = r * 1.15f;
-        if (bodyGap <= 0f) bodyGap = r * 1.95f;
-        if (legLength <= 0f) legLength = r * 3.6f;
-        if (legRootThickness <= 0f) legRootThickness = r * 0.155f;
-        if (legRootSpread <= 0f) legRootSpread = r * 0.62f;
-        if (cheliceraLength <= 0f) cheliceraLength = r * 0.85f;
-        if (eyeRadius <= 0f) eyeRadius = r * 0.075f;
-
-        if (legSegments == null || legSegments.Length != 5)
-        {
-            legSegments = new float[] { 0.30f, 0.16f, 0.32f, 0.14f, 0.08f };
-        }
-        // 归一化，保证 5 段之和 = 1（否则腿的总长会随参数漂移）
-        NormalizeSegments();
+        if (scaleRadius <= 0f) scaleRadius = ResolveRadius();
+        if (legLength <= 0f) legLength = scaleRadius * 3.6f;
 
         var rootGo = new GameObject("SpiderAnatomy");
         rootGo.transform.SetParent(parent, false);
         VisualRoot = rootGo.transform;
 
-        /*★★ 优先走 FBX：真正的蜘蛛模型（42 骨骼 / 97 网格 / 有蒙皮）。
+        /*★★★ FBX 是**唯一**可见体来源（2026-10-11 删除全部程序化建模）
          *
-         * 【★ 为什么必须优先，而不是「两条路并存」】
-         *   程序化建模 = Cylinder/球拼的**球加腿**，正是用户明确否定的东西：
-         *     「这个不还是球加腿吗？我现在要的是真的蜘蛛模型」
-         *   两套并存 → FBX 的蜘蛛被程序化的球体压在下面，画面依然是「球加腿」。
-         *   → 二选一，FBX 优先。
-         *
-         * 【失败怎么办】
-         *   fbxInstance 没填或骨骼不齐时：
-         *     · failIfFbxMissing = true（默认）→ 记错误，退回程序化，不静默
-         *     · false → 退回程序化，行为同旧版
-         *   ★ 无论哪种都**必须打日志**——静默退回就是「莫名其妙变回球加腿」，
-         *     用户只能从画面猜原因。
+         * 【为什么必须没有 fallback】
+         *   之前是 `if (!fbxOk) { BuildCephalothorax(); ... }`，
+         *   意思是「FBX 拿不到就用球+腿凑合」。但这恰恰是**问题本身**：
+         *     · 失败时静默退回一个不能看的模型 → 用户看到的永远是错的
+         *     · 因为「凑合还能动」，永远不会有人去查为什么 FBX 没加载
+         *   → 曾经卡在这里很久：每次汇报都写「待办：用户去拖 FBX」，
+         *     而 `SilkSpiderAnatomy` 是**运行时 AddComponent** 的，
+         *     编辑器里根本没有 Inspector 可拖 → 这个 fallback 永远在生效。
+         *   → 现在 FBX 走 Resources 自动加载；拿不到就**明确报错并中止**，
+         *     不再伪装成「有东西在跑」。
          */
-        bool fbxOk = TryBuildFromFbx();
-        if (!fbxOk)
+        if (!TryBuildFromFbx())
         {
-            BuildCephalothorax();
-            BuildAbdomen();
-            if (buildChelicerae) BuildChelicerae();
-            BuildEyes();
+            Debug.LogError("[SpiderAnatomy] ★ 没有可见体 —— 蜘蛛本体不显示。\n"
+                + "  程序化建模已于 2026-10-11 全部删除（用户判定「完全不能看」），"
+                + "不再作为 fallback。\n"
+                + "  请修好 FBX 加载（看上面那条错误）。"
+                + "碰撞体不受影响，仍可正常移动。", this);
+            limbs = new SilkSpiderLimb[8];
+            LegRoots = new Vector3[8];
+            FootPositions = new Vector3[8];
+            return;
         }
 
         BuildLimbs();
@@ -356,179 +273,27 @@ public class SilkSpiderAnatomy : MonoBehaviour
         return instance;
     }
 
-    private void NormalizeSegments()
-    {
-        float sum = 0f;
-        for (int i = 0; i < legSegments.Length; i++) sum += Mathf.Max(0.01f, legSegments[i]);
-        if (sum <= 0.0001f) return;
-        for (int i = 0; i < legSegments.Length; i++)
-            legSegments[i] = Mathf.Max(0.01f, legSegments[i]) / sum;
-    }
-
-    // ---------------------------------------------------------------
-    //  头胸部
-    // ---------------------------------------------------------------
-
-    /// <summary>
-    /// 头胸部 = 扁椭球 + 略微隆起的中脊。
-    /// ★ 为什么要「扁」：蜘蛛不是球，是被压扁的。高度只有宽度的 0.48 左右。
-    ///
-    ///★★★ 2026-10-09 修重大 bug：头胸部此前**完全不可见**
-    ///   原代码 `new GameObject("Cephalothorax")` 建的是**空物体**，
-    ///   既没有 MeshFilter 也没有 MeshRenderer，
-    ///   而 Paint() 第一行就是 `if (mr == null) return;` → 直接返回，什么都没做。
-    ///   → 结果：画面上根本没有身体，只剩玩家本体的蓝球 + 8 条腿。
-    ///   → **这就是用户说的「不还是球加腿吗」的直接原因。**
-    ///   ★ 教训：new GameObject() 之后不AddComponent<MeshFilter>()，
-    ///     后续所有 localScale / Paint 都是空操作。这条静默失败，没有任何报错。
-    /// </summary>
-    private void BuildCephalothorax()
-    {
-        // ★ 必须用 Sphere 原型（自带 MeshFilter/MeshRenderer），不能用空 GameObject
-        var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        go.name = "Cephalothorax";
-        go.transform.SetParent(VisualRoot, false);
-        KillCollider(go);
-
-        // 本项目Z-up：Z = 法线方向（厚度），X = 左右（宽）， Y = 前后（长）
-        // ★ Sphere 原型半径 0.5 → localScale 要乘 2 才是真实直径
-        go.transform.localScale = new Vector3(
-            cephaloWidth * 2f, cephaloLength * 2f, cephaloHeight * 2f);
-
-        Paint(go, bodyColor);
-        Cephalothorax = go.transform;
-
-        // ★ 前端略窄：真实蜘蛛头胸部前端（口器区）比后端细。
-        //   做法：在前端加一个小的锥形收窄块，形成「盾形」轮廓。
-        var snout = GameObject.CreatePrimitive(PrimitiveType.Cube);
-        snout.name = "CephaloSnout";
-        snout.transform.SetParent(go.transform, false);
-        // Cube 原点是中心，前端在 +Y → localPosition 要往后偏移半个身位
-        snout.transform.localPosition = new Vector3(0f, cephaloLength * 0.72f, 0f);
-        snout.transform.localScale = new Vector3(
-            cephaloWidth * 1.10f, cephaloLength * 0.55f, cephaloHeight * 1.45f);
-        KillCollider(snout);
-        Paint(snout, bodyColor);
-
-        cephaloSegments = new Transform[] { go.transform };
-    }
-
-    private void BuildAbdomen()
-    {
-        var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        go.name = "Abdomen";
-        go.transform.SetParent(VisualRoot, false);
-
-        // ★ 腹部在**后方**（-Y），且比头胸部大
-        go.transform.localPosition = new Vector3(0f, -bodyGap, -cephaloHeight * 0.15f);
-        // 卵圆形：前后(Y) 略长、左右(X) 略窄、上下(Z) 最扁
-        go.transform.localScale = new Vector3(
-            abdomenRadius * 1.80f, abdomenRadius * 2.20f, abdomenRadius * 1.55f);
-
-        KillCollider(go);
-        Paint(go, abdomenColor);
-        Abdomen = go.transform;
-
-        // ★ 腹柄（pedicel）—— 头胸部与腹部之间的细腰。
-        //   来源：科普中国「蜘蛛」：二者之间有纤细的腹柄相连。
-        //   ★ 视觉作用极大：没有它，两个球直接相连 = 「一个球」；
-        //     有了它，才读成「两个身体段」。
-        var stalk = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-        stalk.name = "Pedicel";
-        stalk.transform.SetParent(VisualRoot, false);
-        stalk.transform.localPosition = new Vector3(0f, -bodyGap * 0.52f, 0f);
-        // Cylinder 原型高 2、轴向 Y→ 缩放时长度 = scale.y
-        stalk.transform.localScale = new Vector3(
-            cephaloWidth * 0.30f, bodyGap * 0.42f, cephaloWidth * 0.30f);
-        KillCollider(stalk);
-        Paint(stalk, bodyColor);
-
-        //★ 纺器（spinnerets）：腹部后端的3 对小突起。
-        //  来源：科普中国「蜘蛛」：腹部末端有纺器，一般 3 对。
-        for (int i = 0; i < 3; i++)
-        {
-            float sx = (i - 1) * abdomenRadius * 0.34f;
-            var sp = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            sp.name = "Spinneret_" + i;
-            sp.transform.SetParent(go.transform, false);
-            sp.transform.localPosition = new Vector3(
-                sx, -go.transform.localScale.y * 0.5f * 0.86f, 0f);
-            sp.transform.localScale = new Vector3(
-                abdomenRadius * 0.16f, abdomenRadius * 0.34f, abdomenRadius * 0.14f);
-            KillCollider(sp);
-            Paint(sp, abdomenColor * 0.7f);
-        }
-    }
-
-    /// <summary>
-    /// 螯肢 —— 头胸部前端的一对小钳。
-    /// 来源：科普中国「蜘蛛」：第一对附肢为螯肢，基部为螯节，端部为螯牙。
-    /// ★ 作用：只有 8 条腿 + 一个球 = 螃蟹；加上前端两把小钳才是蜘蛛。
-    /// </summary>
-    private void BuildChelicerae()
-    {
-        if (Cephalothorax == null) return;
-
-        for (int s = -1; s <= 1; s += 2)
-        {
-            // 螯节（粗）
-            var baseSeg = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            baseSeg.name = "Chelicera_" + (s < 0 ? "L" : "R");
-            baseSeg.transform.SetParent(Cephalothorax, false);
-            baseSeg.transform.localPosition = new Vector3(
-                s * cephaloWidth * 0.34f,
-                cephaloLength * 0.92f,
-                cephaloHeight * 0.10f);
-            baseSeg.transform.localScale = new Vector3(
-                cephaloWidth * 0.26f, cheliceraLength * 0.60f, cephaloHeight * 0.55f);
-            KillCollider(baseSeg);
-            Paint(baseSeg, bodyColor * 1.15f);
-
-            // 螯牙（细长，指向内下方 —— 蜘蛛的螯牙朝内）
-            var fang = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            fang.name = "Fang_" + (s < 0 ? "L" : "R");
-            fang.transform.SetParent(baseSeg.transform, false);
-            fang.transform.localPosition = new Vector3(
-                -s * cephaloWidth * 0.10f, cheliceraLength * 0.62f, -cephaloHeight * 0.20f);
-            fang.transform.localScale = new Vector3(
-                cephaloWidth * 0.11f, cheliceraLength * 0.55f, cephaloHeight * 0.22f);
-            KillCollider(fang);
-            Paint(fang, eyeColor * 0.55f);
-        }
-    }
-
-    /// <summary>
-    /// 单眼 —— 头胸部前端 2~4 行小圆点。
-    /// 来源：澳洲博物馆「What is a spider」：通常 8 只眼，
-    ///   排成两列于背甲前端。
-    /// </summary>
-    private void BuildEyes()
-    {
-        if (Cephalothorax == null || eyeCount <= 0) return;
-
-        for (int i = 0; i < eyeCount; i++)
-        {
-            // 两行排列：4 + 4
-            int row = i / 4;                 // 0 = 前排, 1 = 后排
-            int col = i % 4;                 // 0..3
-            float sideSign = (col < 2) ? -1f : 1f;
-            float along = cephaloLength * (0.80f - row * 0.20f - (col % 2) * 0.06f);
-            float across = sideSign * cephaloWidth * (0.46f - (col / 2) * 0.20f);
-
-            var eye = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-            eye.name = "Eye_" + i;
-            eye.transform.SetParent(Cephalothorax, false);
-            eye.transform.localPosition = new Vector3(
-                across, along, cephaloHeight * 0.86f);
-            eye.transform.localScale = Vector3.one * (eyeRadius * 2f);
-            KillCollider(eye);
-            Paint(eye, eyeColor);
-        }
-    }
-
     // ---------------------------------------------------------------
     //  腿
     // ---------------------------------------------------------------
+
+    /// <summary>
+    /// ★ 腿的分节比例，**只用于步态落点解算**，不再用于生成 mesh。
+    ///
+    /// 【★ 为什么 FBX 模式下还要留这两个参数】
+    ///   `SilkSpiderBody.ResolveLegLength()` 与步态的落点分布都读它们
+    ///   （见 SilkSpiderBody.cs:716）。删掉会连累整个步态系统。
+    ///   但它们**不再驱动任何程序化建模** —— 2026-10-11 起建模代码已全部删除。
+    ///
+    ///   比例来源（解剖学）：腿节(femur) &gt; 膝节+胫节 &gt; 跗节(tarsus)。
+    /// </summary>
+    public float[] legSegments = new float[] { 0.30f, 0.16f, 0.32f, 0.14f, 0.08f };
+
+    /// <summary>
+    /// ★ 解算用腿长（球半径的 3.6 倍），**只用于步态落点解算**。
+    ///   真实蜘蛛的腿长远大于身体，这是最显眼的物种特征。
+    /// </summary>
+    public float legLength = -1f;
 
     /// <summary>
     /// 8 条腿，每条 5 节折线（对齐 Locomotor 的 leg_X_N_M 骨骼链）。
@@ -544,56 +309,28 @@ public class SilkSpiderAnatomy : MonoBehaviour
 
         for (int i = 0; i < 8; i++)
         {
-            bool left = i < 4;
-            float sideSign = left ? -1f : 1f;
-
-            // k = 该侧的第几条腿（0 = 最前，3 = 最后）
-            float k = i % 4;
-
             var limb = new SilkSpiderLimb();
 
-            /*★★ FBX 模式：接管蒙皮骨骼，不建 mesh。
+            /*★★★ FBX 接管是**唯一**路径（2026-10-11删除了程序化建腿）
              *
-             * 【★ 为什么这条分支必须在 Build 之前】
-             *   SilkSpiderLimb.Build 会创建自己的 Transform 链 + 锥形 mesh。
-             *   若在接管之后再调用，会多出一套无蒙皮的腿，
-             *   屏幕上变成「一根有肉的腿 + 一根光骨头」。
-             *   → 接管和 Build **二选一**，绝不能先后都做。
+             * 【原来的逻辑为什么必须删】
+             *   原来是`if (UsingFbx) {...; continue;}  // 成功才跳过
+             *   → 接管失败就往下走`limb.Build(...)` 程序化建腿。
+             *   而 BuildLimbs 由 Build() 无条件调用，
+             *   所以只要 FBX 有一根骨骼对不上，就会多出一套无蒙皮的腿——
+             *   画面变成「8 条有肉的腿 + 8 根光骨头」，比球加腿更糟。
+             *   → 现在接管失败就明确报错，**绝不偷偷建一条假腿**。
              */
-            if (UsingFbx)
+            Transform[] chain = fbxRig.GetLegChain(i);
+            limb.AdoptExternalChain(chain);
+            if (!limb.UsesExternalBones)
             {
-                Transform[] chain = fbxRig.GetLegChain(i);
-                limb.AdoptExternalChain(chain);
-                if (limb.UsesExternalBones)
-                {
-                    limbs[i] = limb;
-                    continue;      // ← 接管成功，不再走程序化分支
-                }
-                // 接管失败 → 落到下面程序化分支（会打错误日志）
+                Debug.LogError("[SpiderAnatomy] 第 " + (i + 1)
+                    + " 条腿接管失败（骨骼缺失或父级断裂，见 SilkSpiderFbxRig 的日志）。"
+                    + "该腿不会被程序化建模替代 —— 本项目的腿只有 FBX 一条来源。", this);
+                limbs[i] = limb;
+                continue;
             }
-
-            // ★ 沿前后方向：整体往后偏（rearBias），再在很小的范围内铺开。
-            //   真实蜘蛛的 4 对步足根部间距不大，跨度靠「膝关节外张」而不是根部铺开。
-            float rearOffset = legRootRearBias;
-            float spread = 0.26f;
-            float along = (rearOffset + (k / 3f - 0.5f) * spread)
-                           * cephaloLength * 0.5f * 2f;
-
-            Vector3 rootLocal = new Vector3(
-                sideSign * (cephaloWidth * 0.42f + legRootSpread),
-                along,
-                -cephaloHeight * 0.15f);      // 略偏下（贴地那侧）
-
-            limb.Build(
-                VisualRoot,
-                "leg_" + (left ? "L" : "R") + "_" + (k + 1),
-                rootLocal,
-                legSegments,
-                legLength,
-                legRootThickness,
-                legTipRatio,
-                legSpreadDeg,
-                legColor);
 
             limbs[i] = limb;
         }
@@ -652,42 +389,4 @@ public class SilkSpiderAnatomy : MonoBehaviour
         return limbs[limbIndex].BoneCount;
     }
 
-    // ---------------------------------------------------------------
-    //  绘制辅助
-    // ---------------------------------------------------------------
-
-    private static Shader GetShader()
-    {
-        if (cachedShader != null) return cachedShader;
-        cachedShader = Shader.Find("Standard");
-        if (cachedShader == null) cachedShader = Shader.Find("Legacy Shaders/Diffuse");
-        if (cachedShader == null) cachedShader = Shader.Find("Unlit/Color");
-        return cachedShader;
-    }
-
-    /// <summary>统一上色。</summary>
-    private static void Paint(GameObject go, Color c)
-    {
-        MeshRenderer mr = go.GetComponent<MeshRenderer>();
-        if (mr == null) return;
-
-        Shader sh = GetShader();
-        if (sh == null)
-        {
-            Debug.LogWarning("[SpiderAnatomy] 找不到可用着色器，蜘蛛会是粉红色。");
-            return;
-        }
-
-        mr.material = new Material(sh);
-        if (mr.material.HasProperty("_Color")) mr.material.color = c;
-        if (mr.material.HasProperty("_BaseColor")) mr.material.SetColor("_BaseColor", c);
-        mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.On;
-    }
-
-    /// <summary>★ 必须删掉 CreatePrimitive 自带的 Collider。</summary>
-    private static void KillCollider(GameObject go)
-    {
-        Collider c = go.GetComponent<Collider>();
-        if (c != null) Destroy(c);
-    }
 }

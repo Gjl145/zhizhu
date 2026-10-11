@@ -172,34 +172,94 @@ def check_ball_hidden():
 
 
 def check_cephalothorax_not_empty():
-    """专项：头胸部必须用 CreatePrimitive，不能用空 GameObject。
+    """★ 2026-10-11 重写：程序化建模已全部删除，检查对象换成 FBX 接管链路。
 
-    ★ 第一版用 `'Cephalothorax")' in b` 判断 ——
-      但这个字符串在**注释里**也出现（我写的修复说明就含它），
-      靠 strip_comments 已能去掉注释，但更稳的是直接找**赋值语句**。
+    【为什么必须改判据，而不是把这项删掉】
+      原来的判据是「BuildCephalothorax 里有没有用 CreatePrimitive」——
+      而那个方法连同全部程序化建模一起被删了（用户判定「完全不能看」）。
+      → 检查项指向一个不存在的东西，继续留着只会天天报假错，
+        真正的「球加腿」风险反而没人管了。
+
+    【新判据：直接盯住「唯一可见体来源」】
+      程序化建模删掉后，「球加腿」只剩两种可能的成因：
+        ① FBX 没加载成功且**静默退回** → 必须报错并中止（不能悄悄画个球）
+        ② FBX 加载了但**接管失败**，某条腿没有接管 → 同样不能程序化补一条
+
+      所以检查：
+        · TryBuildFromFbx 失败分支里不得出现任何程序化建模调用
+        · BuildLimbs 里不得出现 `limb.Build(`（那是程序化建腿）
+        · 不得重新出现 CreatePrimitive / new GameObject("Cephalothorax") 这类假身体
     """
     with open(ANATOMY, encoding='utf-8') as f:
         raw = f.read()
     src = strip_comments(raw)
 
-    b = body_of(src, 'BuildCephalothorax')
+    errors = []
+
+    # ---- 判据 A：TryBuildFromFbx 存在，且失败分支不建任何东西 ----
+    b = body_of(src, 'Build')
     if b is None:
-        return ['找不到 BuildCephalothorax']
+        errors.append('SilkSpiderAnatomy.Build() 找不到')
+        return errors
 
-    # 精确匹配赋值：xxx = new GameObject("Cephalothorax")  ← 这是 bug 写法
-    bad = re.search(
-        r'=\s*new\s+GameObject\(\s*"Cephalothorax"\s*\)', b)
-    if bad:
-        return ['BuildCephalothorax 里 Cephalothorax 用 new GameObject 创建'
-                ' → 无 MeshFilter/MeshRenderer → 头胸部不可见']
+    if 'TryBuildFromFbx' not in b:
+        errors.append('Build() 里没有调用 TryBuildFromFbx'
+                      '→ FBX 不再是可见体来源')
 
-    # 必须是 CreatePrimitive（自带渲染组件）
-    if not re.search(
-            r'=\s*GameObject\.CreatePrimitive\(\s*PrimitiveType\.\w+\s*\)', b):
-        return ['BuildCephalothorax 里找不到 CreatePrimitive，'
-                '头胸部的创建方式需要人工确认']
+    # ---- 判据 B：任何地方都不许再出现假身体的创建 ----
+    for pattern, desc in [
+        (r'=\s*new\s+GameObject\(\s*"Cephalothorax"\s*\)',
+         '用空 GameObject 创建头胸部（无渲染组件→ 完全不可见）'),
+        (r'=\s*new\s+GameObject\(\s*"Abdomen"\s*\)',
+         '用空 GameObject 创建腹部（无渲染组件 → 完全不可见）'),
+    ]:
+        if re.search(pattern, src):
+            errors.append('★ 又出现了程序化建模：%s'
+                          '→ 用户已判定这种建模「完全不能看」' % desc)
 
-    return []
+    # ---- 判据C：程序化建腿入口必须已被移除 ----
+    if re.search(r'\blimb\s*\.\s*Build\s*\(', src):
+        errors.append('★ BuildLimbs 里还有 limb.Build(...)（程序化建腿）'
+                      '→ 接管失败时会多出一套无蒙皮的腿，'
+                      '画面变成「有肉的腿 + 光骨头」，比球加腿更糟')
+
+    return errors
+
+
+def check_fbx_is_only_source():
+    """★ 新增：FBX 接管失败必须报错并中止，不许静默。
+
+    【为什么这一项比原[2] 更重要】
+      真正的根因不是「建模不好看」，而是**静默退回**：
+      之前 FBX 拿不到就 fallback 建一个球+腿，
+      因为「凑合还能动」，永远不会有人去查为什么 FBX 没加载。
+      → 现在改成没有 fallback，于是「失败时是否明确报错」就成了唯一防线。
+    """
+    with open(ANATOMY, encoding='utf-8') as f:
+        src = strip_comments(f.read())
+
+    errors = []
+
+    b = body_of(src, 'Build')
+    if b is None:
+        return ['SilkSpiderAnatomy.Build() 找不到']
+
+    fb = body_of(src, 'TryBuildFromFbx')
+    if fb is None:
+        errors.append('TryBuildFromFbx 找不到')
+        return errors
+
+    # 失败分支必须 LogError，且必须 return（中止构建）
+    if 'LogError' not in fb:
+        errors.append('TryBuildFromFbx 失败时没有 Debug.LogError'
+                      '→ 失败会静默，用户只能从画面猜原因')
+
+    # Build 里必须有「失败就 return」的短路
+    if not re.search(r'if\s*\(\s*!\s*TryBuildFromFbx\s*\(\s*\)\s*\)\s*\{', b):
+        errors.append('Build() 里没有「FBX 失败就短路返回」的结构'
+                      '→ 失败后仍会继续往下建腿')
+
+    return errors
 
 
 def main():
@@ -221,14 +281,24 @@ def main():
         print('    ✓ 全部具备渲染组件')
     print()
 
-    print('[2] 检查头胸部是否用了 CreatePrimitive')
+    print('[2] 检查程序化建模是否彻底移除、FBX 是否成为唯一可见体来源')
     errs = check_cephalothorax_not_empty()
     if errs:
         for e in errs:
             print('    ERROR %s' % e)
         all_errors += errs
     else:
-        print('    ✓ 头胸部有真实网格')
+        print('    ✓ 无程序化建模残留')
+    print()
+
+    print('[2b] 检查 FBX 接管失败是否报错并中止（不许静默退回）')
+    errs = check_fbx_is_only_source()
+    if errs:
+        for e in errs:
+            print('    ERROR %s' % e)
+        all_errors += errs
+    else:
+        print('    ✓ 失败会明确报错并中止')
     print()
 
     print('[3] 检查玩家本体球渲染器是否被关闭')
@@ -247,7 +317,7 @@ def main():
               % len(all_errors))
         return 1
 
-    print('✓ 通过 —— 可见体 = 头胸部 + 腹部 + 腹柄 + 8 条五节腿')
+    print('✓ 通过 —— 可见体 = FBX 模型（唯一来源，无程序化建模 fallback）')
     return 0
 
 
