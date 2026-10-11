@@ -154,9 +154,10 @@ public class SilkSpiderAnatomy : MonoBehaviour
                     maxChain = Mathf.Max(maxChain, limbs[i].ChainLength);
             if (maxChain > 0.01f)
             {
-                legLength = maxChain * 0.95f;
+                legLength = maxChain * 0.95f * legLengthScale;
                 Debug.Log("[SpiderAnatomy] 步态腿长自动反推 = " + legLength.ToString("F2")
-                    + "（最长腿链 " + maxChain.ToString("F2") + " × 0.95）");
+                    + "（最长腿链 " + maxChain.ToString("F2")
+                    + " × 0.95 × 腿长系数 " + legLengthScale + "）");
             }
         }
 
@@ -522,6 +523,13 @@ public class SilkSpiderAnatomy : MonoBehaviour
     ///   比例来源（解剖学）：腿节(femur) &gt; 膝节+胫节 &gt; 跗节(tarsus)。
     /// </summary>
     public float[] legSegments = new float[] { 0.30f, 0.16f, 0.32f, 0.14f, 0.08f };
+
+    [Tooltip("★ 步态腿长缩短系数（2026-10-11，用户原话「减低腿的长度，变成稍微短一点的腿」）。\n"
+        + "1 = 完全按骨骼链实测长度（站得高、腿舒展）。\n"
+        + "0.75 = 落点收拢到可达半径的 75%，FABRIK 会把腿**蜷起来**——\n"
+        + "  视觉上就是短腿、蹲姿，身体高度也会被 Smart Body 自动降低。\n"
+        + "★ 只影响落点分布，不用改模型、不用改步态参数。")]
+    [Range(0.4f, 1f)] public float legLengthScale = 0.75f;
 
     /// <summary>
     /// ★ 解算用腿长（球半径的 3.6 倍），**只用于步态落点解算**。

@@ -91,10 +91,11 @@ public class SilkSpiderFbxRig : MonoBehaviour
     /// 第 i 条腿（0..LegCount-1）的骨骼名数组。
     ///
     /// 【★ 2026-10-11 换装 Quaternius Spider 的命名契约】
-    ///   索引约定（PerSide = 4）：0..3 = L1..L4，4..7 = R1..R4。
-    ///   同侧 4 条腿从前往后：
-    ///     k=0 FrontLeg（前腿）  k=1 MidFrontLeg（前中腿）
-    ///     k=2 MidBackLeg（后中腿） k=3 BackLeg（后腿）
+    ///   ★ 深夜改 4 腿后：PerSide = 2 → 取每侧**前 2 对**（k=0,1）：
+    ///     0..1 = L1,L2（FrontLeg, MidFrontLeg），2..3 = R1,R2。
+    ///     后 2 对（MidBackLeg/BackLeg）骨骼还在模型里，只是不接管、不渲染动画
+    ///     （它们是蒙皮骨骼，会跟着身体的骨骼矩阵保持 rest pose —— 静止不动）。
+    ///   8 腿时：0..3 = L1..L4，4..7 = R1..R4，4 对全用。
     ///   每腿 3 节，节号 1 不带数字、2/3 带数字：
     ///     FrontLeg.L / FrontLeg2.L / FrontLeg3.L
     ///   （与 Blender 实测骨骼树一致：Tools/blender/inspect_spider_fbx.py、
