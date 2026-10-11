@@ -37,6 +37,11 @@ FILES = {
     'rig': os.path.join(SILK, 'SilkSpiderFbxRig.cs'),
     'anatomy': os.path.join(SILK, 'SilkSpiderAnatomy.cs'),
     'body': os.path.join(SILK, 'SilkSpiderBody.cs'),
+    # ★ 测试关卡也必须纳入 —— 2026-10-11 的漏网就出在这里：
+    #   HUD 里「步足 8 条」「着地≈ 8 × duty」「i < 8」全写死，
+    #   而检查项只扫了 rig/anatomy/body 三个文件 → 漏掉了。
+    #   ★ 教训：**新增文件必须同步加进检查范围**，否则检查形同虚设。
+    'stage': os.path.join(SILK, 'SilkSpiderTestStage.cs'),
 }
 
 
@@ -70,7 +75,7 @@ def check_single_source():
       第一处抛 IndexOutOfRangeException；第二处不崩但 4 腿下恒为真（逻辑静默错）。
     """
     errors = []
-    for key in ('rig', 'anatomy', 'body'):
+    for key in ('rig', 'anatomy', 'body', 'stage'):
         src = read(FILES[key])
         lines = src.split('\n')
         bad = []
@@ -96,7 +101,7 @@ def check_hardcoded_index():
     """
     errors = []
     # legCount 允许出现的数字（不该被当腿数相关）
-    for key in ('rig', 'anatomy', 'body'):
+    for key in ('rig', 'anatomy', 'body', 'stage'):
         path = FILES[key]
         with open(path, encoding='utf-8') as f:
             raw = f.read()
@@ -275,6 +280,44 @@ def check_hud(count):
     return errors
 
 
+def check_hud_text():
+    """⑥ HUD / 提示文案里的腿数必须由常量推导。
+
+    ★ 这一项来自真实验收：截图里 HUD 显示「步足 8 条」，
+      而代码早已改成 4条 —— 用户一眼就看出「没改干净」。
+
+    判据：凡是把腿数写进**字符串**的地方，都必须有 SilkSpiderLegs.Count。
+    ★ 这类漏网最刺眼：代码能编译、能运行、逻辑也对，
+      唯独显示的数字是错的 —— 用户会以为整个改动没生效。
+    """
+    errors = []
+    path = FILES['stage']
+    if not os.path.isfile(path):
+        return ['SilkSpiderTestStage.cs 不存在']
+    with open(path, encoding='utf-8') as f:
+        raw = f.read()
+    src = strip_comments(raw)
+
+    # ★★★ 这一项第一版写错过：正则的转义层数多了一层，
+    #   实际匹配的是字面反斜杠+s，于是**反向测试注入了 bug 也报通过**。
+    #   → 判据必须靠**反向测试**验证，不能「看着对」就算。
+    #   （教训与「判据过窄会误报」同源，只是方向相反）
+
+    # ① HUD 里用 (8 * ...) 算腿数
+    if re.search(r'\(\s*8\s*\*', src):
+        errors.append('HUD 里写死 (8 * ...) 计算腿数，应 SilkSpiderLegs.Count')
+
+    # ② HUD 文案里出现「8 条」
+    if re.search(r'8\s*条', src):
+        errors.append('HUD 文案里写死「8 条」，应拼 SilkSpiderLegs.Count')
+
+    # ③ 骨节统计循环写死 i < 8
+    if re.search(r'i\s*<\s*8\b', src):
+        errors.append('骨节统计循环写死 i < 8，应 SilkSpiderLegs.Count')
+
+    return errors
+
+
 def main():
     print('=' * 74)
     print('腿数一致性检查（8 腿 → 4 腿）')
@@ -298,6 +341,7 @@ def main():
         ('③ 互斥表索引假设', lambda: check_neighbor_table(count)),
         ('④ 骨骼名映射', check_bone_mapping),
         ('⑤ HUD 行列由腿数推导', lambda: check_hud(count)),
+        ('⑥ HUD 文案里的腿数', check_hud_text),
     ]
 
     for label, fn in checks:

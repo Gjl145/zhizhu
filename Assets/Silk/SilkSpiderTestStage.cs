@@ -468,7 +468,7 @@ public class SilkSpiderTestStage : MonoBehaviour
      *   · IMGUI 在运行时绘制，最适合做「临时自检 HUD」
      *
      * 【显示内容】
-     *   当前模式（FreeFly / Parkour）· 球是否存在 · 8 条腿是否已建
+     *   当前模式（FreeFly / Parkour）· 球是否存在 · 各条腿是否已建
      *   球心坐标 · 相机与球的距离 · 当前操作提示
      */
     private void OnGUI()
@@ -518,17 +518,17 @@ public class SilkSpiderTestStage : MonoBehaviour
             if (anat.Cephalothorax != null) bodyPartCount++;
             if (anat.Abdomen != null) bodyPartCount++;
 
-            // 骨节总数 = 8 条腿 × 每条节数 → 检验「多节腿」真的建出来了
+            // 骨节总数 = 腿数 × 每条节数 → 检验「多节腿」真的建出来了
             if (anat.LegRoots != null)
             {
-                for (int i = 0; i < anat.LegRoots.Length && i < 8; i++)
+                for (int i = 0; i < anat.LegRoots.Length && i < SilkSpiderLegs.Count; i++)
                 {
                     int segs = anat.GetLimbSegmentCount(i);
                     if (segs > 0) boneCount += segs;
                 }
             }
             gaitInfo = "交替四足步态 duty=" + body.dutyFactor.ToString("F2")
-                      + " → 着地≈ " + (8 * body.dutyFactor).ToString("F1") + " 条\n"
+                      + " → 着地≈ " + (SilkSpiderLegs.Count * body.dutyFactor).ToString("F1") + " 条\n"
                       + "步时: " + (body.scaleCycleBySpeed ? "随速度缩放" : "固定")
                       + "（过冲 " + body.overshootMultiplier.ToString("F2")
                       + "× 站位）";
@@ -543,7 +543,9 @@ public class SilkSpiderTestStage : MonoBehaviour
                                   + ballPos.y.ToString("F1") + ", "
                                   + ballPos.z.ToString("F1") + ")" : "不存在") + "\n" +
             "身体段: " + bodyPartCount + " / 3（头胸+腹部+腹柄）\n" +
-            "腿骨节: " + boneCount + " （8条 × 5节 = 40）\n" +
+            "腿骨节: " + boneCount + " （" + SilkSpiderLegs.Count + " 条 × "
+                + SilkSpiderFbxRig.SegmentsPerLeg + " 节 = "
+                + (SilkSpiderLegs.Count * SilkSpiderFbxRig.SegmentsPerLeg) + "）\n" +
             gaitInfo + "\n" +
             "相机↔球: " + camDist.ToString("F1") + " 格\n" +
             (cam != null ? "相机(" + cam.transform.position.x.ToString("F0") + ", "
@@ -610,7 +612,7 @@ public class SilkSpiderTestStage : MonoBehaviour
                 + "  开关默认全部开启（Show Debug / Enable Legs / Show Gait Diagram），\n"
                 + "  不需要去检查器里手动勾 —— 组件是运行时自动挂的，检查器里看不到。\n"
                 + "  ★ 想看步态对不对 → 打开 SilkSpiderBody 的 Show Gait Diagram，\n"
-                + "    屏幕右上角会画出 8 条腿的时序条带（黑=支撑 / 蓝=摆动）。");
+                + "    屏幕右上角会画出 " + SilkSpiderLegs.Count + " 条腿的时序条带（黑=支撑 / 蓝=摆动）。");
     }
 
     /// <summary>手动调用也能建（可从 Unity 编辑器右键菜单触发）。</summary>
@@ -674,7 +676,8 @@ public class SilkSpiderTestStage : MonoBehaviour
                 + " 格 / " + stairCount + " 级台阶 / 横梁 z=" + beamHeight
                 + " / 内角在 (" + (wallWidth * 0.5f + 4f) + ", -4)。\n"
                 + "★ 现在按一下 Tab 切到 Parkour —— 球会自动落到地板上。\n"
-                + "  蜘蛛：SilkSpiderAnatomy（头胸部+腹部+腹柄+螯肢+8条5节腿）\n"
+                + "  蜘蛛：SilkSpiderAnatomy（FBX 可见体 + " + SilkSpiderLegs.Count
+                      + " 条腿，IK=FABRIK）\n"
                 + "        SilkSpiderLimb 用 FABRIK IK 让足端精确踩地\n"
                 + "  步态：SilkSpiderBody 的 alternating tetrapod（交替四足步态）\n"
                 + "        开关 Show Gait Diagram 可在屏幕上看时序条带。");
