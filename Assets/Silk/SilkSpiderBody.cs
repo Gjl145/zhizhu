@@ -1472,16 +1472,9 @@ public class SilkSpiderBody : MonoBehaviour
     }
 
     /// <summary>
-    /// 起步顺序错开量。
-    /// 论文实测：**4-2-3-1** 是最常见的同侧起步顺序（68.1%），
-    /// 其次 4-1-3-2（14.8%）、4-3-1-2（12.8%）。
-    /// → 给第4 条腿（索引 3）最小延迟，第 1 条（索引 0）最大延迟。
-    /// 这样「4 → 2 → 3 → 1」依次启动，而不是 8 条一起动。
-    /// </summary>
-    /// <summary>
     /// 起步错开延迟：每条腿一个秒数。
     ///
-    /// 【★ 2026-10-11 修IndexOutOfRange】
+    /// 【★ 2026-10-11 修 IndexOutOfRange】
     ///   原实现在 8 腿时代直接写死 `staggerCache[4] ~ [7]`，
     ///   改成 4 腿后数组长度变4，但这些赋值还在 →
     ///   `IndexOutOfRangeException` at StaggerOffsets()。
