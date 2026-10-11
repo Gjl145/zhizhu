@@ -61,24 +61,74 @@ def declared_count():
 
 
 def check_single_source():
-    """① 其他类不得再写死 8 作为腿数。"""
+    """① 其他类不得再写死8 作为腿数。
+
+    ★ 2026-10-11 增补：原版只扫 `< 8` / `[8]` / `* 8` 三种形态，
+      **漏了两种最常见的**（见实际漏网的两处）：
+        · 直接写死的**下标**：staggerCache[4] ~ [7]
+        · 与 4 比较的**索引判定**：i < 4 / i % 4
+      第一处抛 IndexOutOfRangeException；第二处不崩但 4 腿下恒为真（逻辑静默错）。
+    """
     errors = []
     for key in ('rig', 'anatomy', 'body'):
         src = read(FILES[key])
+        lines = src.split('\n')
         bad = []
-        # 裸数组长度 [8]
         for m in re.finditer(r'new\s+\w+\[8\]', src):
             bad.append('new %s[8]' % m.group(1))
-        # 裸循环上界
         for m in re.finditer(r'<\s*8\s*;', src):
             bad.append('循环上界 < 8')
-        # 裸乘法
         for m in re.finditer(r'\*\s*8\b', src):
             bad.append('乘法 *8')
         if bad:
             errors.append('%s.cs 仍有写死的 8：%s'
                           % (key, ', '.join(sorted(set(bad))[:6])))
     return errors
+
+
+def check_hardcoded_index():
+    """①b★ 硬编码下标 / 与 4 比较的索引判定。
+
+    ★ 这一项是从真实崩溃里长出来的：
+      用户跑起来报 `IndexOutOfRangeException at StaggerOffsets()`，
+      根因是 `staggerCache[4] ~ [7]` —— 数组改成4 但赋值还按8 腿写。
+      同时还查出两处 `i < 4` / `i % 4`：不崩，但 4 腿下恒为真。
+    """
+    errors = []
+    # legCount 允许出现的数字（不该被当腿数相关）
+    for key in ('rig', 'anatomy', 'body'):
+        path = FILES[key]
+        with open(path, encoding='utf-8') as f:
+            raw = f.read()
+        src = strip_comments(raw)
+        lines = src.split('\n')
+
+        for ln, line in enumerate(lines, 1):
+            # ① 直接写死的下标 4..7（1~3 允许，因为小腿数也要能用）
+            for m in re.finditer(r'\w+\[\s*([4-9])\s*\]', line):
+                errors.append('%s:%d 硬编码下标 %s[%s]'
+                              '（数组长度随腿数变，写死必然越界或错位）'
+                              % (key, ln, m.group(0)[:-1], m.group(1)))
+            # ② 与 4/8 比较的索引判定
+            for m in re.finditer(r'\b\w+\s*%\s*([48])\b', line):
+                errors.append('%s:%d 索引取模写死 %s'
+                              '（应 SilkSpiderLegs.PerSide）'
+                              % (key, ln, m.group(0)))
+            for m in re.finditer(r'\b(\w+)\s*<\s*([48])\b', line):
+                # 排除 GUID 之类的误报：只看像索引的名字
+                if re.match(r'^[a-z]{1,3}$', m.group(1)):
+                    errors.append('%s:%d 索引比较写死 %s'
+                                  '（应 SilkSpiderLegs.PerSide；'
+                                  '4 腿时 i<4 恒为真）'
+                                  % (key, ln, m.group(0)))
+    # 去重
+    seen = set()
+    uniq = []
+    for e in errors:
+        if e not in seen:
+            seen.add(e)
+            uniq.append(e)
+    return uniq
 
 
 def check_phase_table(count):
@@ -242,6 +292,8 @@ def main():
     all_errors = []
     checks = [
         ('① 腿数单一来源（其他类不写死 8）', lambda: check_single_source()),
+        ('①b 无硬编码下标 / 与4 8 比较的索引判定',
+         check_hardcoded_index),
         ('② 相位表长度与对角步态', lambda: check_phase_table(count)),
         ('③ 互斥表索引假设', lambda: check_neighbor_table(count)),
         ('④ 骨骼名映射', check_bone_mapping),

@@ -1378,9 +1378,16 @@ public class SilkSpiderBody : MonoBehaviour
             float alongUp = Vector3.Dot(rel, up);
             sum += alongUp * up;
 
-            // 前后 / 左右各 4 条（L1..L4 / R1..R4 的第1/3 对 vs 第 2/4 对）
-            bool front = (i % 4 == 0 || i % 4 == 2);
-            bool leftSide = i < 4;
+            // ★ 前后/左右分组必须随腿数走，不能写死 i % 4 / i < 4
+            //   4 腿（索引 0..3 = L1,L2,R1,R2）：L1/L2 是「前」，R1/R2 是「后」
+            //     → front = (同侧第0 条)
+            //   8 腿（索引 0..7 = L1..L4,R1..R4）：第 1/3 对 vs 第 2/4 对
+            //     → front = (同侧序号 为偶数)
+            int kSameSide = i % SilkSpiderLegs.PerSide;
+            bool front = SilkSpiderLegs.PerSide <= 2
+                ? (kSameSide == 0)
+                : (kSameSide % 2 == 0);
+            bool leftSide = i < SilkSpiderLegs.PerSide;
             sumFrontBack += front ? alongUp * up : -alongUp * up;
             sumLeftRight += leftSide ? alongUp * up : -alongUp * up;
             nStance++;
@@ -1471,23 +1478,51 @@ public class SilkSpiderBody : MonoBehaviour
     /// → 给第4 条腿（索引 3）最小延迟，第 1 条（索引 0）最大延迟。
     /// 这样「4 → 2 → 3 → 1」依次启动，而不是 8 条一起动。
     /// </summary>
+    /// <summary>
+    /// 起步错开延迟：每条腿一个秒数。
+    ///
+    /// 【★ 2026-10-11 修IndexOutOfRange】
+    ///   原实现在 8 腿时代直接写死 `staggerCache[4] ~ [7]`，
+    ///   改成 4 腿后数组长度变4，但这些赋值还在 →
+    ///   `IndexOutOfRangeException` at StaggerOffsets()。
+    ///   ★ 这是「腿数变更」的经典漏网处：数组本身对了，
+    ///     **但按腿数手写的下标没跟着改**。
+    ///
+    /// 【★ 为什么保留 8 腿的「4-2-3-1 起步顺序」】
+    ///   该顺序来自论文实测（4-2-3-1 占68.1%，4-1-3-2 占 14.8%）。
+    ///   4 腿时仍适用 —— 只是腿的编号含义变了，
+    ///   索引 0..3 现在是 L1 / L2 / R1 / R2（见 SilkSpiderLegs.PerSide）。
+    ///   → 所以下面的顺序表改成**按索引循环**，而不是按固定下标赋值。
+    ///
+    /// 【★ 正确写法：循环 + 索引表】
+    ///   顺序表只声明「谁先谁后」，长度由腿数校验，
+    ///   下标一律用 i % SilkSpiderLegs.Count 之类推导，不写死。
+    /// </summary>
+    private static readonly int[] StaggerOrder4 = { 3, 0, 2, 1 };
+    /// <summary>8 腿版的 4-2-3-1 顺序（保留以便切回 8 腿时直接用）。</summary>
+    private static readonly int[] StaggerOrder8 = { 3, 1, 2, 0, 4, 5, 6, 7 };
+
     private float[] staggerCache;
+
     private float[] StaggerOffsets()
     {
-        if (staggerCache == null) staggerCache = new float[SilkSpiderLegs.Count];
+        int n = SilkSpiderLegs.Count;
+        if (staggerCache == null || staggerCache.Length != n)
+            staggerCache = new float[n];
 
-        // 4-2-3-1 → 延迟量：腿4=0, 腿2=1步, 腿3=2步, 腿1=3步
-        // 步长 = startStagger（秒）
         float s = Mathf.Max(0f, startStagger);
-        // 左半侧 0..3 = L1..L4，右半侧 4..7 = R1..R4（对角同延迟）
-        staggerCache[0] = s * 3f / 3f;   // L1  最后启动
-        staggerCache[1] = s * 1f;       // L2  第一个启动（4-2-3-1）
-        staggerCache[2] = s * 2f;       // L3
-        staggerCache[3] = s * 0f;       // L4  最先启动
-        staggerCache[4] = s * 3f;       // R1（与 L2 对角）
-        staggerCache[5] = s * 1f;       // R2（与 L3 对角）
-        staggerCache[6] = s * 2f;       // R3（与 L4 对角）
-        staggerCache[7] = s * 0f;       // R4（与 L1 对角）
+        for (int i = 0; i < n; i++) staggerCache[i] = 0f;
+
+        // 顺序表必须与腿数一致，否则「先启动的腿」会错位
+        int[] order = n == 4 ? StaggerOrder4 : StaggerOrder8;
+        int slots = Mathf.Min(n, order.Length);
+        for (int rank = 0; rank < slots; rank++)
+        {
+            int legIndex = order[rank];
+            if (legIndex < 0 || legIndex >= n) continue;
+            // rank 0 = 最先启动（不延迟），之后每条递增一个步长
+            staggerCache[legIndex] = s * (slots - 1 - rank);
+        }
         return staggerCache;
     }
 
@@ -1684,8 +1719,11 @@ public class SilkSpiderBody : MonoBehaviour
             return anatomy.LegRoots[i];
 
         // 兜底：解剖还没建好 → 用身体位置 + 一个粗略的横向偏移。
-        float side = (i < 4) ? -1f : 1f;
-        float k = (i % 4) / 3f - 0.5f;
+        // ★ 必须随腿数走：i < 4 / i % 4 在 4 腿时恒为真（4 条里 i<4 全成立）
+        float side = (i < SilkSpiderLegs.PerSide) ? -1f : 1f;
+        float k = SilkSpiderLegs.PerSide <= 1
+            ? 0f
+            : (i % SilkSpiderLegs.PerSide) / (SilkSpiderLegs.PerSide - 1f) - 0.5f;
         return transform.position
              + transform.right * (side * BallRadius * 1.2f)
              + transform.forward * (k * BallRadius * 1.4f);
