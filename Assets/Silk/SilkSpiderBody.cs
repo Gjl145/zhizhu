@@ -198,6 +198,37 @@ public class SilkSpiderBody : MonoBehaviour
         + "  8 × dutyFactor 0.65 ≈ 5.2 条着地，留给摆动的余量够用。")]
     public bool neighborStepMutex = true;
 
+    [Tooltip("★★ 自定义互斥腿表（★ 照着 B站 BV12F411P71f 教程加的可配置项）。\n"
+        + "★ **每行一条腿，列出与它互斥、不能同时摆动的腿索引。**\n"
+        + "留空（8 行全为 null 或空数组）= 用内置默认表（BuildNeighborTable）。\n"
+        + "\n"
+        + "索引约定：L1..L4 = 0..3，R1..R4 = 4..7。\n"
+        + "  L1=0 L2=1 L3=2 L4=3 R1=4 R2=5 R3=6 R4=7\n"
+        + "\n"
+        + "【教程的做法（B站 BV12F411P71f，9:55「使用IK插件制作程序化的腿部动画」）】\n"
+        + "  该教程把这条规则做成**每条腿挂一个脚本，字段是 `leg1` / `leg2`**：\n"
+        + "    「这里设置的是**不会同时抬起的脚**。如果同一行或者同一列的脚\n"
+        + "     同时抬起显然是不合常理的。」\n"
+        + "  → 即：互斥关系是**可配置的数据**，不是写死的算法。\n"
+        + "  「如果有更多需求的话可以在后面继续加。」\n"
+        + "\n"
+        + "【为什么本项目要跟着改】\n"
+        + "  内置默认表 = 同侧相邻 + 对侧同序号 + 对侧斜向（每条 5 个邻居）。\n"
+        + "  但真实蜘蛛的**对角步态**（L1+R3 同时、L2+R4 同时）\n"
+        + "  是靠相位表实现的，互斥表只能**否决**、不能**指定同相**——\n"
+        + "  想改成别的步态（如四足 crawl）就必须能改这张表。\n"
+        + "\n"
+        + "【示例】改成对角步态互斥（只禁止对侧斜向同时抬）\n"
+        + "  L1={2,6} L2={3,7} L3={0,4} L4={1,5}\n"
+        + "  R1={5,7} R2={4,6} R3={5,7} R4={4,6}\n"
+        + "\n"
+        + "★ 纯保险：maxSimultaneousSwing 无论怎么配都会生效，"
+        + "所以这张表配错最多是「动得难看」，不会 8 条腿全腾空。")]
+    public int[][] exclusiveLegsCustom = null;
+
+    /// <summary>★ 运行时解析后的互斥表（custom 为空则用默认表）。</summary>
+    private int[][] mutexTable;
+
     [Tooltip("同时最多几条腿处于摆动相（互斥之外的硬上限）。\n"
         + "★ 纯保险：即使互斥表配错，也不会有超过这个数��腿同时腾空。\n"
         + "  真蜘蛛稳定行走时约 2~4 条摆动。")]
@@ -345,6 +376,92 @@ public class SilkSpiderBody : MonoBehaviour
     private Vector3[] footWorld = new Vector3[8];
     private Vector3[] rootWorld = new Vector3[8];
 
+    /// <summary>
+    /// ★ 解析互斥表：自定义优先，全部非法/为空则退回内置默认表。
+    ///
+    /// 【为什么要运行时解析而不是直接用字段】
+    ///   `int[][]` 是嵌套数组，Unity 的 Inspector 对它的编辑体验很差，
+    ///   而且用户很容易填出：行数不是 8、索引越界、和自己的索引互斥。
+    ///   → 全部在这里挡掉并打日志，**不让错误配置进到裁决逻辑里**。
+    /// </summary>
+    private void ResolveMutexTable()
+    {
+        mutexTable = null;
+
+        if (exclusiveLegsCustom == null || exclusiveLegsCustom.Length == 0)
+        {
+            mutexTable = NeighborLegs;
+            return;
+        }
+
+        // 行数不足 8 → 用户只填了一部分，剩下的用默认表补
+        if (exclusiveLegsCustom.Length != 8)
+        {
+            Debug.LogWarning("[SpiderBody] ★ exclusiveLegsCustom 必须正好 8 行"
+                + "（L1..L4 = 0..3，R1..R4 = 4..7），当前只有 "
+                + exclusiveLegsCustom.Length + " 行。"
+                + "→ 缺失的行改用内置默认表。", this);
+        }
+
+        var table = new int[8][];
+        bool anyValid = false;
+
+        for (int i = 0; i < 8; i++)
+        {
+            int[] row = null;
+            if (i < exclusiveLegsCustom.Length && exclusiveLegsCustom[i] != null)
+                row = exclusiveLegsCustom[i];
+
+            if (row == null || row.Length == 0)
+            {
+                table[i] = NeighborLegs[i];
+                continue;
+            }
+
+            var clean = new System.Collections.Generic.List<int>(row.Length);
+            for (int k = 0; k < row.Length; k++)
+            {
+                int j = row[k];
+                if (j < 0 || j >= 8)
+                {
+                    Debug.LogWarning("[SpiderBody] exclusiveLegsCustom[" + i + "] 里的索引 "
+                        + j + " 越界（合法 0..7），已忽略。", this);
+                    continue;
+                }
+                if (j == i)
+                {
+                    //自己和自己互斥 = 这条腿永远摆不了，必须挡掉
+                    Debug.LogWarning("[SpiderBody] exclusiveLegsCustom[" + i
+                        + "] 把自己列进了互斥表 → 这条腿会永远摆不动，已移除。", this);
+                    continue;
+                }
+                clean.Add(j);
+            }
+
+            if (clean.Count == 0)
+            {
+                // 整行都被判为非法 → 用默认表，别让这条腿失去保护
+                Debug.LogWarning("[SpiderBody] exclusiveLegsCustom[" + i
+                    + "] 整行无效，已退回内置默认表。", this);
+                table[i] = NeighborLegs[i];
+                continue;
+            }
+
+            table[i] = clean.ToArray();
+            anyValid = true;
+        }
+
+        if (!anyValid)
+        {
+            Debug.LogWarning("[SpiderBody] exclusiveLegsCustom 没有任何一行有效，"
+                + "已整体退回内置默认表。", this);
+            mutexTable = NeighborLegs;
+            return;
+        }
+
+        mutexTable = table;
+    }
+
     // ===== ★ 相邻腿互斥的运行时缓冲（每帧重填，不必跨帧保存）=====
     private readonly bool[] swingIntent = new bool[8];// 相位说「该摆」
     private readonly bool[] swingGranted = new bool[8];// 互斥裁决后「准许摆」
@@ -416,6 +533,7 @@ public class SilkSpiderBody : MonoBehaviour
     private void Awake()
     {
         ResolveReferences();
+        ResolveMutexTable();
     }
 
     private void ResolveReferences()
@@ -428,6 +546,7 @@ public class SilkSpiderBody : MonoBehaviour
     private void Start()
     {
         ResolveReferences();
+        ResolveMutexTable();      // ★ Awake 之后再解析一次：运行时才可能改Inspector 字段
 
         if (mover == null)
         {
@@ -912,7 +1031,7 @@ public class SilkSpiderBody : MonoBehaviour
                 }
 
                 bool blocked = false;
-                int[] nb = NeighborLegs[i];
+                int[] nb = (mutexTable != null ? mutexTable : NeighborLegs)[i];
                 for (int n = 0; n < nb.Length; n++)
                 {
                     int j = nb[n];
