@@ -1,0 +1,10 @@
+[   74.1-   76.1] Check the Smart Body Position Box
+[   76.1-   78.1] It makes everything more realistic
+[   78.1-   80.1] and brings life to the animation
+[   80.1-   82.1] by calculating body position
+[   82.1-   84.1] based on average leg positions
+[   86.1-   87.1] That's it
+[   87.1-   88.1] Thanks for watching
+[   88.1-   89.1] and good luck with your project
+[   89.1-   91.1] If you have any questions
+[   91.1-   93.1] Leave them in the comments below
