@@ -728,9 +728,10 @@ public class SilkSpiderBody : MonoBehaviour
         }
 
         if (hidden == 0)
-            Debug.LogWarning("[SpiderBody] 一个球体渲染器都没找到。"
-                + "若画面上仍有蓝球，说明球的命名不是 Body/Nose，"
-                + "请把这里的名字补上。");
+            Debug.LogWarning("[SpiderBody] 本组件没找到球体渲染器（0 个）。"
+                + "★ 2026-10-11 起球在创建点（SilkBuilder.CreateVisual）就已禁用渲染器，"
+                + "本组件只是第二道保险，所以这里经常是 0 —— 这不是错误。"
+                + "只有当画面上仍出现蓝球时才需要排查（那就说明有第三个球体来源）。");
 
         Debug.Log("[SpiderBody] 已隐藏旧球体渲染器 " + hidden + " 个（碰撞体保留）。");
     }

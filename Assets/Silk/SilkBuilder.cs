@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using UnityEngine;
 
 /* ============================================================
@@ -4638,6 +4638,26 @@ public float colliderRadius = 1.25f;
         if (nc != null) Object.Destroy(nc);
         Paint(nose, noseColor);
         noseRenderer = nose.GetComponent<MeshRenderer>();
+
+        /* ★★ 球从出生起就不可见（2026-10-11，用户原话「不要这个球」）。
+         *
+         * 【为什么必须在创建点隐藏，而不是靠 SilkSpiderBody.HideBallVisuals】
+         *   之前只在 SilkSpiderBody.Start 里按名字找 Body/Nose 关渲染器，
+         *   实锤了两个治不好的病灶：
+         *   ① 时序竞态 —— Unity 的 Start 顺序不保证。Editor.log 实测
+         *     「[SpiderBody] 一个球体渲染器都没找到」（关了 0 个），
+         *     而球在录屏里可见 → HideBallVisuals 跑在 CreateVisual 之前。
+         *   ② 切模式复活 —— HandleModeSwitch 切回 Parkour 时会再次
+         *     调 CreateVisual()（本文件 :5083），球带着渲染器重新出生，
+         *     而 SilkSpiderBody.Start 不会再跑第二次 → 球复活。
+         *   → 唯一能同时消灭两者的位置就是本方法：球的唯一出生点。
+         *
+         * 【为什么渲染器禁用而不是销毁】
+         *   碰撞体（groundProbe）与 transform 仍是地面吸附 / 相机跟随 /
+         *   足端射线的依赖，只关渲染器，物理与定位全保留。
+         *   可见体由蜘蛛 FBX 负责（SilkSpiderAnatomy）。*/
+        if (bodyRenderer != null) bodyRenderer.enabled = false;
+        if (noseRenderer != null) noseRenderer.enabled = false;
 
         UpdateVisualFacing();
 
