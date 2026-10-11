@@ -1281,6 +1281,157 @@ public class SilkSpiderBody : MonoBehaviour
         anatomy.VisualRoot.localPosition = Vector3.Lerp(
             anatomy.VisualRoot.localPosition, target,
             Mathf.Clamp01(6f * dt));
+
+        ApplySmartBodyFromFeet(dt, up);
+    }
+
+    // ================================================================
+    //  ★★ Smart Body Position（照 Procedural Spider 插件的
+    //     "Smart Body Position Box" 机制实现）
+    // ================================================================
+    //
+    // 【来源】B站 BV1FM4y1r74E 演示 Procedural Spider（Asset Store slug 267789）
+    //   作者原话（视频 1:14 处）：
+    //     「Check the Smart Body Position Box. It makes everything more realistic
+    //      and brings life to the animation by **calculating body position
+    //      based on average leg positions**.」
+    //   插件 README 对应句：
+    //     「the spiders body **elevates and rotates in correspondence
+    //       to the legs heights**」
+    //
+    // 【★ 为什么本项目需要它，而原来的 bodyBob 不够】
+    //   原来的 bodyBob 是**固定振幅的正弦波** —— 它只知道「第几步」，
+    //   不知道「脚落在哪」。结果：
+    //     · 站在球面上时身体仍然水平，脚在球面上但身体不跟着倾斜
+    //     · 某条腿够不到（IK 伸直）时身体毫无反应
+    //   Smart Body 是**从 8 个足端的实际几何位置反算**身体：
+    //     脚抬高 → 身体跟着抬；脚分布不均 → 身体跟着倾。
+    //
+    // 【★ 本项目的优势：我们已经有 8 个足端坐标】
+    //   插件要额外挂一个 Box 组件；本项目 footWorld[8] 每帧现成。
+    //   → 实现成本极低，不需要新组件。
+    //
+    // 【★ 公式】
+    //   1) 高度：以「重心高度」为基准，加上足端相对重心的平均法线方向高度差
+    //        meanHeight = avg(dot(foot_i - center, up))
+    //        爬坡/站球面时前高后低 → meanHeight 变化 → 身体自然俯仰
+    //   2) 俯仰：由足端分布拟合出的「前-后」「左-右」两个斜率
+    //        pitchSlope = (frontAvg - backAvg)沿前后轴
+    //        rollSlope  = (leftAvg - rightAvg)沿左右轴
+    //   3) **必须剔除摆动相的脚** —— 抬起中的脚位置偏高，
+    //      算进均值会把身体整体抬高。★ 这是本实现最容易错的地方。
+
+    [Tooltip("★ Smart Body Position：身体高度由**足端实际位置反算**。\n"
+        + "照 Procedural Spider 插件的 Smart Body Position Box 实现。\n"
+        + "0 = 关闭（退回固定振幅的 bodyBob）。\n"
+        + "★ 站在球面/斜坡/桌面等不平整面上时身体会自己倾斜。")]
+    [Range(0f, 1f)] public float smartBodyFromFeet = 0.7f;
+
+    [Tooltip("★ Smart Body 的跟随平滑速度（每秒收敛比例）。\n"
+        + "越大越跟手，越小越柔和。10 上下比较自然。")]
+    [Range(1f, 30f)] public float smartBodyLerp = 10f;
+
+    [Tooltip("★ 用足端位置反算身体俯仰的最大角度（度）。\n"
+        + "★ 防止「站在一块砖上身体直接90° 立起来」。")]
+    [Range(2f, 45f)] public float smartBodyMaxTiltDeg = 22f;
+
+    private Vector3 smartBodyPosSmoothed;
+    private Vector3 smartBodyTiltSmoothed;
+    private bool smartBodyInitialized;
+
+    /// <summary>
+    /// 从8 个足端的世界坐标反算身体的偏移与倾斜。
+    /// </summary>
+    private void ApplySmartBodyFromFeet(float dt, Vector3 up)
+    {
+        if (smartBodyFromFeet <= 0f || anatomy == null
+            || anatomy.VisualRoot == null)
+        {
+            smartBodyInitialized = false;
+            return;
+        }
+
+        // ---- 只统计「着地相」的脚 ----
+        Vector3 sum = Vector3.zero;
+        Vector3 sumFrontBack = Vector3.zero;   // 前后两组的高度差
+        Vector3 sumLeftRight = Vector3.zero;   // 左右两组的高度差
+        int nStance = 0;
+
+        // 左右组的权重折半（1/√2），避免俯仰和横滚互相抢量
+        const float k = 0.7071f;
+
+        for (int i = 0; i < 8; i++)
+        {
+            Vector3 fp = footWorld[i];
+            if (fp == Vector3.zero) continue;
+
+            // ★ 摆动相的脚不参与统计：抬起中的脚会拉高均值
+            if (legState[i].Phase >= dutyFactor
+                && legState[i].Phase < dutyFactor + swingPortion)
+                continue;
+
+            Vector3 rel = fp - transform.position;
+            float alongUp = Vector3.Dot(rel, up);
+            sum += alongUp * up;
+
+            // 前后 / 左右各 4 条（L1..L4 / R1..R4 的第1/3 对 vs 第 2/4 对）
+            bool front = (i % 4 == 0 || i % 4 == 2);
+            bool leftSide = i < 4;
+            sumFrontBack += front ? alongUp * up : -alongUp * up;
+            sumLeftRight += leftSide ? alongUp * up : -alongUp * up;
+            nStance++;
+        }
+
+        if (nStance == 0)
+        {
+            // 全部腿都在空中（跳跃/摆荡）→ 保持上次姿态，不乱动
+            smartBodyInitialized = false;
+            return;
+        }
+
+        // ---- 高度：足端相对身体中心的平均法线高度差 ----
+        Vector3 heightOffset = sum / nStance;
+
+        // ---- 倾斜：由前后/左右的高度差拟合 ----
+        Vector3 tiltRaw = (sumFrontBack + sumLeftRight * 0.7071f) / nStance;
+
+        // 用「腿展」把高度差换算成角度：tilt ≈ 高度差 / 半个腿展
+        float span = Mathf.Max(0.01f, legLengthCached * 0.5f);
+        float tiltMag = Mathf.Clamp01(tiltRaw.magnitude / span);
+
+        Vector3 tiltDir = tiltRaw.sqrMagnitude > 1e-8f
+            ? tiltRaw.normalized : Vector3.zero;
+
+        // ---- 平滑（首帧直接吸附，之后指数收敛）----
+        Vector3 finalPos = transform.position + heightOffset;
+        Vector3 wantTilt = tiltDir * tiltMag;
+
+        if (!smartBodyInitialized)
+        {
+            smartBodyPosSmoothed = finalPos;
+            smartBodyTiltSmoothed = wantTilt;
+            smartBodyInitialized = true;
+        }
+        else
+        {
+            float t = Mathf.Clamp01(smartBodyLerp * dt);
+            smartBodyPosSmoothed = Vector3.Lerp(smartBodyPosSmoothed, finalPos, t);
+            smartBodyTiltSmoothed = Vector3.Lerp(smartBodyTiltSmoothed, wantTilt, t);
+        }
+
+        // ---- 应用：位置跟着身体走（VisualRoot 的 parent 是身体），所以换到局部系 ----
+        Vector3 localPos = transform.InverseTransformPoint(smartBodyPosSmoothed);
+        anatomy.VisualRoot.localPosition = Vector3.Lerp(
+            anatomy.VisualRoot.localPosition, localPos,
+            Mathf.Clamp01(smartBodyFromFeet * smartBodyLerp * dt));
+
+        float tl = smartBodyTiltSmoothed.magnitude * smartBodyMaxTiltDeg;
+        Quaternion wantRot = tl > 0.01f
+            ? Quaternion.AngleAxis(tl, Vector3.Cross(up, smartBodyTiltSmoothed).normalized)
+            : Quaternion.identity;
+        anatomy.VisualRoot.localRotation = Quaternion.Slerp(
+            anatomy.VisualRoot.localRotation, wantRot,
+            Mathf.Clamp01(smartBodyFromFeet * smartBodyLerp * dt));
     }
 
     /// <summary>
