@@ -75,6 +75,13 @@ public class SilkSpiderLimb
     public int BoneCount { get { return bones != null ? bones.Length : 0; } }
 
     /// <summary>
+    /// ★ 本腿骨骼链的总长（FABRIK 可达半径）。
+    /// 2026-10-11 换装后 SilkSpiderAnatomy 用它**反推步态腿长**，
+    /// 让落点分布自动匹配任意模型，不再依赖 scaleRadius×3.6 的推导值。
+    /// </summary>
+    public float ChainLength { get { return TotalLength(); } }
+
+    /// <summary>
     /// ★ True = 本腿驱动的是**外部骨骼**（FBX 蒙皮骨骼），不是自己建的锥形 mesh。
     /// SilkSpiderAnatomy 靠它决定要不要显示程序化 mesh。
     /// </summary>

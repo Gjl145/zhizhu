@@ -42,12 +42,16 @@ public class SilkSpiderFbxRig : MonoBehaviour
     //   且本类与`SilkSpiderAnatomy` 之间会形成不必要的依赖方向。
     //
     // 【★ 4 条腿时的 FBX 侧无需重跑 Blender】
-    //   Blender 生成的 spider_lowpoly 有 **4 对**腿（leg_L_1..4 / leg_R_1..4）。
-    //   4 条腿时取**每侧前 2 对**：L1 / L2 / R1 / R2。
-    //   → 索引约定：0=L1, 1=L2, 2=R1, 3=R2
+    //   ★ 2026-10-11 换装：Quaternius Spider 有 4 对腿（×L/R = 8 条），
+    //   每对 3 节 + `_end` 提示骨。索引约定：0..3 = L1..L4，4..7 = R1..R4。
 
-    /// <summary>FBX 里每条腿的骨节数（leg_X_N_1 .. leg_X_N_5）。</summary>
-    public const int SegmentsPerLeg = 5;
+    /// <summary>
+    /// FBX 里每条腿的骨节数。
+    /// ★ 2026-10-11 换装 Quaternius Spider：每腿 3 节（旧模型是 5 节 leg_X_N_S）。
+    ///   Quaternius 腿链：{FrontLeg|MidFrontLeg|MidBackLeg|BackLeg} → *2 → *3，
+    ///   末端的 `*_end` 是零长度提示骨，不进 FABRIK 链。
+    /// </summary>
+    public const int SegmentsPerLeg = 3;
 
     // ---- 转发常量：本文件内一律用这两个名字，避免重复书写类名前缀 ----
     private const int LegCount = SilkSpiderLegs.Count;
@@ -83,17 +87,33 @@ public class SilkSpiderFbxRig : MonoBehaviour
     //  骨骼名约定
     // ================================================================
 
-    /// <summary>第 i 条腿（0..7，0..3 = 左侧前→后）的骨骼名数组。</summary>
+    /// <summary>
+    /// 第 i 条腿（0..LegCount-1）的骨骼名数组。
+    ///
+    /// 【★ 2026-10-11 换装 Quaternius Spider 的命名契约】
+    ///   索引约定（PerSide = 4）：0..3 = L1..L4，4..7 = R1..R4。
+    ///   同侧 4 条腿从前往后：
+    ///     k=0 FrontLeg（前腿）  k=1 MidFrontLeg（前中腿）
+    ///     k=2 MidBackLeg（后中腿） k=3 BackLeg（后腿）
+    ///   每腿 3 节，节号 1 不带数字、2/3 带数字：
+    ///     FrontLeg.L / FrontLeg2.L / FrontLeg3.L
+    ///   （与 Blender 实测骨骼树一致：Tools/blender/inspect_spider_fbx.py、
+    ///     Docs/参考/蜘蛛模型选型_QuaterniusSpider_2026-10-11.md）
+    /// </summary>
+    private static readonly string[] QuatLegPrefixes =
+        { "FrontLeg", "MidFrontLeg", "MidBackLeg", "BackLeg" };
+
     public static string[] LegBoneNames(int legIndex)
     {
-        // ★ 4 腿：索引 0..3 → L1, L2, R1, R2（取每侧前 2 对）
+        // ★ 索引约定：0..PerSide-1 = 左侧前→后，PerSide..Count-1 = 右侧前→后
         bool left = legIndex < LegsPerSide;
-        int k = (legIndex % LegsPerSide) + 1;
+        int k = legIndex % LegsPerSide;                 // 同侧第几条（0=最前）
+        string prefix = QuatLegPrefixes[k % QuatLegPrefixes.Length];
         string tag = left ? "L" : "R";
 
         var names = new string[SegmentsPerLeg];
         for (int s = 1; s <= SegmentsPerLeg; s++)
-            names[s - 1] = "leg_" + tag + "_" + k + "_" + s;
+            names[s - 1] = prefix + (s == 1 ? "" : s.ToString()) + "." + tag;
         return names;
     }
 

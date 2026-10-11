@@ -176,6 +176,29 @@ def check_phase_table(count):
         if abs(nums[0] - nums[1]) < 1e-6:
             return ['★ 4 腿步态退化：L1 与 L2 同相（应反相），'
                     '会出现两侧同步腾空']
+    # ★ 8 腿交替四足步态校验（2026-10-11 换装 Quaternius 后启用）。
+    #   规则来自 SilkSpiderBody.ComputePhase 注释的三条规律：
+    #   ① 同侧隔条同相 ② 对角同相 ③ 相邻反相。
+    #   ★ 只校验结构关系，不写死 0/0.5 —— 数组本身就是可调参数。
+    if count == 8:
+        L1, L2, L3, L4, R1, R2, R3, R4 = nums
+        eps = 1e-6
+        if abs(L1 - L3) > eps or abs(L2 - L4) > eps:
+            return ['★ 8 腿步态规律①破坏：同侧隔条应同相（L1=%.2f L3=%.2f / '
+                    'L2=%.2f L4=%.2f）' % (L1, L3, L2, L4)]
+        if abs(R1 - R3) > eps or abs(R2 - R4) > eps:
+            return ['★ 8 腿步态规律①破坏：同侧隔条应同相（R1=%.2f R3=%.2f / '
+                    'R2=%.2f R4=%.2f）' % (R1, R3, R2, R4)]
+        if abs(L1 - R2) > eps or abs(L2 - R1) > eps or abs(L3 - R4) > eps:
+            return ['★ 8 腿步态规律②破坏：对角应同相（L1=%.2f R2=%.2f / '
+                    'L2=%.2f R1=%.2f / L3=%.2f R4=%.2f）'
+                    % (L1, R2, L2, R1, L3, R4)]
+        if abs(L4 - R3) > eps:
+            return ['★ 8 腿步态规律②破坏：L4=%.2f 应与 R3=%.2f 同相'
+                    % (L4, R3)]
+        if abs(L1 - L2) < eps:
+            return ['★ 8 腿步态规律③破坏：相邻腿 L1 与 L2 同相（应反相），'
+                    '会出现同侧两条腿同时腾空']
     return []
 
 

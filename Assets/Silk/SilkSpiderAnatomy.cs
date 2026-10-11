@@ -141,6 +141,25 @@ public class SilkSpiderAnatomy : MonoBehaviour
 
         BuildLimbs();
 
+        // ★★ 换装后步态腿长自动反推（2026-10-11）
+        //   之前 legLength = scaleRadius × 3.6（按球半径推导），
+        //   换任意模型后落点分布就和腿的实际可达半径脱节 → 腿永远伸直够落点。
+        //   现在：取 8 条腿里最长的链总长 × 0.95（留一点余量给身体起伏），
+        //   步态落点永远在 FABRIK 可达范围内，**换任何模型都不用调参**。
+        if (UsingFbx && limbs != null)
+        {
+            float maxChain = 0f;
+            for (int i = 0; i < limbs.Length; i++)
+                if (limbs[i] != null && limbs[i].UsesExternalBones)
+                    maxChain = Mathf.Max(maxChain, limbs[i].ChainLength);
+            if (maxChain > 0.01f)
+            {
+                legLength = maxChain * 0.95f;
+                Debug.Log("[SpiderAnatomy] 步态腿长自动反推 = " + legLength.ToString("F2")
+                    + "（最长腿链 " + maxChain.ToString("F2") + " × 0.95）");
+            }
+        }
+
         LegRoots = new Vector3[SilkSpiderLegs.Count];
         FootPositions = new Vector3[SilkSpiderLegs.Count];
         for (int i = 0; i < SilkSpiderLegs.Count; i++)
@@ -161,14 +180,36 @@ public class SilkSpiderAnatomy : MonoBehaviour
 
     /// <summary>
     /// FBX 资源在 Resources 下的路径。
-    /// ★ 为什么放 Resources：SilkSpiderAnatomy 是**运行时 AddComponent** 加上去的
-    ///   （SilkSpiderBody.cs:511），所以它在编辑器里根本不存在，
+    /// ★ 2026-10-11 换装 Quaternius Spider（CC0，8 腿 × 3 节，
+    ///   见 Docs/参考/蜘蛛模型选型_QuaterniusSpider_2026-10-11.md）。
+    ///   旧模型 spider_lowpoly 保留在 Resources 里做对照，不再被加载。
+    ///
+    /// 【为什么放 Resources】SilkSpiderAnatomy 是**运行时 AddComponent** 加上去的
+    ///   （SilkSpiderBody.cs），所以它在编辑器里根本不存在，
     ///   用户**没有任何机会**把 FBX 拖到 Inspector 字段上。
     ///   → 之前设计的「手动拖 Fbx Instance」是**做不到的**，这就是蜘蛛本体
     ///     一直是「球加腿」而没人发现的真正原因。
-    ///   → 改成Resources 运行时加载，不再依赖任何手动接线。
+    ///   → 改成 Resources 运行时加载，不再依赖任何手动接线。
     /// </summary>
-    private const string FbxResourcePath = "spider_lowpoly";
+    private const string FbxResourcePath = "spider_quaternius";
+
+    /// <summary>
+    /// 深度按名查找（Transform.Find 只找直接子级，FBX 骨骼树都是深嵌套）。
+    /// </summary>
+    private static Transform FindDeepByName(Transform root, string name)
+    {
+        if (root == null) return null;
+        int n = root.childCount;
+        for (int i = 0; i < n; i++)
+        {
+            Transform c = root.GetChild(i);
+            if (c == null) continue;
+            if (c.name == name) return c;
+            Transform deep = FindDeepByName(c, name);
+            if (deep != null) return deep;
+        }
+        return null;
+    }
 
     /// <summary>
     /// 尝试用 FBX 作为可见体。成功返回 true。
@@ -208,12 +249,16 @@ public class SilkSpiderAnatomy : MonoBehaviour
 
         // FBX 模式下 Cephalothorax / Abdomen 指向 FBX 里的对应骨骼，
         // 这样外部若取这两个属性不会拿到 null。
+        // ★ 2026-10-11 换装 Quaternius：骨骼树是
+        //   Root → Body → Thorax → Head / Body → Abdomen —— 都不在 FBX 根的
+        //   直接子级，Transform.Find 只找直接子级会全部落空 → 深度按名查找。
         var fbxRootT = fbxRig.FbxRoot;
         if (fbxRootT != null)
         {
-            Transform ceph = fbxRootT.Find("head");
+            Transform ceph = FindDeepByName(fbxRootT, "Thorax");
+            if (ceph == null) ceph = FindDeepByName(fbxRootT, "Head");
             if (ceph != null) Cephalothorax = ceph;
-            Transform abd = fbxRootT.Find("abdomen");
+            Transform abd = FindDeepByName(fbxRootT, "Abdomen");
             if (abd != null) Abdomen = abd;
         }
 

@@ -67,21 +67,27 @@ public class SilkSpiderBody : MonoBehaviour
     [Range(0.5f, 0.9f)] public float dutyFactor = 0.65f;
 
     [Tooltip("★ 每条腿的相位偏移（归一化 0~1，一个周期为单位）。\n"
-        + "**这个数组就是四足对角步态的全部秘密** ——\n"
-        + "  4 个数按 L1,L2,R1,R2 排列（索引 = 腿索引）。\n"
-        + "  ★ 2026-10-11 由 8 腿改为 4 腿后重算：\n"
-        + "    8 腿时是「4 对分成 2 组交替」，现在 4 条腿**本身就是两组各 2 条**——\n"
-        + "    L1+R2 一组，L2+R1 另一组，这就是标准的**四足对角步态**。\n"
-        + "  相位表两条规律（校验用）：\n"
-        + "    ① 对角同相：L1(0) = R2(0)✓   L2(0.5) = R1(0.5) ✓\n"
-        + "    ② 同侧反相：L1(0) vs L2(0.5) ✓   R1(0.5) vs R2(0) ✓\n"
+        + "**这个数组就是步态的全部秘密** ——\n"
+        + "  8 个数按 L1,L2,L3,L4,R1,R2,R3,R4 排列（索引 = 腿索引，"
+        + "同侧从前往后，见 SilkSpiderFbxRig.LegBoneNames）。\n"
+        + "  ★ 2026-10-11 换装 Quaternius Spider 后恢复 8 腿交替四足步态：\n"
+        + "    同侧隔条同相、左右两组互差半周期 —— 与 UE5 教程（BV1X88c6iETw）\n"
+        + "    的「双组对角步态」同构，4 腿版就是它的特例。\n"
+        + "  相位表三条规律（校验用，check_leg_count.py 会验）：\n"
+        + "    ① 同侧隔条同相：L1(0)=L3(0)  L2(0.5)=L4(0.5)  R1(0.5)=R3(0.5)  R2(0)=R4(0)\n"
+        + "    ② 对角同相：L1(0)=R2(0)  L2(0.5)=R1(0.5)  L3(0)=R4(0)  L4(0.5)=R3(0.5)\n"
+        + "    ③ 相邻反相：L1(0) vs L2(0.5) 等\n"
         + "  改这个数组就能换步态，不用改代码。")]
     public float[] phaseOffsets = new float[]
     {
-        0.00f,   // L1
-        0.50f,   // L2  ← 与 L1 反相
-        0.50f,   // R1  ← 与 L2 同相（对角）
-        0.00f,   // R2  ← 与 L1 同相（对角）
+        0.00f,   // L1 前左
+        0.50f,   // L2 前中左  ← 与 L1 反相
+        0.00f,   // L3 后中左  ← 与 L1 同相（同侧隔条）
+        0.50f,   // L4 后左    ← 与 L2 同相（同侧隔条）
+        0.50f,   // R1 前右    ← 与 L2 同相（对角）
+        0.00f,   // R2 前中右  ← 与 L1 同相（对角）
+        0.50f,   // R3 后中右  ← 与 R1 同相（同侧隔条）
+        0.00f,   // R4 后右    ← 与 L3 同相（对角）
     };
 
     [Tooltip("起步顺序偏移（秒）。★ 来源：论文实测起步顺序 4-2-3-1 占 68.1%。\n"
@@ -398,8 +404,9 @@ public class SilkSpiderBody : MonoBehaviour
             return;
         }
 
-        // 行数不足 8 → 用户只填了一部分，剩下的用默认表补
-        if (exclusiveLegsCustom.Length != 8)
+        // 行数不足 → 用户只填了一部分，剩下的用默认表补
+        // ★ 写死 8 的教训：腿数常量化后这里必须跟 Count，否则换腿数必漏（2026-10-11）
+        if (exclusiveLegsCustom.Length != SilkSpiderLegs.Count)
         {
             Debug.LogWarning("[SpiderBody] ★ exclusiveLegsCustom 行数应为 "
                 + SilkSpiderLegs.Count + "（索引 0.." + (SilkSpiderLegs.Count - 1)
