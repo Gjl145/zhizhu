@@ -372,6 +372,53 @@ public class SilkSpiderAnatomy : MonoBehaviour
             sb.AppendLine("  bounds(本地) = " + smr.localBounds.ToString("F4"));
         }
 
+        // ---- ★★ 逐渲染器明细（2026-10-11）----
+        // 【为什么加】97 个渲染器里只有 3 个 isVisible，其余 94 个去哪了
+        //   靠汇总数字定不了性：是缩成像素点？包围盒退化被剔除？
+        //   还是跑到画面外？→ 每个都列出可见性 + 世界包围盒 + 顶点数 + 骨骼数，
+        //   一份日志就能分类（ Speck=包围盒极小 / OffScreen=包围盒在远处 /
+        //   Degenerate=包围盒为零）。只加诊断，不改任何渲染逻辑。
+        sb.AppendLine("---- 逐渲染器明细（" + rs.Length + " 个）----");
+        int visCount = 0, invisSmall = 0, invisBig = 0;
+        for (int i = 0; i < rs.Length; i++)
+        {
+            var r = rs[i];
+            if (r == null) { sb.AppendLine("  [" + i.ToString("D3") + "] null"); continue; }
+
+            bool vis = r.isVisible;
+            if (vis) visCount++;
+            Vector3 size = r.bounds.size;
+            float maxDim = Mathf.Max(size.x, size.y, size.z);
+            if (!vis && maxDim < 0.05f) invisSmall++;   // 疑似缩成点
+            else if (!vis) invisBig++;                  // 有体积却不可见 → 位置/剔除问题
+
+            string type = r is SkinnedMeshRenderer ? "SMR" : "MR";
+            int bones = 0, verts = 0;
+            var smr2 = r as SkinnedMeshRenderer;
+            if (smr2 != null)
+            {
+                bones = smr2.bones != null ? smr2.bones.Length : 0;
+                if (smr2.sharedMesh != null) verts = smr2.sharedMesh.vertexCount;
+            }
+            else
+            {
+                var mf = r.GetComponent<MeshFilter>();
+                if (mf != null && mf.sharedMesh != null) verts = mf.sharedMesh.vertexCount;
+            }
+
+            sb.AppendLine("  [" + i.ToString("D3") + "] " + r.gameObject.name
+                + " (" + type + ")"
+                + " enabled=" + (r.enabled ? 1 : 0)
+                + " visible=" + (vis ? 1 : 0)
+                + " 骨骼=" + bones
+                + " 顶点=" + verts
+                + " 世界包围盒=" + size.ToString("F3")
+                + " 中心=" + r.bounds.center.ToString("F1"));
+        }
+        sb.AppendLine("★ 明细汇总: visible=" + visCount
+            + " / invisible且包围盒<0.05(缩成点)=" + invisSmall
+            + " / invisible但有体积(位置或剔除)=" + invisBig);
+
         // 骨骼链是否真的有 5 节
         for (int i = 0; i < SilkSpiderLegs.Count; i++)
         {
