@@ -1,0 +1,273 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""腿数一致性检查（2026-10-11 建立，8 腿 → 4 腿时加）。
+
+【为什么需要这个检查项】
+把 8 条腿改成 4 条，字面量 `8` 散在三个文件里：
+SilkSpiderFbxRig / SilkSpiderAnatomy / SilkSpiderBody。
+**漏改任何一处都不会报编译错**，只会：
+  · 少一条腿（数组长度 4 但循环跑 8 → 越界，或只显示前 4 条）
+  · 骨骼名映射错位（legIndex 0..3 映射到 leg_L_1..4 → 左右全跑到左边）
+  · HUD 步态图画出一半悬空的条带
+  · 相位表长度 ≠ 腿数 → 有一条腿没相位，静默不动
+
+★ 这些正是「编译 0 错误 + 全套检查通过，但画面是错的」的典型。
+  2026-10-11 那次真编译全绿，但 `DrawGaitDiagram` 里还写着 `rowH * 8`，
+  是人工 grep 才发现的 —— 所以这个检查项必须存在。
+
+【检查项】
+  ① SilkSpiderLegs.Count 是唯一的腿数定义处，其他类不得再写死 8
+  ② 相位表长度 == 腿数
+  ③ 互斥表索引假设（PerSide）与腿数一致
+  ④ 骨骼名映射使用 PerSide 而不是硬编码 4
+  ⑤ HUD 行列/高度由腿数推导，不得写死数字
+"""
+
+import os
+import re
+import sys
+
+PROJ = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
+SILK = os.path.join(PROJ, 'Assets', 'Silk')
+
+FILES = {
+    'legs': os.path.join(SILK, 'SilkSpiderLegs.cs'),
+    'rig': os.path.join(SILK, 'SilkSpiderFbxRig.cs'),
+    'anatomy': os.path.join(SILK, 'SilkSpiderAnatomy.cs'),
+    'body': os.path.join(SILK, 'SilkSpiderBody.cs'),
+}
+
+
+def strip_comments(src):
+    src = re.sub(r'/\*.*?\*/', '', src, flags=re.S)
+    src = re.sub(r'//[^\n]*', '', src)
+    return src
+
+
+def read(path):
+    with open(path, encoding='utf-8') as f:
+        return strip_comments(f.read())
+
+
+def declared_count():
+    """从 SilkSpiderLegs.cs 里读出实际腿数。"""
+    if not os.path.isfile(FILES['legs']):
+        return None
+    src = read(FILES['legs'])
+    m = re.search(r'Count\s*=\s*(\d+)\s*;', src)
+    return int(m.group(1)) if m else None
+
+
+def check_single_source():
+    """① 其他类不得再写死 8 作为腿数。"""
+    errors = []
+    for key in ('rig', 'anatomy', 'body'):
+        src = read(FILES[key])
+        bad = []
+        # 裸数组长度 [8]
+        for m in re.finditer(r'new\s+\w+\[8\]', src):
+            bad.append('new %s[8]' % m.group(1))
+        # 裸循环上界
+        for m in re.finditer(r'<\s*8\s*;', src):
+            bad.append('循环上界 < 8')
+        # 裸乘法
+        for m in re.finditer(r'\*\s*8\b', src):
+            bad.append('乘法 *8')
+        if bad:
+            errors.append('%s.cs 仍有写死的 8：%s'
+                          % (key, ', '.join(sorted(set(bad))[:6])))
+    return errors
+
+
+def check_phase_table(count):
+    """② 相位表长度必须等于腿数。"""
+    if count is None:
+        return []
+    src = read(FILES['body'])
+    m = re.search(r'phaseOffsets\s*=\s*new\s+float\[\s*\]\s*\{([^}]*)\}', src)
+    if not m:
+        return ['找不到 phaseOffsets 数组字面量']
+
+    body_txt = m.group(1)
+    values = [v for v in re.split(r',', body_txt)
+              if re.search(r'\d', v)]
+
+    if len(values) != count:
+        return ['★ phaseOffsets 有 %d 个值，但腿数是 %d'
+                ' → 会有腿没有相位（静默不动）'
+                % (len(values), count)]
+
+    # 相位必须落在 [0,1)
+    for i, v in enumerate(values):
+        f = re.search(r'([\d.]+)f?', v)
+        if f:
+            val = float(f.group(1))
+            if val < 0.0 or val >= 1.0:
+                return ['phaseOffsets[%d] = %s 不在 [0,1) 区间' % (i, val)]
+
+    # ★ 对角步态校验：左右对称的两条腿应该同相
+    per = count // 2
+    nums = [float(re.search(r'([\d.]+)', v).group(1)) for v in values]
+    # L1(idx 0) 应与 R?(idx 2) 同相 —— 4 腿版是 L1/R2
+    if count == 4:
+        if abs(nums[0] - nums[3]) > 1e-6:
+            return ['★ 4 腿对角步态被破坏：L1=%s 应与 R2=%s 同相'
+                    % (nums[0], nums[3])]
+        if abs(nums[1] - nums[2]) > 1e-6:
+            return ['★ 4 腿对角步态被破坏：L2=%s 应与 R1=%s 同相'
+                    % (nums[1], nums[2])]
+        if abs(nums[0] - nums[1]) < 1e-6:
+            return ['★ 4 腿步态退化：L1 与 L2 同相（应反相），'
+                    '会出现两侧同步腾空']
+    return []
+
+
+def check_neighbor_table(count):
+    """③ 互斥表必须用 PerSide 而不是硬编码 4。"""
+    src = read(FILES['body'])
+    errors = []
+    m = re.search(r'BuildNeighborTable\s*\(\s*\)\s*\{', src)
+    if not m:
+        return ['找不到 BuildNeighborTable']
+
+    # 取函数体（大括号配平）
+    start = m.end() - 1
+    depth = 0
+    body_txt = ''
+    for ch in src[start:]:
+        body_txt += ch
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                break
+
+    if 'SilkSpiderLegs.PerSide' not in body_txt:
+        errors.append('BuildNeighborTable 里没有用 SilkSpiderLegs.PerSide'
+                      '→ 左右侧起点可能是写死的')
+    if re.search(r'oppSide\s*=\s*left\s*\?\s*\d+\s*:\s*\d+', body_txt):
+        errors.append('BuildNeighborTable 里 oppSide 写死了数字'
+                      '（应从 PerSide 推导）')
+    return errors
+
+
+def check_bone_mapping():
+    """④ 骨骼名映射必须用 PerSide。"""
+    src = read(FILES['rig'])
+    errors = []
+    m = re.search(r'LegBoneNames\s*\(\s*int\s+legIndex\s*\)\s*\{', src)
+    if not m:
+        return ['找不到 LegBoneNames']
+    start = m.end() - 1
+    depth = 0
+    body_txt = ''
+    for ch in src[start:]:
+        body_txt += ch
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                break
+
+    if re.search(r'legIndex\s*<\s*\d+', body_txt):
+        errors.append('LegBoneNames 里 legIndex 比较用了写死的数字'
+                      '（应 SilkSpiderLegs.PerSide）')
+    if re.search(r'legIndex\s*%\s*\d+', body_txt):
+        errors.append('LegBoneNames 里 legIndex 取模用了写死的数字'
+                      '（应 SilkSpiderLegs.PerSide）')
+    return errors
+
+
+def check_hud(count):
+    """⑤ HUD 行列/条带高度必须由腿数推导。"""
+    src = read(FILES['body'])
+    errors = []
+    m = re.search(r'DrawGaitDiagram\s*\(\s*\)\s*\{', src)
+    if not m:
+        return ['找不到 DrawGaitDiagram']
+    start = m.end() - 1
+    depth = 0
+    body_txt = ''
+    for ch in src[start:]:
+        body_txt += ch
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                break
+
+    if re.search(r'rowH\s*\*\s*\d+', body_txt):
+        errors.append('★ DrawGaitDiagram 里条带高度写死了行数'
+                      '（应 SilkSpiderLegs.Count）—— 4 腿时会画出一半悬空条带')
+
+    # LegName 的左右判定
+    m2 = re.search(r'LegName\s*\(\s*int\s+\w+\s*\)\s*\{', src)
+    if m2:
+        start2 = m2.end() - 1
+        depth = 0
+        t2 = ''
+        for ch in src[start2:]:
+            t2 += ch
+            if ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0:
+                    break
+        if re.search(r'i\s*<\s*\d+', t2) or re.search(r'i\s*%\s*\d+', t2):
+            errors.append('★ LegName 里左右判定/ 编号写死了数字'
+                          '（应 SilkSpiderLegs.PerSide）—— 4 腿时 R1 会标成 R3')
+    return errors
+
+
+def main():
+    print('=' * 74)
+    print('腿数一致性检查（8 腿 → 4 腿）')
+    print('=' * 74)
+    print()
+
+    count = declared_count()
+    if count is None:
+        print('读不到 SilkSpiderLegs.Count —— 先建那个文件')
+        return 1
+    per_side = count // 2
+    print('★ 当前腿数 SilkSpiderLegs.Count = %d（每侧 %d 条）' % (count, per_side))
+    print()
+
+    all_errors = []
+    checks = [
+        ('① 腿数单一来源（其他类不写死 8）', lambda: check_single_source()),
+        ('② 相位表长度与对角步态', lambda: check_phase_table(count)),
+        ('③ 互斥表索引假设', lambda: check_neighbor_table(count)),
+        ('④ 骨骼名映射', check_bone_mapping),
+        ('⑤ HUD 行列由腿数推导', lambda: check_hud(count)),
+    ]
+
+    for label, fn in checks:
+        errs = fn()
+        if errs:
+            print('[%s]' % label)
+            for e in errs:
+                print('    ERROR %s' % e)
+            all_errors += errs
+        else:
+            print('[%s] ✓' % label)
+
+    print()
+    print('=' * 74)
+    if all_errors:
+        print('✗ %d 项失败 —— 腿数不一致会有「静默少腿 / 骨骼错位 / HUD 半截」'
+              % len(all_errors))
+        return 1
+    print('✓ 通过 —— %d 条腿（每侧 %d），相位/ 互斥 / 骨骼 / HUD 全部对齐'
+          % (count, per_side))
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

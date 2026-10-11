@@ -28,6 +28,7 @@ STEPS = [
     ('precheck.py',          True,  '括号 / 属性特性 / CS0103 / 死变量'),
     ('check_mesh.py',        True,  'mesh 索引数值模拟（抓 IndexOutOfRange）'),
     ('check_spider_visibility.py', True, '蜘蛛可见性（专治「球加腿」）'),
+    ('check_leg_count.py', True, '腿数一致性（抓「静默少腿 / 骨骼错位 / HUD 半截」）'),
     ('check_gait_convergence.py', True, '步态落点振荡验证（抓「移动两步就重来」）'),
     ('check_spider_model.py',True, 'Blender 模型几何（抓 8 腿重叠 / 腿翘天 / 面数超标）'),
     ('selfcheck.py',         False, '39 项结构与参数联动自检'),

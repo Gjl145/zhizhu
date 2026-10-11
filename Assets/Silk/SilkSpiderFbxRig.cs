@@ -32,8 +32,26 @@ using UnityEngine;
 [DisallowMultipleComponent]
 public class SilkSpiderFbxRig : MonoBehaviour
 {
+    // ================================================================
+    //  ★★★ 腿数：见 SilkSpiderLegs.Count（唯一来源）
+    // ================================================================
+    //
+    // 【★ 这里只做转发，不做定义】
+    //   腿数被三个类引用（Anatomy / Body / 本类），定义放在独立的
+    //   `SilkSpiderLegs.cs` 里 —— 否则另外两个类就得依赖 FBX 层，
+    //   且本类与`SilkSpiderAnatomy` 之间会形成不必要的依赖方向。
+    //
+    // 【★ 4 条腿时的 FBX 侧无需重跑 Blender】
+    //   Blender 生成的 spider_lowpoly 有 **4 对**腿（leg_L_1..4 / leg_R_1..4）。
+    //   4 条腿时取**每侧前 2 对**：L1 / L2 / R1 / R2。
+    //   → 索引约定：0=L1, 1=L2, 2=R1, 3=R2
+
     /// <summary>FBX 里每条腿的骨节数（leg_X_N_1 .. leg_X_N_5）。</summary>
     public const int SegmentsPerLeg = 5;
+
+    // ---- 转发常量：本文件内一律用这两个名字，避免重复书写类名前缀 ----
+    private const int LegCount = SilkSpiderLegs.Count;
+    private const int LegsPerSide = SilkSpiderLegs.PerSide;
 
     /// <summary>
     /// FBX 实例（GameObject）。运行时用 Instantiate 生成。
@@ -68,8 +86,9 @@ public class SilkSpiderFbxRig : MonoBehaviour
     /// <summary>第 i 条腿（0..7，0..3 = 左侧前→后）的骨骼名数组。</summary>
     public static string[] LegBoneNames(int legIndex)
     {
-        bool left = legIndex < 4;
-        int k = (legIndex % 4) + 1;
+        // ★ 4 腿：索引 0..3 → L1, L2, R1, R2（取每侧前 2 对）
+        bool left = legIndex < LegsPerSide;
+        int k = (legIndex % LegsPerSide) + 1;
         string tag = left ? "L" : "R";
 
         var names = new string[SegmentsPerLeg];
@@ -89,8 +108,8 @@ public class SilkSpiderFbxRig : MonoBehaviour
     /// </summary>
     public static string[] AllLegBoneNames()
     {
-        var all = new string[8 * SegmentsPerLeg];
-        for (int i = 0; i < 8; i++)
+        var all = new string[LegCount * SegmentsPerLeg];
+        for (int i = 0; i < LegCount; i++)
         {
             string[] names = LegBoneNames(i);
             for (int s = 0; s < SegmentsPerLeg; s++)
@@ -129,10 +148,10 @@ public class SilkSpiderFbxRig : MonoBehaviour
         var index = BuildBoneIndex(FbxRoot);
 
         // ---- 3. 取 8 条腿的链 ----
-        legChains = new Transform[8][];
+        legChains = new Transform[LegCount][];
         var missing = new System.Text.StringBuilder();
 
-        for (int i = 0; i < 8; i++)
+        for (int i = 0; i < LegCount; i++)
         {
             string[] names = LegBoneNames(i);
             var chain = new Transform[SegmentsPerLeg];
@@ -155,7 +174,7 @@ public class SilkSpiderFbxRig : MonoBehaviour
         if (missing.Length > 0)
         {
             AttachError = "FBX 里缺少这些骨骼：" + missing
-                + "（共 " + (8 * SegmentsPerLeg) + " 根应有骨骼）。"
+                + "（共 " + (LegCount * SegmentsPerLeg) + " 根应有骨骼）。"
                 + "→ 检查 Blender 侧 build_rig 的命名，或确认导出时勾了 ARMATURE。";
             Debug.LogError("[SpiderFbxRig] " + AttachError, this);
             legChains = null;
@@ -166,7 +185,7 @@ public class SilkSpiderFbxRig : MonoBehaviour
         // ★ 不校验的后果：若 FBX 骨骼被重命名或层级变了，
         //   FABRIK 算出的 pts[i] 写进不相邻的骨里 → 腿会拧成麻花，
         //   而且**不报任何错**。
-        for (int i = 0; i < 8; i++)
+        for (int i = 0; i < LegCount; i++)
         {
             Transform[] chain = legChains[i];
             for (int s = 0; s < SegmentsPerLeg - 1; s++)
@@ -250,7 +269,7 @@ public class SilkSpiderFbxRig : MonoBehaviour
 
         var sb = new System.Text.StringBuilder();
         sb.AppendLine("[SpiderFbxRig] 8 条腿实测世界坐标（验证朝向用）：");
-        for (int i = 0; i < 8; i++)
+        for (int i = 0; i < LegCount; i++)
         {
             Transform[] c = legChains[i];
             if (c == null) { sb.AppendLine("  腿 " + i + "：缺骨骼"); continue; }
@@ -267,7 +286,7 @@ public class SilkSpiderFbxRig : MonoBehaviour
         // ---- 关键判据：足端必须比腿根低（重力沿 -Z） ----
         //若 foot.z > root.z，说明蜘蛛是倒挂的 → orientationFixDeg 需要调整。
         int inverted = 0;
-        for (int i = 0; i < 8; i++)
+        for (int i = 0; i < LegCount; i++)
         {
             Transform[] c = legChains[i];
             if (c == null) continue;

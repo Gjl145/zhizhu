@@ -67,20 +67,21 @@ public class SilkSpiderBody : MonoBehaviour
     [Range(0.5f, 0.9f)] public float dutyFactor = 0.65f;
 
     [Tooltip("★ 每条腿的相位偏移（归一化 0~1，一个周期为单位）。\n"
-        + "**这个数组就是交替四足步态的全部秘密** ——\n"
-        + "  8 个数按 L1,L2,L3,L4,R1,R2,R3,R4 排列。\n"
-        + "  当前值来自生物实测：同侧隔条同相、对角同相、相邻反相。\n"
+        + "**这个数组就是四足对角步态的全部秘密** ——\n"
+        + "  4 个数按 L1,L2,R1,R2 排列（索引 = 腿索引）。\n"
+        + "  ★ 2026-10-11 由 8 腿改为 4 腿后重算：\n"
+        + "    8 腿时是「4 对分成 2 组交替」，现在 4 条腿**本身就是两组各 2 条**——\n"
+        + "    L1+R2 一组，L2+R1 另一组，这就是标准的**四足对角步态**。\n"
+        + "  相位表两条规律（校验用）：\n"
+        + "    ① 对角同相：L1(0) = R2(0)✓   L2(0.5) = R1(0.5) ✓\n"
+        + "    ② 同侧反相：L1(0) vs L2(0.5) ✓   R1(0.5) vs R2(0) ✓\n"
         + "  改这个数组就能换步态，不用改代码。")]
     public float[] phaseOffsets = new float[]
     {
         0.00f,   // L1
         0.50f,   // L2  ← 与 L1 反相
-        0.00f,   // L3  ← 与 L1 同相（隔一条同相）
-        0.50f,   // L4  ← 与 L3 反相
-        0.50f,   // R1  ← 与 L2 同相（对角同相）
-        0.00f,   // R2  ← 与 L1 同相（对角同相）
-        0.50f,   // R3
-        0.00f,// R4
+        0.50f,   // R1  ← 与 L2 同相（对角）
+        0.00f,   // R2  ← 与 L1 同相（对角）
     };
 
     [Tooltip("起步顺序偏移（秒）。★ 来源：论文实测起步顺序 4-2-3-1 占 68.1%。\n"
@@ -200,7 +201,7 @@ public class SilkSpiderBody : MonoBehaviour
 
     [Tooltip("★★ 自定义互斥腿表（★ 照着 B站 BV12F411P71f 教程加的可配置项）。\n"
         + "★ **每行一条腿，列出与它互斥、不能同时摆动的腿索引。**\n"
-        + "留空（8 行全为 null 或空数组）= 用内置默认表（BuildNeighborTable）。\n"
+        + "留空（全部为 null 或空数组）= 用内置默认表（BuildNeighborTable）。\n"
         + "\n"
         + "索引约定：L1..L4 = 0..3，R1..R4 = 4..7。\n"
         + "  L1=0 L2=1 L3=2 L4=3 R1=4 R2=5 R3=6 R4=7\n"
@@ -296,7 +297,7 @@ public class SilkSpiderBody : MonoBehaviour
     [Tooltip("★ 默认勾上 —— 不勾就看不到腿，等于交付物不可见。")]
     public bool enableLegs = true;
 
-    [Tooltip("显示实时步态图（8 条腿的时序条带）—— ★ 判断步态对不对最直观的工具")]
+    [Tooltip("显示实时步态图（各条腿的时序条带）—— ★ 判断步态对不对最直观的工具")]
     public bool showGaitDiagram = false;
 
     // ================================================================
@@ -348,33 +349,36 @@ public class SilkSpiderBody : MonoBehaviour
 
     private static int[][] BuildNeighborTable()
     {
-        var t = new int[8][];
-        for (int i = 0; i < 8; i++)
+        var t = new int[SilkSpiderLegs.Count][];
+        for (int i = 0; i < SilkSpiderLegs.Count; i++)
         {
-            bool left = i < 4;
-            int k = i % 4;                 // 同侧第几条（0=最前）
-            int oppSide = left ? 4 : 0;    // 对侧起点
+            //★ 索引约定随SilkSpiderLegs.Count 变化：
+            //   SilkSpiderLegs.Count = 4 → 索引 0..3 = L1, L2, R1, R2（每侧 2 条）
+            bool left = i < SilkSpiderLegs.PerSide;
+            int k = i % SilkSpiderLegs.PerSide;              // 同侧第几条（0=最前）
+            int oppSide = left ? SilkSpiderLegs.PerSide : 0;  // 对侧起点
 
             var list = new System.Collections.Generic.List<int>(4);
 
-            // 同侧相邻（前后）
+            // 同侧相邻（前后）。SilkSpiderLegs.PerSide = 1 时（两条腿）不存在同侧邻居
             if (k > 0) list.Add(i - 1);
-            if (k < 3) list.Add(i + 1);
+            if (k < SilkSpiderLegs.PerSide - 1) list.Add(i + 1);
 
             // 对侧同序号
             list.Add(oppSide + k);
-            // 对侧斜向（蜘蛛的对角关系）
+
+            // 对侧斜向（对角关系）。★ 只有 k>0 或 k<SilkSpiderLegs.PerSide-1 时才存在
             if (k > 0) list.Add(oppSide + k - 1);
-            if (k < 3) list.Add(oppSide + k + 1);
+            if (k < SilkSpiderLegs.PerSide - 1) list.Add(oppSide + k + 1);
 
             t[i] = list.ToArray();
         }
         return t;
     }
 
-    private LegState[] legState = new LegState[8];
-    private Vector3[] footWorld = new Vector3[8];
-    private Vector3[] rootWorld = new Vector3[8];
+    private LegState[] legState = new LegState[SilkSpiderLegs.Count];
+    private Vector3[] footWorld = new Vector3[SilkSpiderLegs.Count];
+    private Vector3[] rootWorld = new Vector3[SilkSpiderLegs.Count];
 
     /// <summary>
     /// ★ 解析互斥表：自定义优先，全部非法/为空则退回内置默认表。
@@ -397,16 +401,16 @@ public class SilkSpiderBody : MonoBehaviour
         // 行数不足 8 → 用户只填了一部分，剩下的用默认表补
         if (exclusiveLegsCustom.Length != 8)
         {
-            Debug.LogWarning("[SpiderBody] ★ exclusiveLegsCustom 必须正好 8 行"
-                + "（L1..L4 = 0..3，R1..R4 = 4..7），当前只有 "
-                + exclusiveLegsCustom.Length + " 行。"
+            Debug.LogWarning("[SpiderBody] ★ exclusiveLegsCustom 行数应为 "
+                + SilkSpiderLegs.Count + "（索引 0.." + (SilkSpiderLegs.Count - 1)
+                + "），当前只有 " + exclusiveLegsCustom.Length + " 行。"
                 + "→ 缺失的行改用内置默认表。", this);
         }
 
-        var table = new int[8][];
+        var table = new int[SilkSpiderLegs.Count][];
         bool anyValid = false;
 
-        for (int i = 0; i < 8; i++)
+        for (int i = 0; i < SilkSpiderLegs.Count; i++)
         {
             int[] row = null;
             if (i < exclusiveLegsCustom.Length && exclusiveLegsCustom[i] != null)
@@ -463,9 +467,9 @@ public class SilkSpiderBody : MonoBehaviour
     }
 
     // ===== ★ 相邻腿互斥的运行时缓冲（每帧重填，不必跨帧保存）=====
-    private readonly bool[] swingIntent = new bool[8];// 相位说「该摆」
-    private readonly bool[] swingGranted = new bool[8];// 互斥裁决后「准许摆」
-    private readonly int[] order = new int[8];       // 按相位降序的下标
+    private readonly bool[] swingIntent = new bool[SilkSpiderLegs.Count];// 相位说「该摆」
+    private readonly bool[] swingGranted = new bool[SilkSpiderLegs.Count];// 互斥裁决后「准许摆」
+    private readonly int[] order = new int[SilkSpiderLegs.Count];// 按相位降序的下标
     private int swingCount;                          // 本帧实际获准数
 
     /// <summary>
@@ -479,7 +483,7 @@ public class SilkSpiderBody : MonoBehaviour
     }
 
     /// <summary>★ 每条腿落点处的表面法线（供足端朝向跟随用）。</summary>
-    private Vector3[] footNormals = new Vector3[8];
+    private Vector3[] footNormals = new Vector3[SilkSpiderLegs.Count];
 
     private Vector3 previousWorldPos;
     private Vector3 velocity;
@@ -794,7 +798,7 @@ public class SilkSpiderBody : MonoBehaviour
         legLengthCached = ResolveLegLength();
         timeStandingStill = 0f;
 
-        for (int i = 0; i < 8; i++)
+        for (int i = 0; i < SilkSpiderLegs.Count; i++)
         {
             Vector3 root = RootWorld(i);
 
@@ -978,7 +982,7 @@ public class SilkSpiderBody : MonoBehaviour
          */
 
         // ---- 第 0 趟：按相位算「原始意图」，不裁决 ----
-        for (int i = 0; i < 8; i++)
+        for (int i = 0; i < SilkSpiderLegs.Count; i++)
         {
             float phase = ComputePhase(i, gaitClock, StaggerOffsetsCache());
             float sw = dutyFactor + swingPortion;
@@ -1004,8 +1008,8 @@ public class SilkSpiderBody : MonoBehaviour
         if (neighborStepMutex)
         {
             // 按相位降序排序（8 条，插入排序足够，不值得上堆）
-            for (int a = 0; a < 8; a++) order[a] = a;
-            for (int a = 1; a < 8; a++)
+            for (int a = 0; a < SilkSpiderLegs.Count; a++) order[a] = a;
+            for (int a = 1; a < SilkSpiderLegs.Count; a++)
             {
                 int key = order[a];
                 float kp = legState[key].Phase;
@@ -1019,7 +1023,7 @@ public class SilkSpiderBody : MonoBehaviour
             }
 
             swingCount = 0;
-            for (int oi = 0; oi < 8; oi++)
+            for (int oi = 0; oi < SilkSpiderLegs.Count; oi++)
             {
                 int i = order[oi];
                 if (!swingIntent[i]) { swingGranted[i] = false; continue; }
@@ -1047,7 +1051,7 @@ public class SilkSpiderBody : MonoBehaviour
         {
             // 关闭互斥时，硬上限仍然生效（否则会退化成 8 条腿全腾空）
             swingCount = 0;
-            for (int i = 0; i < 8; i++)
+            for (int i = 0; i < SilkSpiderLegs.Count; i++)
             {
                 if (!swingIntent[i]) { swingGranted[i] = false; continue; }
                 if (swingCount >= maxSimultaneousSwing) { swingGranted[i] = false; continue; }
@@ -1056,7 +1060,7 @@ public class SilkSpiderBody : MonoBehaviour
             }
         }
 
-        for (int i = 0; i < 8; i++)
+        for (int i = 0; i < SilkSpiderLegs.Count; i++)
         {
             rootWorld[i] = RootWorld(i);
 
@@ -1239,7 +1243,7 @@ public class SilkSpiderBody : MonoBehaviour
     {
         Vector3 up = SafeUp();
         if (anatomy == null) return;
-        for (int i = 0; i < 8; i++)
+        for (int i = 0; i < SilkSpiderLegs.Count; i++)
         {
             if (rootWorld[i] == Vector3.zero) rootWorld[i] = RootWorld(i);
             if (footWorld[i] == Vector3.zero) footWorld[i] = legState[i].LockedTarget;
@@ -1308,7 +1312,7 @@ public class SilkSpiderBody : MonoBehaviour
     //     脚抬高 → 身体跟着抬；脚分布不均 → 身体跟着倾。
     //
     // 【★ 本项目的优势：我们已经有 8 个足端坐标】
-    //   插件要额外挂一个 Box 组件；本项目 footWorld[8] 每帧现成。
+    //   插件要额外挂一个 Box 组件；本项目 footWorld[] 每帧现成。
     //   → 实现成本极低，不需要新组件。
     //
     // 【★ 公式】
@@ -1360,7 +1364,7 @@ public class SilkSpiderBody : MonoBehaviour
         // 左右组的权重折半（1/√2），避免俯仰和横滚互相抢量
         const float k = 0.7071f;
 
-        for (int i = 0; i < 8; i++)
+        for (int i = 0; i < SilkSpiderLegs.Count; i++)
         {
             Vector3 fp = footWorld[i];
             if (fp == Vector3.zero) continue;
@@ -1470,7 +1474,7 @@ public class SilkSpiderBody : MonoBehaviour
     private float[] staggerCache;
     private float[] StaggerOffsets()
     {
-        if (staggerCache == null) staggerCache = new float[8];
+        if (staggerCache == null) staggerCache = new float[SilkSpiderLegs.Count];
 
         // 4-2-3-1 → 延迟量：腿4=0, 腿2=1步, 腿3=2步, 腿1=3步
         // 步长 = startStagger（秒）
@@ -1710,7 +1714,7 @@ public class SilkSpiderBody : MonoBehaviour
     private void DrawLegDebug()
     {
         Vector3 up = SafeUp();
-        for (int i = 0; i < 8; i++)
+        for (int i = 0; i < SilkSpiderLegs.Count; i++)
         {
             DrawCross(legState[i].LockedTarget, BallRadius * 0.35f, Color.green);
             DrawCross(legState[i].NextTarget, BallRadius * 0.3f, Color.yellow);
@@ -1735,7 +1739,7 @@ public class SilkSpiderBody : MonoBehaviour
     }
 
     /// <summary>
-    /// ★ 步态图 —— 8 条腿的时序条带。
+    /// ★ 步态图 —— 所有腿的时序条带（行数 = SilkSpiderLegs.Count）。
     ///   黑条 = 支撑相，白底 = 摆动相。
     ///   对照论文的 gait diagram，一眼能看出是不是交替四足步态。
     /// </summary>
@@ -1750,7 +1754,7 @@ public class SilkSpiderBody : MonoBehaviour
         //     「The expression being assigned to 'top' must be constant」。
         float top = Screen.height - 20f;
 
-        for (int i = 0; i < 8; i++)
+        for (int i = 0; i < SilkSpiderLegs.Count; i++)
         {
             float y = top - rowH * (i + 1);
             float ph = legState[i].Phase;
@@ -1775,17 +1779,20 @@ public class SilkSpiderBody : MonoBehaviour
                 LegName(i), GUI.skin.label);
         }
 
-        // 摆动段高亮
+        // 摆动段高亮（★ 高度必须由腿数推导，写死 8 会在 4 腿时画出一半悬空条）
         GUI.color = new Color(0.4f, 0.8f, 1f, 0.5f);
-        GUI.DrawTexture(new Rect(x0 + dutyFactor * w, top - rowH * 8,
-            swingPortion * w, rowH * 8f), Texture2D.whiteTexture);
+        GUI.DrawTexture(new Rect(x0 + dutyFactor * w,
+            top - rowH * SilkSpiderLegs.Count,
+            swingPortion * w, rowH * SilkSpiderLegs.Count),
+            Texture2D.whiteTexture);
         GUI.color = Color.white;
     }
 
     private static string LegName(int i)
     {
-        string side = i < 4 ? "L" : "R";
-        return side + (i % 4 + 1);
+        // ★ 每侧腿数随 SilkSpiderLegs.PerSide 变，写死 4 会把 R1 标成 R5
+        string side = i < SilkSpiderLegs.PerSide ? "L" : "R";
+        return side + (i % SilkSpiderLegs.PerSide + 1);
     }
 
     /// <summary>

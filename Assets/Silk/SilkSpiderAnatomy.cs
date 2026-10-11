@@ -74,13 +74,13 @@ public class SilkSpiderAnatomy : MonoBehaviour
     public Transform Cephalothorax { get; private set; }
     /// <summary>腹部节点。</summary>
     public Transform Abdomen { get; private set; }
-    /// <summary>8 条腿的世界坐标根（腿根）。</summary>
+    /// <summary>各条腿的世界坐标根（腿根）。长度 = SilkSpiderFbxRig.SilkSpiderLegs.Count。</summary>
     public Vector3[] LegRoots { get; private set; }
-    /// <summary>8 条腿的当前足端世界坐标。</summary>
+    /// <summary>各条腿的当前足端世界坐标。长度 = SilkSpiderFbxRig.SilkSpiderLegs.Count。</summary>
     public Vector3[] FootPositions { get; private set; }
 
     private Transform[] cephaloSegments;      // 头胸部的分块（做轻微起伏）
-    private SilkSpiderLimb[] limbs;           // 8 条腿，每条多节
+    private SilkSpiderLimb[] limbs;           // SilkSpiderLegs.Count 条腿，每条多节
     private static Shader cachedShader;
 
     private MeshRenderer[] allRenderers;
@@ -133,17 +133,17 @@ public class SilkSpiderAnatomy : MonoBehaviour
                 + "不再作为 fallback。\n"
                 + "  请修好 FBX 加载（看上面那条错误）。"
                 + "碰撞体不受影响，仍可正常移动。", this);
-            limbs = new SilkSpiderLimb[8];
-            LegRoots = new Vector3[8];
-            FootPositions = new Vector3[8];
+            limbs = new SilkSpiderLimb[SilkSpiderLegs.Count];
+            LegRoots = new Vector3[SilkSpiderLegs.Count];
+            FootPositions = new Vector3[SilkSpiderLegs.Count];
             return;
         }
 
         BuildLimbs();
 
-        LegRoots = new Vector3[8];
-        FootPositions = new Vector3[8];
-        for (int i = 0; i < 8; i++)
+        LegRoots = new Vector3[SilkSpiderLegs.Count];
+        FootPositions = new Vector3[SilkSpiderLegs.Count];
+        for (int i = 0; i < SilkSpiderLegs.Count; i++)
         {
             LegRoots[i] = limbs[i].RootWorld;
             FootPositions[i] = limbs[i].FootWorld;
@@ -296,7 +296,7 @@ public class SilkSpiderAnatomy : MonoBehaviour
     public float legLength = -1f;
 
     /// <summary>
-    /// 8 条腿，每条 5 节折线（对齐 Locomotor 的 leg_X_N_M 骨骼链）。
+    /// SilkSpiderLegs.Count 条腿，每条 5 节骨骼（对齐 Locomotor 的 leg_X_N_M 骨骼链）。
     ///
     /// 【★ 腿根布局 —— 这里改了架构】
     ///   之前：4 对腿沿身体全长 -1~+1 均布 → 前腿长在头顶前面。
@@ -305,9 +305,9 @@ public class SilkSpiderAnatomy : MonoBehaviour
     /// </summary>
     private void BuildLimbs()
     {
-        limbs = new SilkSpiderLimb[8];
+        limbs = new SilkSpiderLimb[SilkSpiderLegs.Count];
 
-        for (int i = 0; i < 8; i++)
+        for (int i = 0; i < SilkSpiderLegs.Count; i++)
         {
             var limb = new SilkSpiderLimb();
 
@@ -341,7 +341,7 @@ public class SilkSpiderAnatomy : MonoBehaviour
     // ---------------------------------------------------------------
 
     /// <summary>
-    /// ★ 更新 8 条腿的足端位置。
+    /// ★ 更新所有腿的足端位置。
     ///   由 SilkSpiderBody 解算好落点后调用，逐条写进 Limb 并求解关节角。
     /// </summary>
     /// <param name="rootWorld">8 个腿根世界坐标</param>
