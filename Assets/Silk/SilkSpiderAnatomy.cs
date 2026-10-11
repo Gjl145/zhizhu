@@ -304,6 +304,38 @@ public class SilkSpiderAnatomy : MonoBehaviour
         var instance = Instantiate(asset);
         instance.name = "SpiderModel_FBX";
 
+        // ★★ 材质过暗兜底（2026-10-11）
+        //   【证据】22:24 运行的截图：画面近全黑，蜘蛛完全融进背景。
+        //   Quaternius Spider 的自带材质（Material / Material.001，Standard）
+        //   底色接近纯黑 —— 光照不足时整只蜘蛛就是一团黑影。
+        //   【做法】底色最大分量 < 0.3 时抬到中灰 —— 不是美化，
+        //     是「轮廓永远读得出来」的可见性下限。
+        //   【为什么用 r.materials 而不是 sharedMaterial】
+        //     sharedMaterial 会改到 Assets 里的源资产（污染资源），
+        //     r.materials 拿的是运行时实例副本。
+        var allRenderers = instance.GetComponentsInChildren<Renderer>(true);
+        int tintedMats = 0;
+        for (int i = 0; i < allRenderers.Length; i++)
+        {
+            Material[] mats = allRenderers[i].materials;
+            bool changed = false;
+            for (int m = 0; m < mats.Length; m++)
+            {
+                if (mats[m] == null || !mats[m].HasProperty("_Color")) continue;
+                Color c = mats[m].color;
+                if (Mathf.Max(c.r, Mathf.Max(c.g, c.b)) < 0.3f)
+                {
+                    mats[m].color = new Color(0.38f, 0.36f, 0.34f, c.a);
+                    changed = true;
+                    tintedMats++;
+                }
+            }
+            if (changed) allRenderers[i].materials = mats;
+        }
+        if (tintedMats > 0)
+            Debug.Log("[SpiderAnatomy] 有 " + tintedMats
+                + " 个材质底色过暗（<0.3），已抬到中灰 —— 可见性兜底。");
+
         var skinned = instance.GetComponentInChildren<SkinnedMeshRenderer>(true);
         var meshFilter = instance.GetComponentInChildren<MeshFilter>(true);
         var meshRenderer = instance.GetComponentInChildren<MeshRenderer>(true);

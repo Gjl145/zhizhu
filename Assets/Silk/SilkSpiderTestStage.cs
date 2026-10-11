@@ -431,24 +431,34 @@ public class SilkSpiderTestStage : MonoBehaviour
 
         cameraPlaced = true;
 
-        // ---------- ③ 光照（没光的话几何全黑，一样看不见）----------
+        // ---------- ③ 光照 ----------
+        // ★★ 2026-10-11 修「黑屏」：只建不调是不够的。
+        //   截图证据（22:24 运行）：画面近全黑，只剩边缘高光。
+        //   根因：ceshi.unity 自带 Directional Light（m_Type:1, intensity:1），
+        //   它是 Unity 默认 **Y-up** 摆放 —— 在本项目的 Z-up 世界里
+        //   光贴着地面水平照，所有朝上的面几乎收不到光。
+        //   → 光源**存在也要摆方向**（与相机同一条 once 规则，cameraPlaced 守门）。
         Light existingLight = FindObjectOfType<Light>();
         if (existingLight == null)
         {
             var lightGO = new GameObject("SpiderTestLight");
-            lightGO.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
-
-            var light = lightGO.AddComponent<Light>();
-            light.type = LightType.Directional;
-            light.intensity = 1.1f;
-
+            existingLight = lightGO.AddComponent<Light>();
             Debug.Log("[SpiderTest] 场景里没有光源，已自动创建 SpiderTestLight。");
+        }
+        if (existingLight.type == LightType.Directional)
+        {
+            // ★ Z-up 的「从上往下照」：照射方向 = transform.forward，
+            //   给一个斜向下的方向（+X 偏 -Y 偏 -Z），参考轴用 +X 避免平行退化。
+            Vector3 sunDir = new Vector3(0.4f, -0.5f, -0.77f).normalized;
+            existingLight.transform.rotation = Quaternion.LookRotation(sunDir, Vector3.right);
+            existingLight.intensity = Mathf.Max(existingLight.intensity, 1.2f);
         }
 
         // ★ 环境光无条件设：场景里若 Lightmap 已烘焙 / 环境光为黑，
         //   朝不到光的背面会全黑，看不出轮廓。
+        //   2026-10-11 从 0.42~0.48 提到 0.55 —— 黑蜘蛛需要更亮的底才读得出轮廓。
         RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
-        RenderSettings.ambientLight = new Color(0.42f, 0.44f, 0.48f);
+        RenderSettings.ambientLight = new Color(0.55f, 0.57f, 0.6f);
     }
 
     /// <summary>相机是否已摆过位（避免 Start 里二次覆盖用户的视角）。</summary>
