@@ -236,18 +236,35 @@ public class SilkSpiderAnatomy : MonoBehaviour
     }
 
     /// <summary>
+    /// FBX 资源在 Resources 下的路径。
+    /// ★ 为什么放 Resources：SilkSpiderAnatomy 是**运行时 AddComponent** 加上去的
+    ///   （SilkSpiderBody.cs:511），所以它在编辑器里根本不存在，
+    ///   用户**没有任何机会**把 FBX 拖到 Inspector 字段上。
+    ///   → 之前设计的「手动拖 Fbx Instance」是**做不到的**，这就是蜘蛛本体
+    ///     一直是「球加腿」而没人发现的真正原因。
+    ///   → 改成Resources 运行时加载，不再依赖任何手动接线。
+    /// </summary>
+    private const string FbxResourcePath = "spider_lowpoly";
+
+    /// <summary>
     /// 尝试用 FBX 作为可见体。成功返回 true。
     /// </summary>
     private bool TryBuildFromFbx()
     {
+        if (fbxInstance == null) fbxInstance = LoadFbxFromResources();
+
         if (fbxInstance == null)
         {
             if (failIfFbxMissing)
             {
-                Debug.LogError("[SpiderAnatomy] 没有指定 fbxInstance"
-                    + "（Tools/blender/make_spider.py 生成的 spider_lowpoly）。"
-                    + "→ 已退回程序化建模，也就是「球加腿」。"
-                    + "把 FBX 拖到检查器（Inspector）的 Fbx Instance 字段即可。", this);
+                Debug.LogError("[SpiderAnatomy] ★ 找不到蜘蛛 FBX 模型。\n"
+                    + "  期望路径：Assets/Resources/" + FbxResourcePath + ".fbx\n"
+                    + "  当前状态：已退回程序化建模 = 「球加腿」。\n"
+                    + "  如果刚把 FBX 放进 Resources 目录，Unity 还在导入中，"
+                    + "请等导入完成（看Unity 右下角转圈结束）后再运行。\n"
+                    + "  重新生成 FBX：\n"
+                    + "    \"/c/Program Files/Blender Foundation/Blender 5.2/blender.exe\""
+                    + " --background --python Tools/blender/make_spider.py", this);
             }
             return false;
         }
@@ -289,6 +306,54 @@ public class SilkSpiderAnatomy : MonoBehaviour
         if (c == null) c = FindObjectOfType<SilkParkourController>();
         if (c != null && c.visualRadius > 0f) return c.visualRadius;
         return 1f;
+    }
+
+    /// <summary>
+    /// 从 Resources 加载蜘蛛 FBX。
+    ///
+    /// 【★ 为什么必须 Instantiate 而不是直接用资源】
+    ///   Resources.Load 拿到的是**共享的 prefab 式资产**，直接SetParent 会污染
+    ///   资源本身 → 第二次调用拿到的是已经挂在别人身上的对象。
+    ///   必须 Instantiate 出一个独立实例。
+    ///
+    /// 【★ 为什么优先读SkinnedMeshRenderer 而不是 MeshFilter】
+    ///   FBX 里97 个网格带蒙皮，导入后是 SkinnedMeshRenderer（+MeshFilter 冗余）。
+    ///   骨骼权重挂在 SkinnedMeshRenderer 上，所以 FindMeshFilter 找得到、
+    ///   但真正出画面的是 SkinnedMeshRenderer —— 两个都要查，否则会误判「模型是空的」。
+    /// </summary>
+    private static GameObject LoadFbxFromResources()
+    {
+        GameObject asset = Resources.Load<GameObject>(FbxResourcePath);
+        if (asset == null)
+        {
+            Debug.LogWarning("[SpiderAnatomy] Resources.Load(\"" + FbxResourcePath
+                + "\") 返回 null。确认文件在 Assets/Resources/" + FbxResourcePath
+                + ".fbx（不带 .fbx 后缀）。");
+            return null;
+        }
+
+        var instance = Instantiate(asset);
+        instance.name = "SpiderModel_FBX";
+
+        var skinned = instance.GetComponentInChildren<SkinnedMeshRenderer>(true);
+        var meshFilter = instance.GetComponentInChildren<MeshFilter>(true);
+        var meshRenderer = instance.GetComponentInChildren<MeshRenderer>(true);
+
+        if (skinned == null && meshRenderer == null)
+        {
+            Debug.LogError("[SpiderAnatomy] FBX 加载了但里面**没有任何渲染器**。\n"
+                + "  导入设置检查：\n"
+                + "  · Optimize Game Objects必须**关闭**（勾了会把骨骼节点删掉，"
+                + "IK 就无从下手）\n"
+                + "  · Material Import Mode 建议 Import via Material Description Later",
+                instance);
+            return null;
+        }
+
+        Debug.Log("[SpiderAnatomy] FBX 自动加载成功：" + FbxResourcePath
+            + "（Skinned=" + (skinned != null) + " MeshFilter=" + (meshFilter != null) + "）");
+
+        return instance;
     }
 
     private void NormalizeSegments()
