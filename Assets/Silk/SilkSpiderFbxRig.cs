@@ -268,14 +268,14 @@ public class SilkSpiderFbxRig : MonoBehaviour
         if (legChains == null) return "（未接管）";
 
         var sb = new System.Text.StringBuilder();
-        sb.AppendLine("[SpiderFbxRig] 8 条腿实测世界坐标（验证朝向用）：");
+        sb.AppendLine("[SpiderFbxRig] " + LegCount + " 条腿实测世界坐标（验证朝向用）：");
         for (int i = 0; i < LegCount; i++)
         {
             Transform[] c = legChains[i];
             if (c == null) { sb.AppendLine("  腿 " + i + "：缺骨骼"); continue; }
             sb.AppendLine(string.Format(
                 "  leg{0}_{1}  根({2:F2},{3:F2},{4:F2})  膝({5:F2},{6:F2},{7:F2})  足({8:F2},{9:F2},{10:F2})",
-                i < 4 ? "L" : "R", (i % 4) + 1,
+                i < LegsPerSide ? "L" : "R", (i % LegsPerSide) + 1,
                 c[0].position.x, c[0].position.y, c[0].position.z,
                 c[1].position.x, c[1].position.y, c[1].position.z,
                 c[SegmentsPerLeg - 1].position.x,
@@ -295,7 +295,7 @@ public class SilkSpiderFbxRig : MonoBehaviour
             if (foot.z > root.z) inverted++;
         }
         sb.AppendLine();
-        sb.AppendLine("  足端高于腿根的腿： " + inverted + " / 8");
+        sb.AppendLine("  足端高于腿根的腿： " + inverted + " / " + LegCount);
         sb.AppendLine(inverted == 0
             ? "  → 朝向正确：足端全部低于腿根（符合 Z-up 重力方向）"
             : "  → ★ 朝向有问题：蜘蛛倒挂。orientationFixDeg 需调整");
