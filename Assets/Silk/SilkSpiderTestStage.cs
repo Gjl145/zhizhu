@@ -706,11 +706,6 @@ public class SilkSpiderTestStage : MonoBehaviour
             new Vector3(1.5f, 10f, 10f),
             WallColor);
 
-        // ---------- 白模 NPC 小人（2026-10-12，用户需求：构造真实世界）----------
-        // 3 只小人 + 4 个道具：走路 / 举双手奔跑 / 捡起道具携带。
-        // 全部程序驱动（无外部模型/动画），挂测试场根下 → 重建自动清理。
-        NpcActor.SpawnTestGroup(root.transform, new Vector2(0f, -2f), 3, 4);
-
         Debug.Log("[SpiderTest] 测试场已建：主墙 " + wallWidth + "×" + wallHeight
                 + " 格 / " + stairCount + " 级台阶 / 横梁 z=" + beamHeight
                 + " / 内角在 (" + (wallWidth * 0.5f + 4f) + ", -4)。\n"
