@@ -90,17 +90,19 @@ public class SilkSpiderFbxRig : MonoBehaviour
     /// <summary>
     /// 第 i 条腿（0..LegCount-1）的骨骼名数组。
     ///
-    /// 【★ 2026-10-11 换装 Quaternius Spider 的命名契约】
-    ///   ★ 深夜改 4 腿后：PerSide = 2 → 取每侧**前 2 对**（k=0,1）：
-    ///     0..1 = L1,L2（FrontLeg, MidFrontLeg），2..3 = R1,R2。
-    ///     后 2 对（MidBackLeg/BackLeg）骨骼还在模型里，只是不接管、不渲染动画
-    ///     （它们是蒙皮骨骼，会跟着身体的骨骼矩阵保持 rest pose —— 静止不动）。
-    ///   8 腿时：0..3 = L1..L4，4..7 = R1..R4，4 对全用。
-    ///   每腿 3 节，节号 1 不带数字、2/3 带数字：
-    ///     FrontLeg.L / FrontLeg2.L / FrontLeg3.L
-    ///   （与 Blender 实测骨骼树一致：Tools/blender/inspect_spider_fbx.py、
-    ///     Docs/参考/蜘蛛模型选型_QuaterniusSpider_2026-10-11.md）
+    /// 【★ 2026-10-12 换装 mixall 蜘蛛（blue tarantula）的命名契约】
+    ///   mixall 蓝色捕鸟蛛（Blender 实测，Tools/blender/inspect_mixall_spider.py）：
+    ///     每条腿 3 节，编号公式 = {1 + 4k + s}.{L|R}
+    ///     （k = 同侧第几条 0..3，s = 第几节 0..2）
+    ///     第1对: 1/2/3  第2对: 5/6/7  第3对: 9/10/11  第4对: 13/14/15
+    ///   ★ 4 腿时（PerSide=2）取每侧前 2 对：1/2/3 + 5/6/7。
+    ///   Quaternius 契约保留（BoneContract 切换），随时可切回。
     /// </summary>
+    public enum BoneContract { MixallNumbered, QuaterniusPrefixed }
+
+    /// <summary>★ 当前使用的骨骼命名契约（换模型时改这里）。</summary>
+    public const BoneContract Contract = BoneContract.MixallNumbered;
+
     private static readonly string[] QuatLegPrefixes =
         { "FrontLeg", "MidFrontLeg", "MidBackLeg", "BackLeg" };
 
@@ -109,12 +111,17 @@ public class SilkSpiderFbxRig : MonoBehaviour
         // ★ 索引约定：0..PerSide-1 = 左侧前→后，PerSide..Count-1 = 右侧前→后
         bool left = legIndex < LegsPerSide;
         int k = legIndex % LegsPerSide;                 // 同侧第几条（0=最前）
-        string prefix = QuatLegPrefixes[k % QuatLegPrefixes.Length];
         string tag = left ? "L" : "R";
 
         var names = new string[SegmentsPerLeg];
-        for (int s = 1; s <= SegmentsPerLeg; s++)
-            names[s - 1] = prefix + (s == 1 ? "" : s.ToString()) + "." + tag;
+        for (int s = 0; s < SegmentsPerLeg; s++)
+        {
+            if (Contract == BoneContract.MixallNumbered)
+                names[s] = (1 + 4 * k + s).ToString() + "." + tag;
+            else
+                names[s] = QuatLegPrefixes[k % QuatLegPrefixes.Length]
+                    + (s == 0 ? "" : (s + 1).ToString()) + "." + tag;
+        }
         return names;
     }
 
@@ -247,22 +254,31 @@ public class SilkSpiderFbxRig : MonoBehaviour
     ///   → 只转根，让它沿层级自然传下去。
     /// </summary>
     [Tooltip(
-        "★★ 模型整体缩放（2026-10-11 新增）。1 = 原始导入尺寸。\n"
-        + "0.5 的依据（来自 22:24 运行的自检日志，不是猜的）：\n"
-        + "  · 原始包围盒 5.95 × 5.05 × 2.74（腿展约 6 格）\n"
-        + "  · 碰撞球直径只有 2.5 格 → 腿展是球径 2.4 倍，贴墙/进门时腿会穿帮\n"
-        + "  · × 0.5 后：身体长约 2.5 格（与碰撞球一致），腿展 3 格，\n"
-        + "    4.5 格宽的门洞能正常通过\n"
-        + "  ★ 步态腿长会自动跟着缩（SilkSpiderAnatomy 用骨骼链实测反推），\n"
-        + "    改这个数不需要再调任何步态参数。")]
-    [Range(0.1f, 3f)] public float modelScale = 0.5f;
+        "★★ 模型整体缩放。依据（Blender 实测，不是猜）：\n"
+        + "  · mixall 蓝色捕鸟蛛整体只有 0.75 单位（腿展 0.75、高 0.51）\n"
+        + "  · 目标腿展 ≈ 3 格（与 Quaternius@0.5 的已验收尺寸一致）\n"
+        + "  · → 0.75 × 4 ≈ 3 ✓\n"
+        + "  ★ 步态腿长自动跟缩放（骨骼链实测反推），改这个数不用调步态。")]
+    [Range(0.1f, 10f)] public float modelScale = 4.0f;
+
+    [Tooltip(
+        "★★ 偏航修正（度，绕竖直轴）。换模型时的朝向参数。\n"
+        + "180 的依据：Blender 实测 mixall 捕鸟蛛**头朝 +Y**（前腿伸向 +Y、\n"
+        + "螯肢 0.L/R 在 +Y、腹部 fanny 在 -Y），与 Quaternius（头朝 -Y）正好相反\n"
+        + "→ 同样的 Z-up 修正后会倒着走，需要再加 180° 偏航。\n"
+        + "★ 实测判据：画面上蜘蛛前进方向应与镜头前方向一致；反了就 +180。")]
+    [Range(-180f, 180f)] public float yawFixDeg = 180f;
 
     private void ApplyOrientation()
     {
         // ★ 用 localRotation 而不是 rotation：
         //   FbxRoot 刚实例化、父级是本组件（Z-up已就位），
         //   localRotation 表达的是「相对父级的修正」，语义更明确。
-        FbxRoot.localRotation = Quaternion.Euler(orientationFixDeg, 0f, 0f);
+        //   ★ 组合顺序：先 X 轴 Z-up 修正（Y→Z），再在 Z-up 框架里做偏航 ——
+        //     所以是 Q_yaw * Q_x（后写的先作用于模型？不：四元数左乘 = 在父级
+        //     框架中后应用，正好是「先摆正、再转身」的顺序）。
+        FbxRoot.localRotation = Quaternion.Euler(0f, yawFixDeg, 0f)
+                              * Quaternion.Euler(orientationFixDeg, 0f, 0f);
         FbxRoot.localPosition = Vector3.zero;
 
         // ★ 整体缩放：**均匀缩放**对蒙皮是安全的（顶点跟着骨骼矩阵等比变换）。

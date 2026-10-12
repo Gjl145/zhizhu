@@ -194,6 +194,91 @@ public class SilkSpiderAnatomy : MonoBehaviour
     /// </summary>
     private const string FbxResourcePath = "spider_quaternius";
 
+    /// <summary>★ 当前用的蜘蛛资产名（mixall 包里的蓝色捕鸟蛛）。</summary>
+    private const string FbxAssetName = "blue tarantula";
+
+    /// <summary>
+    /// 按资产名在全部已导入资产里找蜘蛛 FBX。
+    /// 【为什么需要】Package Manager 导入的包资产不在 Resources 目录，
+    ///   Resources.Load 拿不到；又因为是运行时 AddComponent、没有 Inspector
+    ///   可拖引用 → 只能运行时扫资产。
+    /// 【判据】!gameObject.scene.IsValid() = 是资产而不是场景里的实例。
+    /// </summary>
+    private static GameObject LoadFbxByAssetName()
+    {
+        GameObject[] all = Resources.FindObjectsOfTypeAll<GameObject>();
+        GameObject found = null;
+        for (int i = 0; i < all.Length; i++)
+        {
+            var g = all[i];
+            if (g == null || g.name != FbxAssetName) continue;
+            if (g.scene.IsValid()) continue;    // 场景实例跳过，只要资产
+            var smr = g.GetComponentInChildren<SkinnedMeshRenderer>(true);
+            if (smr != null) { found = g; break; }
+        }
+        if (found == null)
+        {
+            Debug.LogWarning("[SpiderAnatomy] 按资产名找不到 \"" + FbxAssetName
+                + "\"。确认 mixall 包（Spiders - characters with animations）"
+                + "已导入且包含该模型。");
+            return null;
+        }
+        var instance = Instantiate(found);
+        instance.name = "SpiderModel_FBX";
+        FixMaterials(instance);
+        Debug.Log("[SpiderAnatomy] FBX 资产扫描加载成功：" + FbxAssetName);
+        return instance;
+    }
+
+    /// <summary>
+    /// ★★ 材质可见性修复（两个加载路径共用）。
+    ///
+    /// 【修复 1：粉材质】mixall 包描述原话：「默认状态下，所有设置均针对URP配置。
+    ///   如果您的整个场景显示为"粉色"，请更改渲染设置」—— 本项目是 Built-in，
+    ///   URP 专用 shader 不被支持 → 渲染成洋红。→ 检测到不支持的 shader 换 Standard。
+    /// 【修复 2：过暗】Quaternius 的教训：底色近黑的蜘蛛在暗光下融进背景
+    ///   （22:24 截图证据）。底色最大分量 &lt; 0.3 时抬到中灰。
+    /// 【为什么用 r.materials 而不是 sharedMaterial】
+    ///   sharedMaterial 会改到 Assets 里的源资产（污染资源），
+    ///   r.materials 拿的是运行时实例副本。
+    /// </summary>
+    private static void FixMaterials(GameObject instance)
+    {
+        var allRenderers = instance.GetComponentsInChildren<Renderer>(true);
+        int fixedShaders = 0, tintedMats = 0;
+        for (int i = 0; i < allRenderers.Length; i++)
+        {
+            Material[] mats = allRenderers[i].materials;
+            bool changed = false;
+            for (int m = 0; m < mats.Length; m++)
+            {
+                if (mats[m] == null) continue;
+
+                // 粉材质：shader 不被当前管线支持（URP 专用 → Built-in 项目）
+                if (mats[m].shader == null || !mats[m].shader.isSupported)
+                {
+                    Shader std = Shader.Find("Standard");
+                    if (std != null) { mats[m].shader = std; fixedShaders++; changed = true; }
+                }
+
+                if (mats[m].HasProperty("_Color"))
+                {
+                    Color c = mats[m].color;
+                    if (Mathf.Max(c.r, Mathf.Max(c.g, c.b)) < 0.3f)
+                    {
+                        mats[m].color = new Color(0.38f, 0.36f, 0.34f, c.a);
+                        tintedMats++;
+                        changed = true;
+                    }
+                }
+            }
+            if (changed) allRenderers[i].materials = mats;
+        }
+        if (fixedShaders > 0 || tintedMats > 0)
+            Debug.Log("[SpiderAnatomy] 材质修复：粉材质换 Standard × " + fixedShaders
+                + "，过暗抬亮 × " + tintedMats);
+    }
+
     /// <summary>
     /// 深度按名查找（Transform.Find 只找直接子级，FBX 骨骼树都是深嵌套）。
     /// </summary>
@@ -218,6 +303,10 @@ public class SilkSpiderAnatomy : MonoBehaviour
     private bool TryBuildFromFbx()
     {
         if (fbxInstance == null) fbxInstance = LoadFbxFromResources();
+
+        // ★ 2026-10-12 换装 mixall 包：Package Manager 导入的资产**不在 Resources**，
+        //   Resources.Load 拿不到 → 按资产名在全部已导入资产里扫描。
+        if (fbxInstance == null) fbxInstance = LoadFbxByAssetName();
 
         if (fbxInstance == null)
         {
@@ -250,16 +339,18 @@ public class SilkSpiderAnatomy : MonoBehaviour
 
         // FBX 模式下 Cephalothorax / Abdomen 指向 FBX 里的对应骨骼，
         // 这样外部若取这两个属性不会拿到 null。
-        // ★ 2026-10-11 换装 Quaternius：骨骼树是
-        //   Root → Body → Thorax → Head / Body → Abdomen —— 都不在 FBX 根的
-        //   直接子级，Transform.Find 只找直接子级会全部落空 → 深度按名查找。
+        // ★ 按当前模型的名字查（换模型时对照 Blender 骨骼树改这个列表）：
+        //   Quaternius: Thorax(→Head) / Abdomen
+        //   mixall 捕鸟蛛: body（头胸部）/ fanny（腹部）
         var fbxRootT = fbxRig.FbxRoot;
         if (fbxRootT != null)
         {
             Transform ceph = FindDeepByName(fbxRootT, "Thorax");
+            if (ceph == null) ceph = FindDeepByName(fbxRootT, "body");
             if (ceph == null) ceph = FindDeepByName(fbxRootT, "Head");
             if (ceph != null) Cephalothorax = ceph;
-            Transform abd = FindDeepByName(fbxRootT, "Abdomen");
+            Transform abd = FindDeepByName(fbxRootT, "fanny");
+            if (abd == null) abd = FindDeepByName(fbxRootT, "Abdomen");
             if (abd != null) Abdomen = abd;
         }
 
@@ -304,38 +395,7 @@ public class SilkSpiderAnatomy : MonoBehaviour
 
         var instance = Instantiate(asset);
         instance.name = "SpiderModel_FBX";
-
-        // ★★ 材质过暗兜底（2026-10-11）
-        //   【证据】22:24 运行的截图：画面近全黑，蜘蛛完全融进背景。
-        //   Quaternius Spider 的自带材质（Material / Material.001，Standard）
-        //   底色接近纯黑 —— 光照不足时整只蜘蛛就是一团黑影。
-        //   【做法】底色最大分量 < 0.3 时抬到中灰 —— 不是美化，
-        //     是「轮廓永远读得出来」的可见性下限。
-        //   【为什么用 r.materials 而不是 sharedMaterial】
-        //     sharedMaterial 会改到 Assets 里的源资产（污染资源），
-        //     r.materials 拿的是运行时实例副本。
-        var allRenderers = instance.GetComponentsInChildren<Renderer>(true);
-        int tintedMats = 0;
-        for (int i = 0; i < allRenderers.Length; i++)
-        {
-            Material[] mats = allRenderers[i].materials;
-            bool changed = false;
-            for (int m = 0; m < mats.Length; m++)
-            {
-                if (mats[m] == null || !mats[m].HasProperty("_Color")) continue;
-                Color c = mats[m].color;
-                if (Mathf.Max(c.r, Mathf.Max(c.g, c.b)) < 0.3f)
-                {
-                    mats[m].color = new Color(0.38f, 0.36f, 0.34f, c.a);
-                    changed = true;
-                    tintedMats++;
-                }
-            }
-            if (changed) allRenderers[i].materials = mats;
-        }
-        if (tintedMats > 0)
-            Debug.Log("[SpiderAnatomy] 有 " + tintedMats
-                + " 个材质底色过暗（<0.3），已抬到中灰 —— 可见性兜底。");
+        FixMaterials(instance);   // ★ 粉材质/过暗修复（共用方法，见其注释）
 
         var skinned = instance.GetComponentInChildren<SkinnedMeshRenderer>(true);
         var meshFilter = instance.GetComponentInChildren<MeshFilter>(true);
