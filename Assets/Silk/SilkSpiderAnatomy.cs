@@ -226,6 +226,19 @@ public class SilkSpiderAnatomy : MonoBehaviour
         var instance = Instantiate(found);
         instance.name = "SpiderModel_FBX";
         FixMaterials(instance);
+
+        // ★★ 骨骼名全量转储（2026-10-12 排障）
+        //   【现象】Attach 报缺骨：1.L/5.L/1.R/5.R（4条腿的根骨）缺失，
+        //   而 2/3 节能找到 —— 极不对称，怀疑 Unity 导入时改名/剥离了部分骨骼。
+        //   【做法】把实例化后的全部 Transform 名打出来，
+        //   Unity 里骨头到底叫什么，以这份日志为准，不再对着 Blender 名单猜。
+        var allT = instance.GetComponentsInChildren<Transform>(true);
+        var sbNames = new System.Text.StringBuilder();
+        sbNames.AppendLine("[SpiderAnatomy] 实例化后骨骼名清单（" + allT.Length + " 个）：");
+        for (int i = 0; i < allT.Length && i < 120; i++)
+            sbNames.AppendLine("  [" + i + "] " + allT[i].name);
+        Debug.Log(sbNames.ToString());
+
         Debug.Log("[SpiderAnatomy] FBX 资产扫描加载成功：" + FbxAssetName);
         return instance;
     }
@@ -687,7 +700,10 @@ public class SilkSpiderAnatomy : MonoBehaviour
     /// <summary>腿的折线段（调试用）。</summary>
     public int GetLimbSegmentCount(int limbIndex)
     {
+        // ★ 防抖（2026-10-12）：FBX 接管失败时 limbs 数组存在但元素为 null，
+        //   HUD 每帧调它就 NRE 刷屏（SilkSpiderTestStage.OnGUI）。
         if (limbs == null || limbIndex < 0 || limbIndex >= limbs.Length) return 0;
+        if (limbs[limbIndex] == null) return 0;
         return limbs[limbIndex].BoneCount;
     }
 
