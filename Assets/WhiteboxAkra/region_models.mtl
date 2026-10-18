@@ -1,0 +1,63 @@
+newmtl minecraft:bedrock
+Ns 90.000000
+Kd 1.000000 1.000000 1.000000
+Ks 0.000000 0.000000 0.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+illum 1
+map_Kd textures/minecraft/block/bedrock.png
+
+newmtl minecraft:grass_block#top~grass_block_top@grass
+Ns 90.000000
+Kd 1.000000 1.000000 1.000000
+Ks 0.000000 0.000000 0.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+illum 1
+map_Kd textures/minecraft/block/grass_block_top.png
+
+newmtl minecraft:stone
+Ns 90.000000
+Kd 1.000000 1.000000 1.000000
+Ks 0.000000 0.000000 0.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+illum 1
+map_Kd textures/minecraft/block/stone.png
+
+newmtl minecraft:moss_block
+Ns 90.000000
+Kd 1.000000 1.000000 1.000000
+Ks 0.000000 0.000000 0.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+illum 1
+map_Kd textures/minecraft/block/moss_block.png
+
+newmtl minecraft:smooth_stone_slab#bottom~smooth_stone
+Ns 90.000000
+Kd 1.000000 1.000000 1.000000
+Ks 0.000000 0.000000 0.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+illum 1
+map_Kd textures/minecraft/block/smooth_stone.png
+
+newmtl minecraft:smooth_stone_slab#side~smooth_stone_slab_side
+Ns 90.000000
+Kd 1.000000 1.000000 1.000000
+Ks 0.000000 0.000000 0.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+illum 1
+map_Kd textures/minecraft/block/smooth_stone_slab_side.png
+
+newmtl minecraft:black_wool
+Ns 90.000000
+Kd 1.000000 1.000000 1.000000
+Ks 0.000000 0.000000 0.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+illum 1
+map_Kd textures/minecraft/block/black_wool.png
+
