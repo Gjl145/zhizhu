@@ -56,3 +56,5 @@ Tools/blender/out/
 
 # Blender/Unity 自动生成的 FBX 导入中间件
 Assets/Silk/SpiderModel/*.meta
+
+.workbuddy/backup/
